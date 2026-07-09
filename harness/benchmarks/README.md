@@ -6,7 +6,7 @@ defect classes at once, so a proposed change to the gate can be judged objective
 
 - **`battery.js`** — a fixed, labelled corpus of snapshot pairs: DEFECTS (a correct gate
   must FAIL) and CONTROLS incl. adversarial false-positive hunters (a correct gate must
-  PASS). Each case traces to a `LEARNINGS.md` entry. Extend it whenever a new class of
+  PASS). Each case traces to a `docs/LEARNINGS.md` entry. Extend it whenever a new class of
   miss — or a new false-positive risk — is found.
 - **`detection-power.js`** — the runner, two modes:
 

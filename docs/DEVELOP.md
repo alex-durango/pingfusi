@@ -122,8 +122,9 @@ different corner and surfaces a different class of miss to absorb.
 
 ```
 pixel-perfect-kit/
-├── README.md PLAYBOOK.md LEARNINGS.md CLONE-ANY-HEADER.md   ← the product: instructions
-├── DEVELOP.md                                               ← you are here (the meta-loop)
+├── README.md
+├── docs/             PLAYBOOK.md LEARNINGS.md CLONE-ANY-SITE.md   ← the product: instructions
+│   └── DEVELOP.md    ← you are here (the meta-loop)
 ├── tools/            pixel-diff.js browser-capture.js extract-*.js sink.js
 │   └── selftest.js   guards the gate's guarantees (underline box + smoothing)
 ├── harness/          the dev framework
