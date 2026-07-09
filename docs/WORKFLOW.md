@@ -6,10 +6,6 @@ clone claim "pixel-perfect" until every gate has exited 0.** The method was pros
 was *asked* to follow; this is a machine that *won't advance* until the objective condition
 is met.
 
-It's modeled on [gajae-code](https://github.com/Yeachan-Heo/gajae-code)'s `gjc` workflow
-(`deep-interview → ralplan → ultragoal`), reimplemented natively with zero dependencies —
-see **Benchmark vs gajae-code** below for what we borrowed and what we deliberately didn't.
-
 > The kit's one rule holds here too: **a phase is done because its gate exited 0, never
 > because prose says so.**
 
@@ -27,7 +23,7 @@ see **Benchmark vs gajae-code** below for what we borrowed and what we deliberat
 | 6 | `coverage` | every painted leaf in `coverage.json` has a measured target on **both** pages | machine |
 | 7 | `strict`   | strict deltas are **0**, or every *structural* one is documented in `deviations.json` — a **paint** delta (one that also fails `--visual`) can never be documented away | machine |
 | 8 | `behavior` | every JS-driven dynamic discovered on the LIVE page (animation, rotation, reveal, marquee, counter, hover-mounted content) either reproduces on the clone within a documented tolerance, or is explicitly excused in `behavior-deviations.json` — an empty/absent discovery pass is never a free pass (see "The `behavior` phase" below) | machine |
-| 9 | `reviewer`    | the **latest** pingfusi side-by-side round is reviewer-approved — the verdict is re-fetched from the API on every check (a cached approval is never trusted); a rejection surfaces the reviewer's flags as the fix list | machine |
+| 9 | `review`   | the **latest** pingfusi side-by-side round is reviewer-approved — the verdict is re-fetched from the API on every check (a cached approval is never trusted); a rejection surfaces the reviewer's flags as the fix list | machine |
 | 10 | `done`     | **default-FAIL final verification:** every earlier gate is **re-run** against the current artifacts (a recorded pass is not trusted — it must still hold), in order, and no phase may be forced | machine |
 
 **machine** = the gate fully proves it (exit 0 is a fact). **attested** = it can't be fully
@@ -58,8 +54,7 @@ node harness/review-qa.js file    <name> --draft <public-url> [--region "the hea
 Statics are proven by `visual`/`coverage`/`strict` before this phase runs; `behavior` proves
 the clone's JS-driven dynamics — animations, rotations, reveals, marquees, counters,
 hover-mounted content — reproduce the live page's actual measured behavior, not just its
-static end-state. Method ported verbatim from `lovable_dupe_html/CLONE_PLAYBOOK.md` §8/§8a —
-see `PLAYBOOK.md`'s behavior section for the full technique writeup. In short:
+static end-state. See `PLAYBOOK.md`'s behavior section for the full technique writeup. In short:
 
 1. **Discover on LIVE** with `tools/behavior-capture.js` (`pxBehaviorDiscover()` /
    `pxBehaviorSend(url)` / `pxBehaviorStash()` — same injection + delivery rules as
@@ -88,9 +83,10 @@ see `PLAYBOOK.md`'s behavior section for the full technique writeup. In short:
 **"Discovery ran" is itself evidenced**, not inferred from an empty inventory (a
 `behaviors-live.json` with `behaviors: {}` and no `discovery` metadata is indistinguishable
 from a script that silently no-oped, so the gate refuses it as a paint-over). Every capture
-records its own discovery pass metadata — `elementsScanned`, `scrollSweep: {from,to,steps}`,
-`observeMs`, `keyframesFound`, which hover triggers/marquee selectors were probed — and a
-page with genuinely zero dynamic behaviors passes with that metadata cited as the reason.
+records its own discovery pass metadata. The gate requires `elementsScanned`,
+`scrollSweep`, and `observeMs`; the capture also records `keyframesFound` and which hover
+triggers/marquee selectors were probed as additional evidence. A page with genuinely zero
+dynamic behaviors passes with that metadata cited as the reason.
 
 **Behavior keys.** Each discovered behavior gets a stable string key so live and clone
 inventories compare by identity, not by set overlap: `<prefix>:<descriptor>` where prefix is
@@ -122,13 +118,14 @@ key match between live and clone.
 - **filter / trigger: exact string match.** Not measurements with sampling noise; `trigger`
   (load/scroll/hover/mutation) records the reproduction TECHNIQUE, which the playbook
   requires to match, not just land on the right pixels by luck.
-- **`observed-mutation` behaviors (interval rotations) compare by KEY PRESENCE + trigger
-  only.** A continuously-mutating element's snapshot is whatever frame it was on — end-state
-  floats from two independent captures can never agree, so comparing them would be fiction
-  dressed as measurement. The contract is: the clone rotates too (key present, same trigger);
-  its per-frame states are for the review round to judge.
+- **`observed-mutation` behaviors (interval rotations) skip the end-state compare.** A
+  continuously-mutating element's snapshot is whatever frame it was on — end-state
+  opacity/transform/filter floats from two independent captures can never agree, so those are
+  excluded; key presence, trigger, and any measured speed/duration still compare. The
+  contract is: the clone rotates too (key present, same trigger); its per-frame states are
+  for the review round to judge.
 
-### The `reviewer` phase (harness/review-qa.js)
+### The `review` phase (harness/review-qa.js)
 Two providers, one contract (an explicit review verdict + pins, machine-checkably
 recorded): **remote** (pingfusi, the default — independent reviewers over a
 verified public tunnel) and **local** (`file --local` — the kit's own serve hosts the
@@ -148,7 +145,7 @@ test is **scope-pinned** — the reviewer judges only the cloned region, per-lea
 steps come from `coverage.json`, and JS behavior is marked *informational* in the reviewer
 template (the `behavior` phase gate is what PROVES dynamics now; the informational step is a
 reviewer backstop for taste/feel and anything intentionally excused in `behavior-deviations.json`,
-not a substitute for the gate) — encoding the lessons stripe's 8 unconverged rounds paid for.
+not a substitute for the gate).
 A rejection prints the reviewer's notes as the fix list (PLAYBOOK Phase 6), and after fixing you
 **refile**; verify always judges the latest round, so a stale approval can't carry a
 regressed clone. Rounds and verdicts live in `targets/<name>/review-qa.json` — the receipt
@@ -211,9 +208,10 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   `{ "mutation:div.hero-canvas": { "reason": "WebGL generative — irreproducible statically" } }`.
 - `review-qa.json` — the review rounds (ping_id, approve verdicts, latest fetched
   result per round), written by `harness/review-qa.js`.
-- `tunnel.json` — the public draft url (`harness/tunnel.js` records it only after
-  byte-verifying it serves `clone/index.html`); `review-qa.js file` uses it as the
-  default `--draft` and re-verifies at file time.
+- `tunnel.json` — the public draft url. In the default mode `harness/tunnel.js` records it
+  only after byte-verifying it serves `clone/index.html`; the `--url` adopted-build mode
+  records it after a reachability probe only (`verified:"reachable"`). `review-qa.js file`
+  uses it as the default `--draft` and re-verifies at file time.
 - `sink-tunnel.json` (workspace-level, not per-target) — a public url in front of the
   snapshot sink (`harness/tunnel.js --sink`, verified by the sink's own empty-POST
   signature), so live pages deliver captures with one `pxSend` call even when the
@@ -223,35 +221,5 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   The `done` gate refuses stamped snapshots — a fix can displace elements outside the
   re-captured subset, so one final full capture is always required.
 - **Micro-polls**: `review-qa.js poll` puts a ~$0.05 single question in front of a reviewer
-  mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `reviewer`
+  mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `review`
   gate never reads polls; it requires an approving verdict on a full round.
-
----
-
-## Benchmark vs gajae-code (`gjc`)
-
-gajae-code is the closest existing reference for "an enforced coding-agent workflow." We
-studied its skills (`deep-interview`, `ralplan`, `ultragoal`) as a **pattern reference only** —
-no runtime dependency on `gjc`. How the kit's workflow compares:
-
-| dimension | gajae-code (`gjc`) | pixel-perfect-kit (`pingfusi`) |
-|---|---|---|
-| Gated pipeline | `deep-interview → ralplan → ultragoal → execute` | `target → assets → measure → build → visual → coverage → strict → behavior → reviewer → done` |
-| Refuses to advance | ambiguity must drop below a resolved threshold; mutation blocked pre-approval | each phase gate must exit 0; advances refused out-of-order or on a failing gate |
-| Definition of done | checkpoint with `--evidence` + `--quality-gate-json` | a gate command that exits 0 (`--visual` green, coverage closed, strict documented) |
-| Audit trail | `index.jsonl` with `run_id` / `path` / `sha256` per stage | `workflow.jsonl` with `runId` / `artifact` / content-`sha256` per advance — including **refused** advances and forced **resets** |
-| Override | explicit force override, recorded | `--force` records `forced:true` + `overrode:[order\|evidence\|gate]`; `done` refuses forced phases until cleanly re-advanced |
-| State corruption recovery | `gjc state clear --force --mode <skill>` re-seeds scoped state | corrupt `workflow.json` → self-describing error + `pingfusi init <name> --force` (receipted reset; ledger survives) |
-| Objectivity | mathematical ambiguity score (partly heuristic) | **fully numeric** — the "done" signal is a pixel diff exiting 0, not a heuristic score |
-
-**What we borrowed:** the gated-pipeline shape, receipt-based audit trail, and the
-"can't-advance-until-the-gate-passes" discipline.
-
-**What we deliberately didn't:** `gjc`'s multi-agent consensus roles (Planner/Architect/Critic)
-and the mathematical ambiguity scorer. This domain has something `gjc`'s general workflow can't:
-a **fully objective** done-signal (the pixel diff). We don't need a panel to argue about whether
-the clone is right — the numbers decide. The one place reviewer/vision judgment stays in the loop
-is *detection* (PLAYBOOK Phase 6), and that already feeds the DEVELOP meta-loop.
-
-**Possible future step (not built):** run the kit as a `gjc` skill so it becomes a domain
-plugin on top of gajae-code's harness. Left out on purpose to keep the kit zero-dependency.
