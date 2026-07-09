@@ -9,8 +9,9 @@
 // re-running it is always safe. `pingfusi doctor` remains the read-only re-check.
 //
 // USAGE:  npx pingfusi setup [client]      (first contact — nothing else installed;
-//                                           client: claude-desktop|claude-code|cursor)
-//         pingfusi setup                        (re-run anytime)
+//                                           client: claude-desktop|claude-code|cursor|codex)
+//         pingfusi setup                        (re-run anytime; with [client] it adds
+//                                                that client to an existing login)
 "use strict";
 
 const fs = require("fs");
@@ -106,10 +107,17 @@ async function setup(io, opts) {
 
   // 4. review-service login + MCP install — the vendored installer (device flow, patches
   // client configs, writes ~/.config/pingfusi/credentials.json). Skippable.
+  // An EXPLICIT client arg always runs the installer, even when a login already
+  // exists — the installer reuses the stored login and just patches that client's
+  // config. Without this, `pingfusi setup codex` on a logged-in machine was a
+  // silent no-op and there was no way to add a second client.
   let token = null;
   try { token = opts.resolveToken(); } catch (e) {}
-  if (token) {
-    io.log("✓ review login found");
+  if (token && opts.mcpClient) {
+    io.run(process.execPath, [path.join(PKG, "vendor", "pingfusi-review.mjs"), "setup", "--client", opts.mcpClient]);
+    steps.push("login-client-added");
+  } else if (token) {
+    io.log("✓ review login found  (add another client anytime: pingfusi setup <client>)");
     steps.push("login-present");
   } else if (saidYes(await io.ask("review login + MCP install (remote review rounds, small credits) — log in now? [Y/n] "), io.isTTY)) {
     io.run(process.execPath, [path.join(PKG, "vendor", "pingfusi-review.mjs"), "setup"].concat(opts.mcpClient ? ["--client", opts.mcpClient] : []));
@@ -159,7 +167,7 @@ function main() {
     sourceCheckout: fs.existsSync(path.join(PKG, ".git")),
     resolveToken,
     dittoApiKey: !!process.env.DITTO_API_KEY,
-    mcpClient: ["claude-desktop", "claude-code", "cursor"].includes(client) ? client : null,
+    mcpClient: ["claude-desktop", "claude-code", "cursor", "codex"].includes(client) ? client : null,
   }).then((r) => process.exit(r.ok ? 0 : 1));
 }
 

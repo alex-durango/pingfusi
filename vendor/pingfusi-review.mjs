@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import open from "open";
 
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -20,7 +20,7 @@ const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?
 // reaches NUDGE_INTERVAL_MS transitively from that path, so it lives here.
 const CLI_CLIENT_ID = "pinghumans-cli";
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const SUPPORTED_CLIENTS = ["claude-desktop", "claude-code", "cursor"];
+const SUPPORTED_CLIENTS = ["claude-desktop", "claude-code", "cursor", "codex"];
 // Throttle the passive token-health check to once/day so it neither spams
 // the nudge nor adds a whoami round-trip to every incidental invocation.
 const NUDGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -221,7 +221,7 @@ async function setup(client) {
     const detected = await detectClients();
     if (detected.length === 0) {
       throw new Error(
-        "Couldn't find Claude Code, Claude Desktop, or Cursor on this machine. " +
+        "Couldn't find Claude Code, Claude Desktop, Cursor, or Codex on this machine. " +
           "Install one of them first, or pass --client to specify manually."
       );
     }
@@ -242,13 +242,30 @@ async function setup(client) {
     }
   }
 
-  // One device-code sign-in regardless of how many configs we'll patch
-  // (RFC 8628 — works over SSH too, no localhost listener needed).
-  const token = await performDeviceLogin();
-  if (!token) process.exit(1);
-  _bearerForTelemetry = token;
+  // One sign-in regardless of how many configs we'll patch. A stored token
+  // that still authenticates is reused — re-running setup to add a second
+  // client must not force a fresh sign-in. Anything else falls through to
+  // the device flow (RFC 8628 — works over SSH too, no localhost listener).
   const pc0 = await import("picocolors").then((m) => m.default);
-  console.log(`${pc0.green("✔")} Authenticated`);
+  let token = await resolveLocalToken();
+  if (token) {
+    try {
+      const who = await fetchWhoami(token);
+      if (who?.success === false) throw new Error("token revoked");
+      const name = who?.email || who?.name;
+      console.log(
+        `${pc0.green("✔")} Already signed in${name ? ` as ${pc0.bold(name)}` : ""} — reusing this machine's login (\`pingfusi remove\` signs out)`
+      );
+    } catch {
+      token = null; // dead or unverifiable → fresh sign-in
+    }
+  }
+  if (!token) {
+    token = await performDeviceLogin();
+    if (!token) process.exit(1);
+    console.log(`${pc0.green("✔")} Authenticated`);
+  }
+  _bearerForTelemetry = token;
   await saveLocalToken(token); // lets `pingfusi wait`/`whoami` authenticate later
 
   // Install everything, then print a Context7-style per-client summary.
@@ -361,13 +378,14 @@ async function isOnPath(cmd) {
  *   - claude-desktop: the per-platform config directory exists (created on
  *     first launch; absent if the app was never opened)
  *   - cursor: ~/.cursor exists
+ *   - codex: ~/.codex exists, or the `codex` binary is on PATH
  */
 async function detectClients() {
   const home = homedir();
   const isMac = platform() === "darwin";
   const isWin = platform() === "win32";
 
-  const [hasClaudeCode, hasClaudeDesktop, hasCursor] = await Promise.all([
+  const [hasClaudeCode, hasClaudeDesktop, hasCursor, hasCodexDir, hasCodexBin] = await Promise.all([
     isOnPath("claude"),
     pathExists(
       isMac
@@ -377,12 +395,15 @@ async function detectClients() {
           : join(home, ".config", "Claude")
     ),
     pathExists(join(home, ".cursor")),
+    pathExists(join(home, ".codex")),
+    isOnPath("codex"),
   ]);
 
   const out = [];
   if (hasClaudeCode) out.push("claude-code");
   if (hasClaudeDesktop) out.push("claude-desktop");
   if (hasCursor) out.push("cursor");
+  if (hasCodexDir || hasCodexBin) out.push("codex");
   return out;
 }
 
@@ -579,6 +600,8 @@ function configPath(client) {
     }
     case "cursor":
       return join(home, ".cursor", "mcp.json");
+    case "codex":
+      return join(home, ".codex", "config.toml");
     case "claude-code":
       return null; // managed via `claude mcp add`
     default:
@@ -589,6 +612,9 @@ function configPath(client) {
 async function patchConfig(client, token) {
   if (client === "claude-code") {
     return patchClaudeCodeViaCli(token);
+  }
+  if (client === "codex") {
+    return patchCodexConfig(token);
   }
   const path = configPath(client);
   await mkdir(dirname(path), { recursive: true });
@@ -639,6 +665,17 @@ async function unpatchConfig(client) {
     await execFileP("claude", ["mcp", "remove", "pinghumans", "--scope", "user"]).catch(() => {});
     return;
   }
+  if (client === "codex") {
+    try {
+      const path = configPath("codex");
+      const text = await readFile(path, "utf8");
+      const next = stripTomlTable(text, "mcp_servers.pingfusi");
+      if (next !== text) await writeFile(path, next);
+    } catch {
+      /* nothing to remove */
+    }
+    return;
+  }
   const path = configPath(client);
   try {
     const text = await readFile(path, "utf8");
@@ -658,6 +695,48 @@ async function unpatchConfig(client) {
   } catch {
     /* nothing to remove */
   }
+}
+
+// Codex keeps MCP servers in ~/.codex/config.toml ([mcp_servers.<name>]
+// tables). Streamable HTTP works natively via `url`; the bearer rides in
+// `http_headers` — codex's config validation rejects an inline
+// `bearer_token` key, and the only other option (bearer_token_env_var)
+// needs an env var setup can't persist into the user's shell. Only our
+// own table is rewritten; the rest of the file — users hand-edit
+// config.toml — is left byte-for-byte alone.
+async function patchCodexConfig(token) {
+  const path = configPath("codex");
+  await mkdir(dirname(path), { recursive: true });
+  let text = "";
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    /* missing — start fresh */
+  }
+  // Collapse the strip's leftover trailing blank lines so re-runs are
+  // byte-stable instead of growing one blank line per invocation.
+  text = stripTomlTable(text, "mcp_servers.pingfusi").replace(/\n{2,}$/, "\n");
+  const block =
+    `[mcp_servers.pingfusi]\n` +
+    `url = "${APP_URL}/api/mcp"\n` +
+    `http_headers = { "Authorization" = "Bearer ${token}" }\n`;
+  const sep = text.trim().length === 0 ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+  await writeFile(path, (text.trim().length === 0 ? "" : text) + sep + block);
+}
+
+// Drop one [name] table — its header line plus every line up to the next
+// table header (or EOF). Line-based surgery, not a TOML parse: it only
+// ever deletes between OUR header and the next header, so hand-authored
+// tables around it survive untouched.
+function stripTomlTable(text, tableName) {
+  const out = [];
+  let inTable = false;
+  for (const line of text.split("\n")) {
+    const header = /^\s*\[([^\]]+)\]/.exec(line);
+    if (header) inTable = header[1].trim() === tableName;
+    if (!inTable) out.push(line);
+  }
+  return out.join("\n");
 }
 
 // ─── Agent rules ──────────────────────────────────────────────────────────
@@ -875,6 +954,7 @@ function parseClient(args) {
     if (args[i] === "--code" || args[i] === "--claude-code")
       return "claude-code";
     if (args[i] === "--cursor") return "cursor";
+    if (args[i] === "--codex") return "codex";
   }
   return null;
 }
@@ -885,6 +965,7 @@ function prettyClient(client) {
       "claude-desktop": "Claude Desktop",
       "claude-code": "Claude Code",
       cursor: "Cursor",
+      codex: "Codex",
     }[client] || client
   );
 }
@@ -893,8 +974,8 @@ function printHelp() {
   console.log(`pingfusi — install the pingfusi review MCP server in your AI client.
 
 Usage:
-  pingfusi setup [--client claude-code|claude-desktop|cursor]
-  pingfusi remove [--client claude-code|claude-desktop|cursor]
+  pingfusi setup [--client claude-code|claude-desktop|cursor|codex]
+  pingfusi remove [--client claude-code|claude-desktop|cursor|codex]
   pingfusi wait <ping_id> [--timeout <seconds>]
                        # block until a review has results (exit 0 = news,
                        # 2 = timed out). Run it in the background after filing
@@ -904,8 +985,10 @@ Usage:
   pingfusi version
 
 Without --client, setup auto-detects every supported AI client installed on
-this machine (Claude Code, Claude Desktop, Cursor) and patches all of their
-configs from a single OAuth flow. Use --client to restrict to one.
+this machine (Claude Code, Claude Desktop, Cursor, Codex) and patches all of
+their configs from a single OAuth flow. Use --client to restrict to one.
+Re-running setup reuses this machine's login, so adding a client later is
+just \`pingfusi setup --client <name>\`.
 
 Setup opens your browser to ${APP_URL}/cli-auth, generates a fresh bearer
 token after you sign in, and writes it into each client's MCP config.

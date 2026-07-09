@@ -66,6 +66,16 @@ function fakeIO({ probes, answers, tty, paths }) {
     ok(runs.some((r2) => /pingfusi-review\.mjs setup --client cursor$/.test(r2)), "optional client positional is passed through as the installer's --client flag");
   }
 
+  // ── logged in + explicit client: the login gate must NOT swallow the request ──
+  // (found live: `pingfusi setup codex` after a claude-code install was a silent
+  // no-op — the "login found" branch never ran the installer for the new client)
+  {
+    const { io, runs } = fakeIO({ probes: { cloudflared: true }, answers: [], paths: { pingfusi: "/usr/local/bin/pingfusi" } });
+    const r = await setup(io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, mcpClient: "codex" });
+    ok(r.ok && runs.some((r2) => /pingfusi-review\.mjs setup --client codex$/.test(r2)), "existing login + explicit client still runs the installer for that client");
+    ok(r.steps.includes("login-client-added"), "the client-add is recorded as its own step");
+  }
+
   // ── skip-everything path still ends usable (local review mode) ────────────────
   {
     const { io, logs, runs } = fakeIO({ probes: {}, answers: ["n", "n", "n"] });
