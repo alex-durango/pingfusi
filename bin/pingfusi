@@ -1,0 +1,32 @@
+#!/usr/bin/env node
+// pingfusi — the kit's one command. The kit IS the default: `pingfusi <anything>` goes
+// to the enforced workflow (harness/workflow.js), which owns help and unknown-command
+// handling. The only exceptions are the review MCP installer's own commands
+// (vendor/pingfusi-review.mjs) — none of
+// them collide with a kit command, so they pass straight through:
+//
+//   pingfusi wait|whoami|rules|remove|uninstall   → the MCP installer
+//   pingfusi version                              → this package's version
+//   pingfusi setup / everything else              → the kit (setup's login step runs the
+//                                                   installer's device flow itself)
+"use strict";
+const path = require("path");
+
+const MCP_COMMANDS = new Set(["remove", "uninstall", "wait", "whoami", "rules"]);
+
+function route(cmd) {
+  if (cmd === "version" || cmd === "--version" || cmd === "-v") return "version";
+  return MCP_COMMANDS.has(cmd) ? "mcp" : "kit";
+}
+
+function main() {
+  const r = route(process.argv[2]);
+  if (r === "version") { console.log(require("../package.json").version); return; }
+  if (r === "kit") return require("../harness/workflow.js").main();
+  // ESM with top-level await — must be import()ed; it re-reads process.argv itself.
+  import(require("url").pathToFileURL(path.join(__dirname, "..", "vendor", "pingfusi-review.mjs")).href)
+    .catch((e) => { console.error(`✗ ${(e && e.message) || e}`); process.exit(1); });
+}
+
+if (require.main === module) main();
+module.exports = { route, MCP_COMMANDS };

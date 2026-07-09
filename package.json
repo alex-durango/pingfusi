@@ -1,0 +1,55 @@
+{
+  "name": "pingfusi",
+  "version": "0.2.0",
+  "description": "pingfusi: clone websites pixel-perfect and polish any AI-built draft, verified with review rounds. Enforced, gated workflow \u2014 a green check is a command that exits 0, never a screenshot.",
+  "keywords": [
+    "pingfusi",
+    "pinghumans",
+    "pixel-perfect",
+    "clone",
+    "css",
+    "visual-regression",
+    "diff",
+    "workflow",
+    "agent",
+    "review-loop"
+  ],
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "pingfusi": "bin/pingfusi"
+  },
+  "files": [
+    "bin/",
+    "harness/",
+    "tools/",
+    "skill/",
+    "vendor/",
+    "PLAYBOOK.md",
+    "WORKFLOW.md",
+    "LEARNINGS.md",
+    "DEVELOP.md",
+    "LAUNCH-PROMPT.md",
+    "CLONE-ANY-SITE.md",
+    "CLONE-ANY-HEADER.md",
+    "CLONE-ALOYOGA-HEADER.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "boxen": "^8.0.1",
+    "open": "^10.1.2",
+    "ora": "^9.4.0",
+    "picocolors": "^1.1.1"
+  },
+  "scripts": {
+    "test": "node harness/regression.js"
+  },
+  "homepage": "https://pingfusi.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alex-durango/pingfusi.git"
+  }
+}
