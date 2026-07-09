@@ -18,8 +18,8 @@ unattended until `pingfusi gate {{NAME}} done` exits 0 — that is the definitio
 done, and it now includes a pingfusi review approval. Do not stop at "the
 numbers match": stop when the receipts say a reviewer agreed.
 
-**Before writing any code, read and follow exactly:** `PLAYBOOK.md`,
-`tools/RUNBOOK.md`, `LEARNINGS.md`, `WORKFLOW.md`. Their rules override any
+**Before writing any code, read and follow exactly:** `docs/PLAYBOOK.md`,
+`tools/RUNBOOK.md`, `docs/LEARNINGS.md`, `docs/WORKFLOW.md`. Their rules override any
 assumption you have.
 
 **Work the FAST loop (RUNBOOK "The fast fix loop") — the reviewer answers in

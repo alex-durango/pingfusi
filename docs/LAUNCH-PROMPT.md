@@ -11,13 +11,13 @@ installed kit's directory — every doc referenced below lives there; run `pingf
 first and surface any failure to the user before starting). Targets are created under
 the CURRENT working directory (`targets/<name>/`).
 
-Your task: follow the kit's one-shot template at <KIT>/CLONE-ANY-SITE.md with these values:
+Your task: follow the kit's one-shot template at <KIT>/docs/CLONE-ANY-SITE.md with these values:
 - {{URL}} = <the page to replicate>
 - {{WIDTH}} = <fixed measurement viewport width, e.g. 1512>
 - {{NAME}} = <target name, e.g. acme>
 
-The template names the docs to read first (PLAYBOOK.md, tools/RUNBOOK.md, LEARNINGS.md,
-WORKFLOW.md — their rules override any assumption you have) and defines done:
+The template names the docs to read first (docs/PLAYBOOK.md, tools/RUNBOOK.md, docs/LEARNINGS.md,
+docs/WORKFLOW.md — their rules override any assumption you have) and defines done:
 `node harness/workflow.js gate {{NAME}} done` exits 0 — which includes the `behavior`
 phase (every JS-driven dynamic reproduced with measured values or excused with a
 reviewer-readable reason) and the `reviewer` phase (a real reviewer's approving verdict,

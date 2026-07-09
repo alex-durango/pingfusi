@@ -627,7 +627,7 @@
     // Finders resolve by TEXT / ROLE / aria-label / selector — never by class name —
     // so the SAME target resolves on both the live DOM and your clone. Scope them
     // with pxRegion (default: top 200px) so the same text elsewhere can't win.
-    // See PLAYBOOK.md → "Step 5: close coverage" to build this list completely.
+    // See docs/PLAYBOOK.md → "Step 5: close coverage" to build this list completely.
     const TARGETS = [
       // examples — delete and write your own:
       ["logo", () => document.querySelector("header svg, nav svg, [class*=logo] svg"), false],

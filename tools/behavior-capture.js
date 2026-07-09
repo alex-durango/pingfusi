@@ -22,7 +22,7 @@
 //
 // The discovery pass's OWN metadata (scroll range, observer duration, elements scanned) is
 // recorded in the output — this is what proves discovery ACTUALLY RAN on a page with zero
-// live behaviors, vs. a script that silently no-oped (WORKFLOW.md: "no dynamic behaviors
+// live behaviors, vs. a script that silently no-oped (docs/WORKFLOW.md: "no dynamic behaviors
 // discovered" must be an evidenced gate result, never a free pass).
 (function (root) {
   "use strict";

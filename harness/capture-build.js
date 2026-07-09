@@ -37,7 +37,7 @@
 // domFile defaults to targets/<name>/dom.html. --qa-toolbar injects the pingfusi
 // toolbar before </head> for review rounds (off by default: keep the clone byte-honest).
 // --fixes injects <script src="fixes.js" defer></script> before </body> — the ONE vanilla
-// reproduction script for the `behavior` phase (WORKFLOW.md; method: lovable_dupe_html's
+// reproduction script for the `behavior` phase (docs/WORKFLOW.md; method: lovable_dupe_html's
 // CLONE_PLAYBOOK.md §8). It's a flag, not automatic, for the same reason --qa-toolbar is:
 // a capture-built clone defaults to byte-honest (no script tags at all — the whole point of
 // §18/#19 is that a static clone renders identically to a stripped-JS snapshot of live). Only
@@ -316,7 +316,7 @@ next: serve + capture the clone (RUNBOOK), then the gates run unchanged:
   ${process.env.PPK_ENTRY === "1" ? "pingfusi" : "node harness/workflow.js"} status ${name}
 JS-driven behavior + animated/generative content can't be captured statically — discover +
 measure it on live with tools/behavior-capture.js, reproduce in clone/fixes.js, rebuild with
---fixes, then capture behaviors-clone.json the same way. See WORKFLOW.md's \`behavior\` phase.`);
+--fixes, then capture behaviors-clone.json the same way. See docs/WORKFLOW.md's \`behavior\` phase.`);
 }
 
 if (require.main === module) main().catch((e) => { console.error(`capture-build failed: ${e.message}`); process.exit(1); });
