@@ -185,7 +185,7 @@ function behaviorGate(name) {
   if (!exists(livePath))
     return { ok: false, reason: `targets/${name}/behaviors-live.json missing — run the discovery pass on the LIVE site with tools/behavior-capture.js (pxBehaviorSend or pxBehaviorStash), see tools/RUNBOOK.md "Behavior discovery"` };
   let live; try { live = readJson(livePath); } catch (e) { return { ok: false, reason: `behaviors-live.json is not valid JSON: ${e.message}` }; }
-  // "discovery ran" must be EVIDENCED, not inferred from an empty behaviors object (WORKFLOW.md:
+  // "discovery ran" must be EVIDENCED, not inferred from an empty behaviors object (docs/WORKFLOW.md:
   // an absent/empty inventory must be an explicit gate result, never a free pass). The evidence
   // is the discovery pass's own metadata — without it we cannot tell "nothing dynamic here" from
   // "the script never fired".
@@ -704,7 +704,7 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
   pingfusi ledger  <name>                            the audit trail (receipts)
 
 phases (in order): ${PHASES.map((p) => p.key).join(" → ")}
-docs: PLAYBOOK.md (method) · WORKFLOW.md (the gates) · RUNBOOK.md (fast capture)`;
+docs: docs/PLAYBOOK.md (method) · docs/WORKFLOW.md (the gates) · RUNBOOK.md (fast capture)`;
 
 function main() {
   const [cmd, name, ...rest] = process.argv.slice(2);

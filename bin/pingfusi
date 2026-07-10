@@ -19,14 +19,36 @@ function route(cmd) {
   return MCP_COMMANDS.has(cmd) ? "mcp" : "kit";
 }
 
+// `remove`/`uninstall` also sweep the kit's own agent skills (installed into
+// ~/.claude/skills by `pingfusi agent-setup`/setup) — the review MCP installer
+// only knows its own rule + skill files. Only when Claude Code is in scope,
+// though: a `--client cursor`-style removal must not touch ~/.claude. Mirrors
+// the installer's parseClient flag aliases.
+function sweepsKitSkills(argv) {
+  if (argv[0] !== "remove" && argv[0] !== "uninstall") return false;
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i] === "--client") return String(argv[i + 1] ?? "").toLowerCase() === "claude-code";
+    if (argv[i] === "--code" || argv[i] === "--claude-code") return true;
+    if (argv[i] === "--claude" || argv[i] === "--claude-desktop" ||
+        argv[i] === "--cursor" || argv[i] === "--codex") return false;
+  }
+  return true; // full remove — every generation, every surface
+}
+
 function main() {
   const r = route(process.argv[2]);
   if (r === "version") { console.log(require("../package.json").version); return; }
   if (r === "kit") return require("../harness/workflow.js").main();
+  if (sweepsKitSkills(process.argv.slice(2))) {
+    try {
+      const removed = require("../harness/agent-setup.js").removeSkills(require("os").homedir());
+      if (removed.length) console.log(`✓ Removed kit agent skill(s): ${removed.join(", ")}`);
+    } catch { /* best-effort — the installer's own removal still runs */ }
+  }
   // ESM with top-level await — must be import()ed; it re-reads process.argv itself.
   import(require("url").pathToFileURL(path.join(__dirname, "..", "vendor", "pingfusi-review.mjs")).href)
     .catch((e) => { console.error(`✗ ${(e && e.message) || e}`); process.exit(1); });
 }
 
 if (require.main === module) main();
-module.exports = { route, MCP_COMMANDS };
+module.exports = { route, MCP_COMMANDS, sweepsKitSkills };

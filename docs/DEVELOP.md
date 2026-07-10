@@ -20,7 +20,7 @@ OUTER (improve the kit) ── for each target site ──▶ INNER (clone it to
 
 ## Inner loop — clone one site to green
 
-Per target, this is just PLAYBOOK.md + RUNBOOK.md, made turn-key:
+Per target, this is just docs/PLAYBOOK.md + RUNBOOK.md, made turn-key:
 
 ```sh
 node harness/new-target.js siteA https://www.example.com/ 1728   # scaffold targets/siteA/
@@ -75,9 +75,9 @@ time, automatically*:
 4. **Re-score every existing target.** `node harness/score.js siteA` (and siteB, …) — a
    tool change must not regress a clone that was already green. And
    `node harness/regression.js` must stay green.
-5. **Generalize the instruction.** Write the durable lesson in `LEARNINGS.md`, tagged
+5. **Generalize the instruction.** Write the durable lesson in `docs/LEARNINGS.md`, tagged
    🔒 (gate-enforced — trust the diff) or 👁 (judgment — the diff can't see it). Compress
-   the how-to in `PLAYBOOK.md` / `RUNBOOK.md` to "the gate checks this; your job is the
+   the how-to in `docs/PLAYBOOK.md` / `RUNBOOK.md` to "the gate checks this; your job is the
    technique." **Grow the tool, not a per-site checklist.**
 
 If a miss genuinely *can't* be measured (a taste/technique call — e.g. "reproduce the
@@ -123,7 +123,7 @@ different corner and surfaces a different class of miss to absorb.
 ```
 pixel-perfect-kit/
 ├── README.md
-├── docs/             PLAYBOOK.md LEARNINGS.md CLONE-ANY-SITE.md   ← the product: instructions
+├── docs/             PLAYBOOK.md WORKFLOW.md LEARNINGS.md LAUNCH-PROMPT.md CLONE-ANY-SITE.md   ← the product: instructions
 │   └── DEVELOP.md    ← you are here (the meta-loop)
 ├── tools/            pixel-diff.js browser-capture.js extract-*.js sink.js
 │   └── selftest.js   guards the gate's guarantees (underline box + smoothing)

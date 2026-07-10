@@ -44,6 +44,27 @@ function install(homeDir, force) {
   (You'll be the reviewer: answer the pings — pin what looks wrong, always pick a verdict button.)` };
 }
 
+// `pingfusi remove` counterpart: delete the kit's skills from the agent's skill
+// dir again. Driven by the same PKG/skill listing as install, so the two stay in
+// sync by construction. Best-effort; returns the names it actually removed.
+function removeSkills(homeDir) {
+  const skillRoot = path.join(PKG, "skill");
+  const removed = [];
+  if (!fs.existsSync(skillRoot)) return removed;
+  for (const e of fs.readdirSync(skillRoot, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    const dest = path.join(homeDir, ".claude", "skills", e.name);
+    if (!fs.existsSync(dest)) continue;
+    try {
+      fs.rmSync(dest, { recursive: true, force: true });
+      removed.push(e.name);
+    } catch {
+      /* leave what we can't delete */
+    }
+  }
+  return removed;
+}
+
 function main() {
   const force = process.argv.includes("--force");
   const r = install(os.homedir(), force);
@@ -52,4 +73,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { install };
+module.exports = { install, removeSkills };

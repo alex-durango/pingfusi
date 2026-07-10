@@ -9,7 +9,9 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { route, MCP_COMMANDS } = require("../bin/pingfusi");
+const os = require("os");
+const { route, MCP_COMMANDS, sweepsKitSkills } = require("../bin/pingfusi");
+const { install, removeSkills } = require("./agent-setup.js");
 
 let failed = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed++; console.log(`  ✗ ${msg}`); } };
@@ -31,6 +33,29 @@ for (const cmd of ["setup", "new", "adopt", "review", "tunnel", "doctor", "agent
 ok(route(undefined) === "kit" && route("no-such-cmd") === "kit", "bare/unknown → kit (workflow.js owns help + unknown-command handling)");
 ok(route("version") === "version" && route("-v") === "version", "version is answered by the dispatcher (vendored file would print its frozen 0.2.4)");
 ok(MCP_COMMANDS.size === 5, "MCP passthrough surface is exactly the installer's own commands");
+
+// remove/uninstall sweep the kit's agent skills too — but only when Claude Code is
+// in scope (the MCP installer knows nothing about ~/.claude/skills/<kit-skill>)
+ok(sweepsKitSkills(["remove"]) && sweepsKitSkills(["uninstall"]), "full remove sweeps kit skills");
+ok(sweepsKitSkills(["remove", "--client", "claude-code"]) && sweepsKitSkills(["remove", "--code"]),
+  "claude-code-scoped remove sweeps kit skills");
+ok(!sweepsKitSkills(["remove", "--client", "cursor"]) && !sweepsKitSkills(["remove", "--cursor"]) &&
+  !sweepsKitSkills(["remove", "--claude"]) && !sweepsKitSkills(["remove", "--codex"]),
+  "other-client remove leaves ~/.claude alone");
+ok(!sweepsKitSkills(["wait"]) && !sweepsKitSkills(["setup"]), "non-remove commands never sweep");
+
+// the sweep round-trips against agent-setup's install (same PKG/skill listing)
+const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ppk-bin-dispatch-"));
+try {
+  const inst = install(tmpHome, true);
+  const removed = removeSkills(tmpHome);
+  ok(inst.ok && removed.length === inst.installed.length &&
+    removed.every((n) => !fs.existsSync(path.join(tmpHome, ".claude", "skills", n))),
+    `removeSkills deletes exactly what install wrote (${removed.join(", ")})`);
+  ok(removeSkills(tmpHome).length === 0, "removeSkills is a no-op when nothing is installed");
+} finally {
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+}
 
 // the vendored installer is intact ESM (top-level await — .mjs only) and byte-stable
 const vendor = path.join(__dirname, "..", "vendor", "pingfusi-review.mjs");

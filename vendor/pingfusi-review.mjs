@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import open from "open";
 
-const VERSION = "0.2.6";
+const VERSION = "0.3.0";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -164,6 +164,29 @@ Each result has a verdict, notes, pinned comments, per-step truth, and a screens
 - **Quick polls**: \`ping_review\` for taste questions blocks ~50s; poll \`get_ping(ping_id)\` for late arrivals
 - **Pending isn't dead**: "a reviewer has claimed the task and is reviewing right now" means results are imminent — keep waiting
 `;
+
+// ─── Legacy generations ────────────────────────────────────────────────────
+//
+// Artifacts written by OLDER brand generations of this installer. setup()
+// sweeps them so stale and current guidance never load side by side; remove()
+// sweeps them so one uninstall cleans every generation, not just the newest.
+// Data, not logic — brand forks override this table with their own lineage.
+// (Declared above the entry block: the dispatch runs at module top level, so
+// bottom-of-module consts would still be in their TDZ — the 0.0.4 lesson.)
+const LEGACY = {
+  // MCP server entry names to delete from every client config: the cpyany-era
+  // installer wrote `cpyany`, the pinghumans-era kit wrote `pinghumans`.
+  serverNames: ["cpyany", "pinghumans"],
+  // Rule files + skill dirs older generations installed, as basenames under
+  // each client's rules/ and skills/ dirs. Only the cpyany-era installer
+  // wrote these; the pinghumans-era kit never installed rule/skill files.
+  ruleFiles: { "claude-code": ["cpyany.md"], cursor: ["cpyany.mdc"] },
+  skillDirs: { "claude-code": ["cpyany"], cursor: ["cpyany"] },
+  // ~/.config/<dir>/credentials.json stashes: read as sign-in fallbacks so an
+  // existing login keeps working without a re-auth, deleted only on a full
+  // remove (machine sign-out).
+  credsDirs: ["pinghumans", "cpyany"],
+};
 
 // ─── Entry ────────────────────────────────────────────────────────────────
 
@@ -340,11 +363,12 @@ async function remove(client) {
     await unpatchRules(t);
     track("remove", { client_label: t });
   }
-  // Full removal (no --client) also signs this machine out.
+  // Full removal (no --client) also signs this machine out — including any
+  // stash an older brand generation wrote (see LEGACY.credsDirs).
   if (!client) {
     const { unlink } = await import("node:fs/promises");
     await unlink(credsPath()).catch(() => {});
-    await unlink(legacyCredsPath()).catch(() => {});
+    for (const p of legacyCredsPaths()) await unlink(p).catch(() => {});
   }
 }
 
@@ -634,7 +658,7 @@ async function patchConfig(client, token) {
     // Claude Desktop doesn't natively support Streamable HTTP MCP servers
     // (only stdio). Bridge via the community mcp-remote package, which spawns
     // a stdio server that proxies to our hosted HTTP MCP.
-    delete config.mcpServers.pinghumans;
+    for (const name of LEGACY.serverNames) delete config.mcpServers[name];
     config.mcpServers.pingfusi = {
       command: "npx",
       args: [
@@ -647,7 +671,7 @@ async function patchConfig(client, token) {
     };
   } else {
     // Cursor + others: native streamable-HTTP works.
-    delete config.mcpServers.pinghumans;
+    for (const name of LEGACY.serverNames) delete config.mcpServers[name];
     config.mcpServers.pingfusi = {
       url: `${APP_URL}/api/mcp`,
       headers: { Authorization: `Bearer ${token}` },
@@ -658,16 +682,19 @@ async function patchConfig(client, token) {
 }
 
 async function unpatchConfig(client) {
+  const serverNames = ["pingfusi", ...LEGACY.serverNames];
   if (client === "claude-code") {
-    await execFileP("claude", ["mcp", "remove", "pingfusi", "--scope", "user"]).catch(() => {});
-    await execFileP("claude", ["mcp", "remove", "pinghumans", "--scope", "user"]).catch(() => {});
+    for (const name of serverNames) {
+      await execFileP("claude", ["mcp", "remove", name, "--scope", "user"]).catch(() => {});
+    }
     return;
   }
   if (client === "codex") {
     try {
       const path = configPath("codex");
       const text = await readFile(path, "utf8");
-      const next = stripTomlTable(text, "mcp_servers.pingfusi");
+      let next = text;
+      for (const name of serverNames) next = stripTomlTable(next, `mcp_servers.${name}`);
       if (next !== text) await writeFile(path, next);
     } catch {
       /* nothing to remove */
@@ -678,9 +705,8 @@ async function unpatchConfig(client) {
   try {
     const text = await readFile(path, "utf8");
     const config = JSON.parse(text);
-    if (config?.mcpServers?.pingfusi || config?.mcpServers?.pinghumans) {
-      delete config.mcpServers.pingfusi;
-      delete config.mcpServers.pinghumans;
+    if (serverNames.some((name) => config?.mcpServers?.[name])) {
+      for (const name of serverNames) delete config.mcpServers[name];
       await writeFile(path, JSON.stringify(config, null, 2) + "\n");
     }
   } catch {
@@ -705,8 +731,11 @@ async function patchCodexConfig(token) {
     /* missing — start fresh */
   }
   // Collapse the strip's leftover trailing blank lines so re-runs are
-  // byte-stable instead of growing one blank line per invocation.
-  text = stripTomlTable(text, "mcp_servers.pingfusi").replace(/\n{2,}$/, "\n");
+  // byte-stable instead of growing one blank line per invocation. Older
+  // generations' tables are swept too (see LEGACY.serverNames).
+  text = stripTomlTable(text, "mcp_servers.pingfusi");
+  for (const name of LEGACY.serverNames) text = stripTomlTable(text, `mcp_servers.${name}`);
+  text = text.replace(/\n{2,}$/, "\n");
   const block =
     `[mcp_servers.pingfusi]\n` +
     `url = "${APP_URL}/api/mcp"\n` +
@@ -796,6 +825,9 @@ async function patchRules(client) {
   if (!rp) return installed;
 
   if (client === "claude-code") await stripLegacyClaudeMdBlock();
+  // Drop any rule/skill files an older brand generation installed so they
+  // don't linger alongside the current ones.
+  await removeLegacyRuleFiles(client);
 
   await mkdir(dirname(rp), { recursive: true });
   await writeFile(rp, ruleContent(client));
@@ -820,6 +852,21 @@ async function stripLegacyClaudeMdBlock() {
   } catch {
     return false;
   }
+}
+
+// Migration: older brand generations wrote their own rule + skill files (the
+// paths live in the LEGACY table). They must be deleted on setup and remove
+// alike — otherwise the agent loads BOTH the stale guidance (old brand, old
+// tool names) AND the current one. Best-effort; missing files are fine.
+async function removeLegacyRuleFiles(client) {
+  const { unlink, rm } = await import("node:fs/promises");
+  const home = homedir();
+  const dir = client === "claude-code" ? ".claude" : client === "cursor" ? ".cursor" : null;
+  if (!dir) return;
+  for (const f of LEGACY.ruleFiles[client] ?? [])
+    await unlink(join(home, dir, "rules", f)).catch(() => {});
+  for (const d of LEGACY.skillDirs[client] ?? [])
+    await rm(join(home, dir, "skills", d), { recursive: true, force: true }).catch(() => {});
 }
 
 // ─── Stale-rules self-healing ───────────────────────────────────────────────
@@ -877,8 +924,10 @@ async function refreshStaleRules({ verbose = false } = {}) {
 }
 
 async function unpatchRules(client) {
-  // Legacy installs: clear our managed block out of ~/.claude/CLAUDE.md.
+  // Legacy installs: clear our managed block out of ~/.claude/CLAUDE.md, and
+  // remove any rule/skill files older brand generations installed too.
   if (client === "claude-code") await stripLegacyClaudeMdBlock();
+  await removeLegacyRuleFiles(client);
 
   const { unlink, rm } = await import("node:fs/promises");
   const rp = rulePath(client);
@@ -891,21 +940,17 @@ async function patchClaudeCodeViaCli(token) {
   // The official `claude mcp add` CLI is the recommended path.
   // It writes to ~/.claude.json (or similar) for us.
   try {
-    // Remove any existing config first, otherwise `mcp add` errors on dupes.
-    await execFileP("claude", [
-      "mcp",
-      "remove",
-      "pingfusi",
-      "--scope",
-      "user",
-    ]).catch(() => {});
-    await execFileP("claude", [
-      "mcp",
-      "remove",
-      "pinghumans",
-      "--scope",
-      "user",
-    ]).catch(() => {});
+    // Remove any existing config first (ours or an older generation's),
+    // otherwise `mcp add` errors on dupes.
+    for (const name of ["pingfusi", ...LEGACY.serverNames]) {
+      await execFileP("claude", [
+        "mcp",
+        "remove",
+        name,
+        "--scope",
+        "user",
+      ]).catch(() => {});
+    }
     // Order matters: `--header` is variadic in `claude mcp add`, so it has to
     // come AFTER the positional <name> and <url> args, otherwise commander
     // eats them as additional headers and bails with "missing argument name".
@@ -1004,22 +1049,22 @@ function credsPath() {
   return join(homedir(), ".config", "pingfusi", "credentials.json");
 }
 
-// Pre-rebrand credentials location — read-only fallback so an existing
-// login keeps working without forcing a re-auth after the rename.
-function legacyCredsPath() {
-  return join(homedir(), ".config", "pinghumans", "credentials.json");
+// Stashes written by older brand generations (see LEGACY.credsDirs) — read
+// as fallbacks so an existing login keeps working without a re-auth,
+// deleted on full remove.
+function legacyCredsPaths() {
+  return LEGACY.credsDirs.map((d) => join(homedir(), ".config", d, "credentials.json"));
 }
 
 async function readCreds() {
-  try {
-    return JSON.parse(await readFile(credsPath(), "utf8"));
-  } catch {
+  for (const p of [credsPath(), ...legacyCredsPaths()]) {
     try {
-      return JSON.parse(await readFile(legacyCredsPath(), "utf8"));
+      return JSON.parse(await readFile(p, "utf8"));
     } catch {
-      return null;
+      /* missing or unreadable — try the next stash */
     }
   }
+  return null;
 }
 
 async function writeCreds(obj) {
@@ -1094,7 +1139,7 @@ async function validateStoredToken() {
 
 async function resolveLocalToken() {
   // 1) Our own stash (written by setup since 0.0.10; readCreds() falls back
-  // to the pre-rebrand path so existing logins keep working).
+  // to older generations' stashes so existing logins keep working).
   const creds = await readCreds();
   if (creds?.token) return creds.token;
   // 2) Older installs: fish the bearer out of a client config we wrote.
@@ -1106,7 +1151,9 @@ async function resolveLocalToken() {
   for (const p of candidates) {
     try {
       const cfg = JSON.parse(await readFile(p, "utf8"));
-      const entry = cfg?.mcpServers?.pingfusi ?? cfg?.mcpServers?.pinghumans;
+      const entry = ["pingfusi", ...LEGACY.serverNames]
+        .map((name) => cfg?.mcpServers?.[name])
+        .find(Boolean);
       const header = entry?.headers?.Authorization ?? entry?.headers?.authorization;
       const m = /Bearer\s+(\S+)/.exec(header ?? "");
       if (m) return m[1];

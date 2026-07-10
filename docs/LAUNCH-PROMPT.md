@@ -31,11 +31,25 @@ Environment notes (operational, not workflow):
   target.json and measure everything at that width.
 - Long-running processes (sink, serve, tunnels, `pingfusi wait`) run as background
   Bash tasks. Sandboxed Bash may need the sandbox disabled for network commands.
+- NEVER end your turn at a review-wait without a live waiter: a parked agent is not
+  resumed when the verdict lands — the round then sits answered until a person notices.
+  After filing a round, start `pingfusi wait <ping_id>` as a BACKGROUND task before
+  doing anything else; its exit is what wakes you to act on the verdict.
+- Review drafts: `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified,
+  stable url — no clone tunnel needed). Tunnels remain only for the capture sink and
+  for adopted builds running their own dev server.
 - Delivery: start `node tools/sink.js` and `node harness/tunnel.js --sink` FIRST — the
   automation extension blocks page→localhost fetch (a clean ~4s abort), and the sink
   tunnel restores one-call delivery for every capture (pxSend / pxSendDom /
   pxBehaviorSend). A `text/plain` form POST to the sink also works when the site's CSP
   has no form-action directive. Stash + chunked pxRead is the LAST resort.
+  Large captures (> ~500 KB) or any 409 from the sink: use `pxSaveDom`/`pxSave` (browser
+  download → ~/Downloads, byte-exact — RUNBOOK Step 0); a 409 means the delivery was
+  truncated/corrupted in transport — switch method, don't retry it.
+- If a tunnel verify fails, do NOT kill + re-run tunnel.js in a loop — each run mints a
+  new hostname and re-races DNS propagation. Its probes already fall back to pinned
+  public DNS; a run that still fails is genuinely broken (dead cloudflared, wrong port,
+  sandboxed network).
 - Do the work directly — NO sub-agents (their results orphan when you stop). If a
   session limit kills you, the receipts carry the state: your successor orients from
   disk, so keep NOTES.md, FINDERS.md, and the ledgers current as you go.

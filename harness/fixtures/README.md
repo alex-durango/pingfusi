@@ -1,7 +1,7 @@
 # fixtures — one file per class of miss, so it can never come back
 
 When cloning a real site surfaces a defect that a **green `--visual` didn't catch**, the
-fix is two-part (see `../../DEVELOP.md` → the miss protocol):
+fix is two-part (see `../../docs/DEVELOP.md` → the miss protocol):
 
 1. Teach the **tool** to measure it (extend `browser-capture.js` + `pixel-diff.js`).
 2. Add a **fixture here** that fails *without* that tool change — locking it in forever.

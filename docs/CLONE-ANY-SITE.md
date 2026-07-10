@@ -90,11 +90,11 @@ always tells you what's next):**
    (WebGL/canvas generative) is documented in `behavior-deviations.json` — never
    silently frozen. Re-run the pixel gates after: `done` re-verifies everything.
 
-6. **Review rounds — driven by you.** `pingfusi serve {{NAME}}` →
-   `pingfusi tunnel {{NAME}}` (it refuses to record a tunnel that isn't serving the
-   clone byte-identically — trust that check) → `pingfusi review {{NAME}} file`
+6. **Review rounds — driven by you.** `pingfusi draft {{NAME}} push` (uploads the
+   clone as a hosted draft — stable public url, byte-verified before it's recorded,
+   keeps serving even if this machine sleeps) → `pingfusi review {{NAME}} file`
    (scope-pinned template auto-generated from your coverage list; the draft url
-   defaults to the verified tunnel). Wake on results with
+   defaults to the hosted draft). Wake on results with
    `pingfusi wait <ping_id>` as a background task. On flags: run the
    PLAYBOOK Phase 6 `--inspect` drill-down on the element that PAINTS the
    flagged mark, fix the whole mark in one shot, re-run the gates, then
@@ -117,4 +117,4 @@ deviations, not as a substitute for the behavior gate.
 **Keep `targets/{{NAME}}/NOTES.md` current** (iteration-log table: what was
 flagged, whether the gate caught it, the fix, the kit-change candidate). A miss
 the gates didn't catch is the most valuable output of the run — flag it loudly
-in your final report (DEVELOP.md meta-loop).
+in your final report (docs/DEVELOP.md meta-loop).

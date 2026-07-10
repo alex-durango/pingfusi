@@ -2,7 +2,7 @@
 /**
  * workflow-selftest.js — guards the enforced-workflow state machine (harness/workflow.js).
  *
- * The kit's discipline (DEVELOP.md): a lesson goes into a TOOL + a test, never a reviewer
+ * The kit's discipline (docs/DEVELOP.md): a lesson goes into a TOOL + a test, never a reviewer
  * checklist. The workflow engine is now a tool, so it gets its own guard. This asserts the
  * two properties that make enforcement real:
  *   1. a gate BLOCKS while its objective condition is unmet, and

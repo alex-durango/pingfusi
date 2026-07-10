@@ -176,7 +176,7 @@ reinvention:
    same settle procedure as live (so end-states genuinely match, not just at t=0) →
    `targets/<name>/behaviors-clone.json`.
 6. **Gate:** `node harness/workflow.js gate <name> behavior` compares every live behavior to
-   the clone's by key and measured value within a documented tolerance (WORKFLOW.md). A
+   the clone's by key and measured value within a documented tolerance (docs/WORKFLOW.md). A
    behavior that's genuinely irreproducible statically (WebGL/canvas generative content) is
    documented in `targets/<name>/behavior-deviations.json` with a reason — never silently
    dropped. An empty/absent live inventory does not pass unless the discovery pass's own
