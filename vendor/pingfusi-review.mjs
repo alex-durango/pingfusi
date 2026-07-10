@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import open from "open";
 
-const VERSION = "0.2.5";
+const VERSION = "0.2.6";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -88,7 +88,8 @@ const RULES_MARKER_END = "<!-- pingfusi-mcp:end -->";
 
 // Two-tier guidance (Context7-style):
 //   RULE_BODY  — short, always-loaded: WHEN to reach for pingfusi.
-//   SKILL_BODY — full workflow, loaded on demand when the agent does QA.
+//   SKILL_BODY — full workflow, loaded on demand when the agent copies a
+//                reference or files work to be verified.
 const RULE_BODY = `Use the pingfusi MCP to get a review round on your work whenever you build or change something you can't verify yourself — rendered UI, animation smoothness, real-device behavior, real third-party side-effects (OAuth round-trips, receipt emails, payments), or judgment calls about taste, clarity, and confusion. Even when the code looks right: you can't see the page, a reviewer can. Don't caveat with "I'm guessing" — file a test or a poll instead.
 
 Do not use for: anything verifiable with code, tests, or a local browser; objective questions answerable from docs or search.
@@ -317,7 +318,7 @@ async function setup(client) {
   if (restartList) {
     console.log(`\nRestart ${restartList} to load the MCP server.`);
   }
-  console.log(`Try it: ask your agent to "use ping_review to ask if pizza is cooler than tacos."`);
+  console.log(`Try it: ask your agent to "use pingfusi to copy the hero section from a reference site."`);
 }
 
 async function remove(client) {
@@ -633,6 +634,7 @@ async function patchConfig(client, token) {
     // Claude Desktop doesn't natively support Streamable HTTP MCP servers
     // (only stdio). Bridge via the community mcp-remote package, which spawns
     // a stdio server that proxies to our hosted HTTP MCP.
+    delete config.mcpServers.pinghumans;
     config.mcpServers.pingfusi = {
       command: "npx",
       args: [
@@ -645,6 +647,7 @@ async function patchConfig(client, token) {
     };
   } else {
     // Cursor + others: native streamable-HTTP works.
+    delete config.mcpServers.pinghumans;
     config.mcpServers.pingfusi = {
       url: `${APP_URL}/api/mcp`,
       headers: { Authorization: `Bearer ${token}` },
@@ -656,12 +659,7 @@ async function patchConfig(client, token) {
 
 async function unpatchConfig(client) {
   if (client === "claude-code") {
-    try {
-      await execFileP("claude", ["mcp", "remove", "pingfusi", "--scope", "user"]);
-    } catch (err) {
-      console.error(`Couldn't run \`claude mcp remove\`: ${err.message}`);
-    }
-    // Pre-rebrand key — best-effort cleanup so `remove` still clears old installs.
+    await execFileP("claude", ["mcp", "remove", "pingfusi", "--scope", "user"]).catch(() => {});
     await execFileP("claude", ["mcp", "remove", "pinghumans", "--scope", "user"]).catch(() => {});
     return;
   }
@@ -680,16 +678,9 @@ async function unpatchConfig(client) {
   try {
     const text = await readFile(path, "utf8");
     const config = JSON.parse(text);
-    let changed = false;
-    if (config?.mcpServers?.pingfusi) {
+    if (config?.mcpServers?.pingfusi || config?.mcpServers?.pinghumans) {
       delete config.mcpServers.pingfusi;
-      changed = true;
-    }
-    if (config?.mcpServers?.pinghumans) {
       delete config.mcpServers.pinghumans;
-      changed = true;
-    }
-    if (changed) {
       await writeFile(path, JSON.stringify(config, null, 2) + "\n");
     }
   } catch {
@@ -742,7 +733,7 @@ function stripTomlTable(text, tableName) {
 // ─── Agent rules ──────────────────────────────────────────────────────────
 //
 // In addition to MCP tool descriptions, we install a short prose "rule"
-// telling the agent WHEN to reach for ping_review. Tool descriptions only
+// telling the agent WHEN to reach for pingfusi. Tool descriptions only
 // fire during tool selection; rules sit in the agent's persistent
 // instructions and bias it toward the tool earlier in reasoning.
 //
@@ -908,7 +899,6 @@ async function patchClaudeCodeViaCli(token) {
       "--scope",
       "user",
     ]).catch(() => {});
-    // Also clean up a pre-rebrand entry under the old key, if any.
     await execFileP("claude", [
       "mcp",
       "remove",
@@ -977,11 +967,11 @@ Usage:
   pingfusi setup [--client claude-code|claude-desktop|cursor|codex]
   pingfusi remove [--client claude-code|claude-desktop|cursor|codex]
   pingfusi wait <ping_id> [--timeout <seconds>]
-                       # block until a review has results (exit 0 = news,
+                       # block until the pingfusi test has results (exit 0 = news,
                        # 2 = timed out). Run it in the background after filing
                        # a test so your agent gets woken when results land.
-  pingfusi whoami      # show which pingfusi account this machine's token belongs to
-  pingfusi rules       # refresh the installed agent rules to this version
+  pingfusi whoami    # show which account this machine's token belongs to
+  pingfusi rules     # refresh the installed agent rules to this version
   pingfusi version
 
 Without --client, setup auto-detects every supported AI client installed on

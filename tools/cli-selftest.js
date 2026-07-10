@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const PD = path.join(__dirname, "pixel-diff.js");
 const { resolvePath } = require("../harness/serve.js");
-const { classifyBody, sanitizeName } = require("./sink.js");
+const { classifyBody, sanitizeName, parseDeclared, checkIntegrity } = require("./sink.js");
 
 let failed = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed++; console.log(`  ✗ ${msg}`); } };
@@ -76,6 +76,17 @@ ok(classifyBody("clone.json", snap).status === 200 && classifyBody("clone.json",
 ok(sanitizeName("/a/b/clone.json").renamed === true, "sub-path name flagged as sanitized (silent-rename footgun surfaced)");
 { const r = sanitizeName("/clone.json?t=1"); ok(r.clean === "clone.json" && r.renamed === false, "query string is stripped, not fused into the filename"); }
 
+// sink.js integrity gate (pure): declared byte/hash mismatches are refused BEFORE writing —
+// a truncated large-DOM delivery must be a named failure, never a silently-short file.
+{
+  const buf = Buffer.from("hello");
+  const goodSha = require("crypto").createHash("sha256").update(buf).digest("hex");
+  ok(checkIntegrity(parseDeclared("/dom.html"), buf) === null, "no declaration → no integrity gate (back-compat)");
+  ok(checkIntegrity(parseDeclared(`/dom.html?bytes=5&sha256=${goodSha}`), buf) === null, "matching declared bytes+sha accepted");
+  ok(/TRUNCATED/.test(checkIntegrity(parseDeclared("/dom.html?bytes=9"), buf) || ""), "short delivery → truncation named, nothing written");
+  ok(/sha256 mismatch/.test(checkIntegrity(parseDeclared(`/dom.html?bytes=5&sha256=${"0".repeat(64)}`), buf) || ""), "hash mismatch → corruption named");
+}
+
 // reassemble.js — chunk joining is a VERIFIED operation (the HN dogfood run corrupted a
 // snapshot by hand-concatenating chunks; these lock the validator that prevents it).
 {
@@ -127,6 +138,10 @@ ok(sanitizeName("/a/b/clone.json").renamed === true, "sub-path name flagged as s
     const r = cp.spawnSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--data-binary", "x".repeat(5000), `http://127.0.0.1:${port}/big.json`], { encoding: "utf8" });
     ok(r.stdout === "413", `oversize body is aborted mid-stream with 413 (got ${r.stdout || "no response"})`);
     ok(!fs.existsSync(path.join(dir, "big.json")), "aborted oversize body is never written to disk");
+    // integrity end-to-end: a delivery shorter than its declaration is refused with 409
+    const r2 = cp.spawnSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--data-binary", "hello", `http://127.0.0.1:${port}/short.json?bytes=99`], { encoding: "utf8" });
+    ok(r2.stdout === "409", `declared-bytes mismatch refused with 409 (got ${r2.stdout || "no response"})`);
+    ok(!fs.existsSync(path.join(dir, "short.json")), "truncated delivery is never written to disk");
   } finally {
     sink.kill();
   }

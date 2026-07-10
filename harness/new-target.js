@@ -38,7 +38,7 @@ fs.writeFileSync(path.join(dir, "clone", "index.html"), `<!doctype html>
        \`pingfusi capture-build <name>\` — it REPLACES this whole scaffold with the captured
        markup + self-hosted CSS/fonts, inheriting live's doctype and drawing techniques
        by construction. Hand-rebuild here (to MEASUREMENTS, never guesses) only when the
-       deliverable is a component in your own stack. See ../../docs/PLAYBOOK.md Phase 4. -->
+       deliverable is a component in your own stack. See ../../PLAYBOOK.md Phase 4. -->
   <header class="site-header">
     <!-- TODO: build to spec -->
   </header>
@@ -68,14 +68,14 @@ fs.writeFileSync(path.join(dir, "NOTES.md"), `# ${name} — ${url} @ ${width}px
 
 ## Iteration log
 Record each loop: what a reviewer/you flagged, whether the **gate** caught it, and the fix.
-A flag the gate MISSED is the valuable one — it becomes a tool check + fixture (see docs/DEVELOP.md).
+A flag the gate MISSED is the valuable one — it becomes a tool check + fixture (see DEVELOP.md).
 
 | round | flagged | gate caught it? | fix | kit change (tool/fixture/instruction) |
 |-------|---------|-----------------|-----|----------------------------------------|
 |       |         |                 |     |                                        |
 
 ## Site-specific findings
-(structure quirks, faux-bold, etc. — generalize the durable ones into docs/LEARNINGS.md)
+(structure quirks, faux-bold, etc. — generalize the durable ones into LEARNINGS.md)
 `);
 
 // Print next steps that are RUNNABLE in the invoking context: `pingfusi …` when launched via the

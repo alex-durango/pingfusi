@@ -185,7 +185,7 @@ function behaviorGate(name) {
   if (!exists(livePath))
     return { ok: false, reason: `targets/${name}/behaviors-live.json missing — run the discovery pass on the LIVE site with tools/behavior-capture.js (pxBehaviorSend or pxBehaviorStash), see tools/RUNBOOK.md "Behavior discovery"` };
   let live; try { live = readJson(livePath); } catch (e) { return { ok: false, reason: `behaviors-live.json is not valid JSON: ${e.message}` }; }
-  // "discovery ran" must be EVIDENCED, not inferred from an empty behaviors object (docs/WORKFLOW.md:
+  // "discovery ran" must be EVIDENCED, not inferred from an empty behaviors object (WORKFLOW.md:
   // an absent/empty inventory must be an explicit gate result, never a free pass). The evidence
   // is the discovery pass's own metadata — without it we cannot tell "nothing dynamic here" from
   // "the script never fired".
@@ -409,7 +409,7 @@ const PHASES = [
       // verdict from the API (a cached approval is never trusted) and exits 0 only on
       // approval. Scope-pinned review template + refile loop: harness/review-qa.js.
       const hq = path.join(targetDir(name), "review-qa.json");
-      if (!exists(hq)) return { ok: false, reason: `no review round recorded — tunnel the clone to a public URL, then: node harness/review-qa.js file ${name} --draft <public-url>` };
+      if (!exists(hq)) return { ok: false, reason: `no review round recorded — push the clone as a hosted draft (node harness/draft.js push ${name}), then: node harness/review-qa.js file ${name}` };
       const r = require("child_process").spawnSync(
         process.execPath, [path.join(PKG, "harness", "review-qa.js"), "verify", name],
         { encoding: "utf8", cwd: WORK, timeout: 30_000 }
@@ -676,11 +676,16 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      build strategy — LEARNINGS #19; needs targets/<name>/dom.html,
                                                      captured with pxSendDom, see RUNBOOK "Build by capture")
   pingfusi serve   <name> [port]                     serve the clone + the kit's /tools
+  pingfusi draft   <name> push                       upload the clone as a HOSTED draft (stable public
+                                                     url, byte-verified, survives this machine — the
+                                                     review DEFAULT; records targets/<name>/draft.json)
+  pingfusi draft   <name> status|delete              re-verify / delete the hosted draft
   pingfusi tunnel  <name> [port] [--check]           public HTTPS tunnel (cloudflared), VERIFIED to serve
-                                                     clone/index.html byte-identically before it's recorded —
-                                                     review-qa uses it as the default --draft
+                                                     clone/index.html byte-identically before it's recorded
+                                                     (fallback draft when a hosted push isn't possible)
   pingfusi tunnel  <name> --url <http://localhost:3000>   tunnel an adopted build's own dev server
-                                                     (reachability-verified; ditto/next/vite etc.)
+                                                     (reachability-verified; ditto/next/vite etc. — live
+                                                     dev servers can't be pushed as static drafts)
   pingfusi tunnel  --sink [port]                     tunnel the snapshot SINK: live pages deliver captures
                                                      with one pxSend call even when the environment blocks
                                                      page→localhost (replaces the stash/chunk fallback)
@@ -690,7 +695,7 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
 
   pingfusi review  <name> file [--draft <url>]       file a scope-pinned review round (the "review"
                                                      phase gate — verify/template/record via the same command;
-                                                     --draft defaults to the verified tunnel)
+                                                     --draft defaults to the hosted draft, then the tunnel)
   pingfusi review  <name> poll "question" [--choices "A,B"]   ~$0.05 mid-round micro-check with a
                                                      reviewer (advisory — never satisfies the review gate)
   pingfusi status  <name>                            phase table + the next required action
@@ -699,7 +704,7 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
   pingfusi ledger  <name>                            the audit trail (receipts)
 
 phases (in order): ${PHASES.map((p) => p.key).join(" → ")}
-docs: docs/PLAYBOOK.md (method) · docs/WORKFLOW.md (the gates) · tools/RUNBOOK.md (fast capture)`;
+docs: PLAYBOOK.md (method) · WORKFLOW.md (the gates) · RUNBOOK.md (fast capture)`;
 
 function main() {
   const [cmd, name, ...rest] = process.argv.slice(2);
@@ -711,6 +716,7 @@ function main() {
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--qa-toolbar]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
+    case "draft": { if (!name || !rest[0]) { console.error("usage: pingfusi draft <name> push|status|delete"); process.exit(2); } return delegate("harness/draft.js", [rest[0], name]); }
     case "tunnel": { if (!name) { console.error("usage: pingfusi tunnel <name> [port] [--check]"); process.exit(2); } return delegate("harness/tunnel.js", [name, ...rest]); }
     case "score": { if (!name) { console.error("usage: pingfusi score <name>"); process.exit(2); } return delegate("harness/score.js", [name, ...rest]); }
     case "sink": return delegate("tools/sink.js", []);

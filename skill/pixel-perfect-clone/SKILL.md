@@ -20,8 +20,8 @@ end; the user's job is to answer review pings.
    are created under the CURRENT working directory (`targets/<NAME>/`) — cd to the user's
    preferred workspace first.
 
-3. **Follow the kit's own instructions exactly.** Read KIT/docs/LAUNCH-PROMPT.md (the run
-   contract + environment notes) and KIT/docs/CLONE-ANY-SITE.md (the method), and execute them
+3. **Follow the kit's own instructions exactly.** Read KIT/LAUNCH-PROMPT.md (the run
+   contract + environment notes) and KIT/CLONE-ANY-SITE.md (the method), and execute them
    with the three values. They override any assumption you have. Key expectations:
    - Build by CAPTURE (`pingfusi capture-build`), never hand-reconstruction.
    - Every phase advances only through its gate: `pingfusi advance <NAME> <phase>`. Never

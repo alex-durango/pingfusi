@@ -1,7 +1,7 @@
 {
   "name": "pingfusi",
-  "version": "0.2.2",
-  "description": "pingfusi: clone websites pixel-perfect and polish any AI-built draft, verified with review rounds.",
+  "version": "0.3.0",
+  "description": "pingfusi: clone websites pixel-perfect and polish any AI-built draft, verified with review rounds. Enforced, gated workflow — a green check is a command that exits 0, never a screenshot.",
   "keywords": [
     "pingfusi",
     "pinghumans",
@@ -25,7 +25,14 @@
     "tools/",
     "skill/",
     "vendor/",
-    "docs/"
+    "PLAYBOOK.md",
+    "WORKFLOW.md",
+    "LEARNINGS.md",
+    "DEVELOP.md",
+    "LAUNCH-PROMPT.md",
+    "CLONE-ANY-SITE.md",
+    "CLONE-ANY-HEADER.md",
+    "CLONE-ALOYOGA-HEADER.md"
   ],
   "engines": {
     "node": ">=18"

@@ -6,6 +6,6 @@ release-granular and PRs cannot be merged directly — open an issue or PR and a
 ports the change into the next release with authorship credit.
 
 - `npm test` runs the full offline selftest suite (harness/regression.js) — keep it green.
-- Start with README.md; docs/WORKFLOW.md documents the gated pipeline, docs/PLAYBOOK.md the method.
+- Start with README.md; WORKFLOW.md documents the gated pipeline, PLAYBOOK.md the method.
 - The CLI is `pingfusi` (`npx pingfusi setup` to onboard); review rounds are filed with
   `pingfusi review <name> file` and verified with `pingfusi review <name> verify`.

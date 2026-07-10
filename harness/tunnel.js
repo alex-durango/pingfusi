@@ -23,12 +23,19 @@
 //                                                 POST provokes its distinctive 400 "empty body"
 //                                                 reply); records ./sink-tunnel.json.
 //
+// If verification fails, do NOT kill + re-run in a retry loop: each run mints a NEW random
+// hostname and re-races DNS propagation from zero. The verify probes fall back to pinned
+// public DNS (1.1.1.1/8.8.8.8) when the system resolver can't see a fresh name — a run that
+// still fails after that is genuinely broken (dead cloudflared, wrong port, blocked network).
+//
 // Needs `cloudflared` on PATH (brew install cloudflared). Quick tunnels need no account.
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const dns = require("dns");
+const https = require("https");
 const { spawn } = require("child_process");
 
 const WORK = process.cwd();
@@ -43,24 +50,71 @@ function parseTunnelUrl(logText) {
   return m ? m[0] : null;
 }
 
+// System resolvers can lag (or plain fail) on freshly-minted *.trycloudflare.com names
+// while the tunnel is already serving — three concurrent live runs each burned ~6–11 min
+// exhausting verify budgets on tunnels that answered in <0.5 s via `curl --resolve`, then
+// killed the HEALTHY tunnel and re-minted a new hostname, re-racing the same broken
+// resolution. The reviewer's browser uses its OWN resolver, so our resolver's lag says
+// nothing about reachability: when the normal fetch fails at the network level, resolve
+// through pinned public DNS and connect to the IP directly with SNI/Host set.
+const PUBLIC_DNS = ["1.1.1.1", "8.8.8.8"];
+function fetchViaPinnedDns(rawUrl, { method = "GET", body = null } = {}) {
+  const u = new URL(rawUrl);
+  if (u.protocol !== "https:") return Promise.reject(new Error("pinned-DNS fallback is https-only"));
+  const resolver = new dns.promises.Resolver();
+  resolver.setServers(PUBLIC_DNS);
+  return resolver.resolve4(u.hostname).then(([ip]) => new Promise((resolve, reject) => {
+    const req = https.request(
+      { host: ip, servername: u.hostname, port: u.port || 443, path: u.pathname + u.search, method, headers: { Host: u.hostname, "cache-control": "no-cache" }, timeout: 15_000 },
+      (res) => {
+        const chunks = [];
+        res.on("data", (d) => chunks.push(d));
+        res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("timed out")));
+    req.on("error", reject);
+    if (body != null) req.write(body);
+    req.end();
+  }));
+}
+
+// One probe, two paths: normal fetch first; on a network-level failure (not an HTTP
+// status) retry via pinned DNS. Throws only when BOTH fail — and then says whether the
+// whole outbound network looks blocked (sandboxed shell) vs just this hostname.
+async function fetchAny(url, opts = {}) {
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15_000), method: opts.method || "GET", body: opts.body, headers: { "cache-control": "no-cache" } });
+    return { status: r.status, body: Buffer.from(await r.arrayBuffer()), via: "system" };
+  } catch (e) {
+    if (!/^https:/.test(url)) throw e;
+    try {
+      const p = await fetchViaPinnedDns(url, opts);
+      return { ...p, via: `pinned DNS 1.1.1.1 (system resolver failed: ${e.message})` };
+    } catch (e2) {
+      throw new Error(`${e.message}; pinned-DNS fallback also failed: ${e2.message} — if ALL outbound requests fail, the shell may be sandboxed: rerun with network access (LAUNCH-PROMPT environment notes)`);
+    }
+  }
+}
+
 // Does `url` serve exactly the bytes of `filePath`? file:// urls read from disk, so the
 // compare logic is testable offline (same pattern as capture-build's fetchTo).
 // Returns { ok, reason, sha256 }.
 async function verifyServes(url, filePath) {
   const expected = fs.readFileSync(filePath);
-  let got;
+  let got, via = "system";
   try {
     if (url.startsWith("file://")) got = fs.readFileSync(new URL(url));
     else {
-      const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15_000), headers: { "cache-control": "no-cache" } });
-      if (!r.ok) return { ok: false, reason: `HTTP ${r.status} from ${url}` };
-      got = Buffer.from(await r.arrayBuffer());
+      const r = await fetchAny(url);
+      if (r.status < 200 || r.status >= 300) return { ok: false, reason: `HTTP ${r.status} from ${url}` };
+      got = r.body; via = r.via;
     }
   } catch (e) {
     return { ok: false, reason: `unreachable: ${url} — ${e.message}` };
   }
   if (!got.equals(expected)) return { ok: false, reason: `${url} responds but the bytes are NOT clone/index.html (${got.length} vs ${expected.length} bytes) — wrong port, stale serve, or another app` };
-  return { ok: true, reason: `verified: ${url} serves clone/index.html byte-identically`, sha256: sha(expected) };
+  return { ok: true, reason: `verified: ${url} serves clone/index.html byte-identically${via === "system" ? "" : ` (via ${via})`}`, sha256: sha(expected) };
 }
 
 // Quick-tunnel hostnames take a while to become reachable: cloudflared prints the url
@@ -86,9 +140,9 @@ async function warmUp(probe) {
 const looksLikeSink = (status, bodyText) => status === 400 && /empty body/.test(bodyText || "");
 async function probeSink(url) {
   try {
-    const r = await fetch(url, { method: "POST", body: "", signal: AbortSignal.timeout(15_000) });
-    const text = await r.text();
-    if (looksLikeSink(r.status, text)) return { ok: true, reason: `sink answered at ${url}` };
+    const r = await fetchAny(url, { method: "POST", body: "" });
+    const text = r.body.toString("utf8");
+    if (looksLikeSink(r.status, text)) return { ok: true, reason: `sink answered at ${url}${r.via === "system" ? "" : ` (via ${r.via})`}` };
     return { ok: false, reason: `${url} answered (HTTP ${r.status}) but NOT like the sink — wrong port or another app: ${text.slice(0, 80)}` };
   } catch (e) {
     return { ok: false, reason: `unreachable: ${url} — ${e.message}` };
@@ -130,11 +184,10 @@ async function sinkMain(port) {
 // record says so (verified:"reachable").
 async function probeUrl(url) {
   try {
-    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15_000), headers: { "cache-control": "no-cache" } });
-    if (!r.ok) return { ok: false, reason: `HTTP ${r.status} from ${url}` };
-    const body = await r.text();
-    if (body.length < 200) return { ok: false, reason: `${url} answered but the body is ${body.length} bytes — not a page (dev server still starting?)` };
-    return { ok: true, reason: `reachable: ${url} serves a ${body.length}-byte page (byte-identity not checkable for a live dev server)` };
+    const r = await fetchAny(url);
+    if (r.status < 200 || r.status >= 300) return { ok: false, reason: `HTTP ${r.status} from ${url}` };
+    if (r.body.length < 200) return { ok: false, reason: `${url} answered but the body is ${r.body.length} bytes — not a page (dev server still starting?)` };
+    return { ok: true, reason: `reachable: ${url} serves a ${r.body.length}-byte page (byte-identity not checkable for a live dev server)${r.via === "system" ? "" : ` (via ${r.via})`}` };
   } catch (e) {
     return { ok: false, reason: `unreachable: ${url} — ${e.message}` };
   }

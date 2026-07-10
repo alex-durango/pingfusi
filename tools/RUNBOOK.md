@@ -47,6 +47,7 @@ authored line-heights, and drawing primitives by construction).
    await pxSendDom('http://localhost:7799/dom.html')   // doctype-exact post-hydration DOM
    ```
    CSP-blocked POST → `pxStash(null, 900, pxDomHtml())` + batched `pxRead` (Step 3 below).
+   Big page (> ~500 KB DOM) or a 409 from the sink → `pxSaveDom('dom.html')` (Step 0).
 3. Build the standalone clone from it:
    ```sh
    pingfusi capture-build <name>          # or: node harness/capture-build.js <name>
@@ -110,6 +111,20 @@ then from any page, live or clone: `await pxSend('<sink-tunnel-url>/live.json')`
 full payload, no truncation caps. Stash + chunked `pxRead` (Step 3) is the LAST resort,
 only for when outbound HTTPS itself is blocked (rare — that's a real site CSP with a
 strict `connect-src`, and even those often allow `*.trycloudflare.com`... probe it).
+
+**Large payloads (> ~500 KB), or ANY 409 from the sink: save to disk instead of POSTing.**
+POST transports have silently truncated big DOMs (an 817 KB capture lost bytes on EVERY
+network path — tunnel, localhost, fresh tab — and the gates then certified the truncated
+page). `pxSend`/`pxSendDom` now declare their byte count + sha256 and the sink REFUSES a
+mismatched delivery with HTTP 409 instead of writing it — treat a 409 as "switch delivery
+method", never "retry until it sticks". The byte-exact method is the browser's own
+download path:
+```js
+await pxSaveDom('dom.html')    // → ~/Downloads/dom.html; returns {bytes, sha256}
+await pxSave('live.json')      // full snapshot, same path
+```
+Move the file into `targets/<name>/` and confirm `shasum -a 256` matches the returned
+sha256 before building from it.
 
 ## Step 1 — both windows to the same width
 Resize the clone tab and the live tab to the same width (e.g. 1728). Confirm

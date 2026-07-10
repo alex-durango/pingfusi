@@ -9,7 +9,7 @@
 //   // in the clone page console / automation:
 //   await pxSend("http://localhost:7799/clone.json")        // full snapshot
 //   await pxSend("http://localhost:7799/el_clone.json", null) // (or stash an inspect dump)
-const http = require("http"), fs = require("fs");
+const http = require("http"), fs = require("fs"), crypto = require("crypto");
 
 // A snapshot is KBs; anything near this is a mistake, not a capture. Env-overridable so the
 // mid-stream abort below is testable with a small limit (PPK_SINK_MAX_BYTES) and the port
@@ -37,6 +37,28 @@ function sanitizeName(url) {
   return { clean, renamed: clean !== raw };
 }
 
+// Senders (pxSend/pxSendDom) declare the payload's exact byte count + sha256 in the query
+// string; verify BEFORE writing. Big DOMs have been silently truncated in POST transport —
+// the file landed short, the sender saw "ok", and the gates certified a fraction of the
+// page. A refusal here turns that half-hour silent failure into an instant, named one.
+// No declaration (older callers, hand-rolled POSTs) = no integrity gate, as before.
+// Both pure + exported for the selftest.
+function parseDeclared(url) {
+  const p = new URLSearchParams(url.split("?")[1] || "");
+  const bytes = p.get("bytes");
+  return { bytes: bytes != null && /^\d+$/.test(bytes) ? +bytes : null, sha256: p.get("sha256") || null };
+}
+function checkIntegrity(declared, buf) {
+  if (declared.bytes != null && buf.length !== declared.bytes)
+    return `received ${buf.length} bytes but the sender declared ${declared.bytes} — payload TRUNCATED/altered in transport; nothing written. Deliver via pxSave instead (byte-exact browser download, RUNBOOK Step 0).`;
+  if (declared.sha256) {
+    const got = crypto.createHash("sha256").update(buf).digest("hex");
+    if (got !== declared.sha256)
+      return `sha256 mismatch (declared ${declared.sha256.slice(0, 12)}…, got ${got.slice(0, 12)}…) — payload corrupted in transport; nothing written. Deliver via pxSave instead (RUNBOOK Step 0).`;
+  }
+  return null;
+}
+
 if (require.main === module) {
   http
     .createServer((q, s) => {
@@ -44,26 +66,39 @@ if (require.main === module) {
       if (q.method === "OPTIONS") { s.end(); return; }
       const { clean: name, renamed } = sanitizeName(q.url);
       if (renamed) console.warn(`⚠ POST path "${q.url}" sanitized to ./${name} (only a-z0-9._- kept — sub-paths are flattened).`);
-      let body = "", aborted = false;
+      const declared = parseDeclared(q.url);
+      const chunks = [];
+      let received = 0, aborted = false;
       // Enforce the size bound DURING streaming — checking only at `end` would accumulate an
-      // unbounded body in memory first (a runaway stream could OOM the process).
+      // unbounded body in memory first (a runaway stream could OOM the process). Chunks stay
+      // Buffers until the end: per-chunk utf8 decoding (`body += d`) corrupts any multi-byte
+      // glyph that straddles a chunk boundary.
       q.on("data", (d) => {
         if (aborted) return;
-        body += d;
-        if (body.length > MAX_BYTES) {
+        received += d.length;
+        if (received > MAX_BYTES) {
           aborted = true;
           const msg = `body for ${name} exceeded ${MAX_BYTES} bytes — aborted mid-stream; that's not a snapshot.`;
           console.log(msg);
           s.writeHead(413);
           s.end(msg);
           q.destroy();
-          body = "";
-        }
+          chunks.length = 0;
+        } else chunks.push(d);
       });
       q.on("end", () => {
         if (aborted) return;
-        const r = classifyBody(name, body);
-        if (r.write) fs.writeFileSync(name, body);
+        const buf = Buffer.concat(chunks);
+        const broken = checkIntegrity(declared, buf);
+        if (broken) {
+          const msg = `${name}: ${broken}`;
+          console.log(msg);
+          s.writeHead(409);
+          s.end(msg);
+          return;
+        }
+        const r = classifyBody(name, buf.toString("utf8"));
+        if (r.write) fs.writeFileSync(name, buf);
         console.log(r.message);
         s.writeHead(r.status);
         s.end(r.message);
@@ -77,4 +112,4 @@ if (require.main === module) {
     })
     .listen(PORT, () => console.log(`sink on http://localhost:${PORT}  (POST /<name>.json → ./<name>.json)`));
 }
-module.exports = { classifyBody, sanitizeName, MAX_BYTES };
+module.exports = { classifyBody, sanitizeName, parseDeclared, checkIntegrity, MAX_BYTES };

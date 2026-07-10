@@ -7,7 +7,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs"), path = require("path");
 const KIT = path.resolve(__dirname, "..");
 
-const tests = [path.join(KIT, "tools", "selftest.js"), path.join(KIT, "tools", "cli-selftest.js"), path.join(KIT, "harness", "workflow-selftest.js"), path.join(KIT, "harness", "capture-build-selftest.js"), path.join(KIT, "harness", "review-qa-selftest.js"), path.join(KIT, "harness", "tunnel-selftest.js"), path.join(KIT, "harness", "behavior-selftest.js"), path.join(KIT, "harness", "merge-snapshot-selftest.js"), path.join(KIT, "harness", "doctor-selftest.js"), path.join(KIT, "harness", "setup-selftest.js"), path.join(KIT, "harness", "bin-dispatch-selftest.js")];
+const tests = [path.join(KIT, "tools", "selftest.js"), path.join(KIT, "tools", "cli-selftest.js"), path.join(KIT, "harness", "workflow-selftest.js"), path.join(KIT, "harness", "capture-build-selftest.js"), path.join(KIT, "harness", "review-qa-selftest.js"), path.join(KIT, "harness", "draft-selftest.js"), path.join(KIT, "harness", "tunnel-selftest.js"), path.join(KIT, "harness", "behavior-selftest.js"), path.join(KIT, "harness", "merge-snapshot-selftest.js"), path.join(KIT, "harness", "doctor-selftest.js"), path.join(KIT, "harness", "setup-selftest.js"), path.join(KIT, "harness", "bin-dispatch-selftest.js")];
 const fixDir = path.join(__dirname, "fixtures");
 if (fs.existsSync(fixDir))
   for (const f of fs.readdirSync(fixDir).filter((f) => f.endsWith(".js")).sort()) tests.push(path.join(fixDir, f));
@@ -15,6 +15,11 @@ if (fs.existsSync(fixDir))
 // known defect class and flags no control. A broader guard than the per-class fixtures.
 const bench = path.join(__dirname, "benchmarks", "detection-power.js");
 if (fs.existsSync(bench)) tests.push(bench);
+// the vendor-fork sync gate — asserts vendor/pingfusi-review.mjs matches what
+// scripts/fork-vendor.js generates from its source. Conditional: scripts/ never ships,
+// so the public suite (and any checkout without it) skips this naturally.
+const forkGate = path.join(KIT, "scripts", "fork-vendor-selftest.js");
+if (fs.existsSync(forkGate)) tests.push(forkGate);
 
 let failed = 0;
 

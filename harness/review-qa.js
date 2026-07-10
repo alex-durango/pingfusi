@@ -271,12 +271,15 @@ async function main() {
     const local = args.includes("--local");
     let draft = opt("--draft");
     if (!local) {
-      // Default --draft to the tunnel this target RECORDED (harness/tunnel.js writes it
-      // only after byte-verifying it serves the clone).
+      // Default --draft to the HOSTED draft this target RECORDED (harness/draft.js push
+      // writes it only after byte-verifying the served bytes), then to a verified tunnel
+      // (adopted builds — a live dev server can't be pushed as static files).
+      const dp = path.join(targetDir(name), "draft.json");
       const tp = path.join(targetDir(name), "tunnel.json");
+      if (!draft && fs.existsSync(dp)) draft = readJson(dp).url;
       if (!draft && fs.existsSync(tp)) draft = readJson(tp).url;
       if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
-        console.error("need a PUBLIC draft url — a remote reviewer opens it. Start a verified tunnel first:\n  node harness/tunnel.js " + name + " [port]   (records targets/" + name + "/tunnel.json, used as the default)\nor pass --draft <url> explicitly.\n(no login? review locally instead: node harness/review-qa.js file " + name + " --local)");
+        console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.\n(no login? review locally instead: node harness/review-qa.js file " + name + " --local)");
         process.exit(1);
       }
     }
@@ -300,13 +303,17 @@ async function main() {
       console.log(`✓ filed round ${hq.rounds.length} (LOCAL review) — ${pingId}\n  approve verdict: "${spec.approve_verdicts[0]}"\n  review it in a browser: http://localhost:8080/__review   (pingfusi serve ${name} must be running)\n  the reviewer pins what looks wrong and MUST pick a verdict button; then:\n  node harness/review-qa.js verify ${name}\n  ⚠ local verdicts are operator-trusted (recorded as provider:"local"); agents never open or submit /__review themselves.`);
       return;
     }
-    // A round filed against a dead/wrong tunnel burns the whole review round. Re-verify AT
-    // FILE TIME: reachable is required; byte-identical to clone/index.html is expected for a
-    // standalone clone (warn-only — a component served by an app dev server legitimately
-    // differs).
+    // A round filed against a dead/wrong draft url burns the whole review round. Re-verify
+    // AT FILE TIME: reachable is required; byte-identical to clone/index.html is expected
+    // for a standalone clone (warn-only — a component served by an app dev server
+    // legitimately differs). Hosted drafts (/d/<slug>) serve the clone with the service's
+    // /assets/ rewrite applied, so they get the rewrite-aware compare.
     const idx = path.join(targetDir(name), "clone", "index.html");
     if (fs.existsSync(idx)) {
-      const v = await require("./tunnel.js").verifyServes(draft, idx);
+      const hosted = /\/d\/([A-Za-z0-9_-]{12})\/?$/.exec(draft || "");
+      const v = hosted
+        ? await require("./draft.js").verifyDraftServes(draft, idx, hosted[1])
+        : await require("./tunnel.js").verifyServes(draft, idx);
       if (!v.ok && /unreachable|HTTP \d+/.test(v.reason)) { console.error(`❌ refusing to file — draft url is not serving: ${v.reason}`); process.exit(1); }
       if (!v.ok) console.error(`⚠ ${v.reason} — filing anyway (expected only when the draft is not the standalone clone)`);
       if (!/pingfusi\.com\/qa-toolbar\.js/.test(fs.readFileSync(idx, "utf8"))) console.error("⚠ clone/index.html has no pingfusi qa-toolbar <script> — reviewers can still review, but pinned comments/align data will be limited (capture-build --qa-toolbar adds it)");
@@ -419,4 +426,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((e) => { console.error(`review-qa: ${e.message}`); process.exit(1); });
-module.exports = { buildSpec, resolveToken };
+module.exports = { buildSpec, resolveToken, BASE };

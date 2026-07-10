@@ -204,8 +204,23 @@
   root.pxByAria = byAria;
   root.pxMeasure = measure;
   root.pxCapture = capture;
+
+  // Delivery integrity: every POST declares its exact byte count + sha256 in the query
+  // string so the sink can REFUSE a truncated/corrupted delivery instead of writing it —
+  // an 817 KB DOM once lost bytes in transit on every POST transport, and the gates then
+  // certified the truncated page (23 of ~230 real targets measured). String .length is NOT
+  // the byte count (multi-byte glyphs), so declare from the UTF-8 bytes the wire carries.
+  const utf8 = (s) => new TextEncoder().encode(s);
+  const sha256Hex = (bytes) =>
+    root.crypto && root.crypto.subtle
+      ? root.crypto.subtle.digest("SHA-256", bytes).then((d) => [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join(""))
+      : Promise.resolve(null); // non-secure context: the byte count alone still gates truncation
+  const withIntegrity = (url, bytes) =>
+    sha256Hex(bytes).then((h) => url + (url.includes("?") ? "&" : "?") + "bytes=" + bytes.length + (h ? "&sha256=" + h : ""));
+
   root.pxSend = function (url, targets) {
-    return fetch(url, { method: "POST", body: capture(targets, { compact: true }) }).then((r) => r.text());
+    const body = capture(targets, { compact: true });
+    return withIntegrity(url, utf8(body)).then((u) => fetch(u, { method: "POST", body })).then((r) => r.text());
   };
   // The full post-hydration DOM, doctype INCLUDED-OR-ABSENT exactly as live ships it —
   // outerHTML alone drops the doctype, and adding a tidy one to a quirks-mode site moves
@@ -220,8 +235,29 @@
   };
   root.pxSendDom = function (url) {
     // CSP-blocked POST? Fall back to the stash path: pxStash(null, 900, pxDomHtml()) + pxRead.
-    return fetch(url, { method: "POST", body: root.pxDomHtml() }).then((r) => r.text());
+    const body = root.pxDomHtml();
+    return withIntegrity(url, utf8(body)).then((u) => fetch(u, { method: "POST", body })).then((r) => r.text());
   };
+  // pxSave — deliver through the browser's OWN download path (Blob + <a download> →
+  // ~/Downloads): byte-exact at any size, no network, no CSP. The required path for large
+  // payloads (> ~500 KB) and the escape hatch for any sink 409 — POST transports have
+  // silently truncated big DOMs. Returns {name, bytes, sha256}; verify the saved file
+  // against them (`shasum -a 256 ~/Downloads/<name>`) before building from it.
+  root.pxSave = function (name, payload) {
+    const body = payload != null ? payload : capture(null, { compact: true });
+    const bytes = utf8(body);
+    return sha256Hex(bytes).then((h) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      return { name, bytes: bytes.length, sha256: h };
+    });
+  };
+  root.pxSaveDom = function (name) { return root.pxSave(name || "dom.html", root.pxDomHtml()); };
   const DEFAULT_CHUNK = 900;
   root.pxStash = function (targets, chunk, preJson) {
     const json = preJson != null ? preJson : capture(targets, { compact: true });
