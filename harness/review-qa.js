@@ -425,5 +425,9 @@ async function main() {
   process.exit(2);
 }
 
-if (require.main === module) main().catch((e) => { console.error(`review-qa: ${e.message}`); process.exit(1); });
+// Exports BEFORE the main() call: main()'s synchronous prefix requires draft.js
+// (hosted-draft verify), and draft.js requires this module back — with exports
+// assigned last, that circular require captured undefined resolveToken/BASE and
+// node printed circular-dependency warnings in the real `pingfusi review file` flow.
 module.exports = { buildSpec, resolveToken, BASE };
+if (require.main === module) main().catch((e) => { console.error(`review-qa: ${e.message}`); process.exit(1); });

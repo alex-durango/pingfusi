@@ -95,6 +95,37 @@ fs.writeFileSync(path.join(clone, ".DS_Store"), "junk");
     check("without draft.json the verified tunnel is still the fallback", spec.draft_url === "https://old-tunnel.example.com", r.out.slice(0, 120));
   }
 
+  // ── the REAL user flow, offline: `review file` against a hosted draft ───────
+  // file:// BASE serves a canned request_review.json; the draft.json url is a
+  // file:// path shaped like /d/<slug> so the hosted (rewrite-aware) verify
+  // branch runs against disk. Locks two live bugs: (a) review-qa's exports must
+  // be assigned BEFORE main() runs, or draft.js's circular require captures
+  // undefined resolveToken/BASE (node printed circular-dependency warnings in
+  // the real `pingfusi review file` flow); (b) the hosted verify must accept
+  // the service's rewritten bytes.
+  {
+    const fixtures = path.join(work, "fixtures");
+    fs.mkdirSync(fixtures, { recursive: true });
+    fs.writeFileSync(path.join(fixtures, "request_review.json"), JSON.stringify({ ping_id: "11111111-1111-1111-1111-111111111111" }));
+    const servedDir = path.join(work, "served", "d");
+    fs.mkdirSync(servedDir, { recursive: true });
+    fs.writeFileSync(path.join(servedDir, SLUG), rewriteAssetRefs(fs.readFileSync(idx, "utf8"), SLUG));
+    fs.writeFileSync(path.join(t1, "draft.json"), JSON.stringify({ url: pathToFileURL(path.join(servedDir, SLUG)).href, slug: SLUG }));
+    let out = "", code = 0;
+    try {
+      out = execFileSync("node", [path.join(__dirname, "review-qa.js"), "file", "t1"], {
+        cwd: work,
+        stdio: "pipe",
+        env: { ...process.env, PPK_PINGHUMANS_URL: pathToFileURL(fixtures).href, PINGFUSI_TOKEN: "" },
+      }).toString();
+    } catch (e) { code = e.status; out = (e.stdout || "").toString() + (e.stderr || "").toString(); }
+    check("`review file` files against the hosted draft offline (canned rpc)", code === 0 && /filed round/.test(out), out.slice(0, 200));
+    check("no circular-dependency damage in the file flow", !/non-existent property|circular dependency/.test(out), out.slice(0, 200));
+    const hq = JSON.parse(fs.readFileSync(path.join(t1, "review-qa.json"), "utf8"));
+    const last = hq.rounds[hq.rounds.length - 1];
+    check("the recorded round pins the hosted draft url", last && last.ping_id === "11111111-1111-1111-1111-111111111111" && /\/d\//.test(last.draft_url || ""));
+  }
+
   fs.rmSync(work, { recursive: true, force: true });
   console.log(failed ? `\n❌ draft-selftest: ${failed} check(s) failed.` : "\n✓ draft-selftest: all checks pass.");
   process.exit(failed ? 1 : 0);

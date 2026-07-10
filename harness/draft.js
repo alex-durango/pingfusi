@@ -85,10 +85,22 @@ async function verifyDraftServes(url, indexPath, slug) {
   return { ok: true, reason: `verified: ${url} serves clone/index.html byte-identically (rewrite-aware)`, sha256: sha(expected) };
 }
 
+// node's fetch rejects with a bare "fetch failed" and hides the real cause in
+// e.cause — surface both plus WHICH request died, or a mid-push failure is
+// undiagnosable (the kit's own self-describing-errors contract).
+async function fetchOrExplain(what, url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    const cause = e.cause ? ` — ${e.cause.code || ""} ${e.cause.message || e.cause}` : "";
+    throw new Error(`${what}: ${e.message}${cause} (${url.slice(0, 80)})`);
+  }
+}
+
 async function api(pathname, opts = {}) {
   const token = resolveToken();
   if (!token) throw new Error("no review login — run `pingfusi setup`, or set PINGFUSI_TOKEN");
-  const r = await fetch(`${BASE}${pathname}`, {
+  const r = await fetchOrExplain(pathname, `${BASE}${pathname}`, {
     method: opts.method || "GET",
     headers: { authorization: `Bearer ${token}`, ...(opts.body ? { "content-type": "application/json" } : {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -119,7 +131,7 @@ async function push(name) {
 
   for (const u of created.uploads) {
     const buf = fs.readFileSync(path.join(dir, u.path));
-    const r = await fetch(u.url, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: buf, signal: AbortSignal.timeout(120_000) });
+    const r = await fetchOrExplain(`upload ${u.path}`, u.url, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: buf, signal: AbortSignal.timeout(120_000) });
     if (!r.ok) throw new Error(`upload ${u.path} → HTTP ${r.status}`);
   }
   await api(`/api/draft/${slug}/finalize`, { method: "POST" });
