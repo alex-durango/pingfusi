@@ -44,8 +44,8 @@ function checkReviewToken(resolveToken) {
     name: "review login (remote review rounds)",
     ok: !!token,
     detail: token ? "token found" : "no token found",
-    fix: "run: pingfusi setup — OR skip it: LOCAL review mode needs no account (`pingfusi review <name> file --local`, you review at /__review yourself)",
-    required: false,
+    fix: "run: pingfusi setup — review rounds require the login (an independent reviewer answers them; there is no offline review path)",
+    required: true,
   };
 }
 
@@ -74,7 +74,7 @@ function main() {
   const { resolveToken } = require("./review-qa.js");
   const checks = [
     checkNode(process.versions.node),
-    checkBinary("cloudflared", ["--version"], "public tunnels — needed for remote review, not for local mode", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
+    checkBinary("cloudflared", ["--version"], "public tunnels — the capture sink + adopted-build dev servers (hosted drafts need none)", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
     checkReviewToken(resolveToken),
     checkBinary("ffmpeg", ["-version"], "optional — frame-level video verification", "brew install ffmpeg", false),
   ];

@@ -45,7 +45,7 @@ ok(!checkReviewToken(() => { throw new Error("boom"); }).ok, "a throwing resolve
   ok(r1.ok && fs.existsSync(dest) && fs.existsSync(destFix), "installs ALL kit skills (pixel-perfect-clone + fix-with-pingfusi) into ~/.claude/skills/");
   const body = fs.readFileSync(dest, "utf8");
   ok(/^---\nname: pixel-perfect-clone/.test(body) && /description: .*[Cc]lone/.test(body), "installed skill has the frontmatter Claude Code discovers it by");
-  ok(/pingfusi doctor/.test(body) && /pingfusi where/.test(body) && /verdict button/i.test(body), "skill teaches preflight, kit location, and the reviewer contract");
+  ok(/pingfusi doctor/.test(body) && /pingfusi where/.test(body) && /independent reviewer/i.test(body) && /verdict/i.test(body), "skill teaches preflight, kit location, and the independent-reviewer contract");
   const fix = fs.readFileSync(destFix, "utf8");
   ok(/^---\nname: fix-with-pingfusi/.test(fix) && /fix it with pingfusi/.test(fix) && /polish this clone/.test(fix) && /ditto/.test(fix), "fix-with-pingfusi triggers on 'fix it with pingfusi' / polish this clone / ditto phrasing");
   ok(/pingfusi adopt/.test(fix) && /--changelog/.test(fix) && /verdict/i.test(fix) && /DRAFT'S OWN source/.test(fix), "fix-with-pingfusi teaches adopt → tunnel --url → review loop, fixing in the draft's own source");

@@ -76,12 +76,13 @@ function fakeIO({ probes, answers, tty, paths }) {
     ok(r.steps.includes("login-client-added"), "the client-add is recorded as its own step");
   }
 
-  // ── skip-everything path still ends usable (local review mode) ────────────────
+  // ── skip-everything path is HONEST about what breaks (no local-mode fallback) ──
   {
     const { io, logs, runs } = fakeIO({ probes: {}, answers: ["n", "n", "n"] });
     const r = await setup(io, { home: fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-setup2-")), sourceCheckout: false, resolveToken: () => null, dittoApiKey: false });
     ok(r.ok && runs.length === 0, "declining every prompt runs nothing");
-    ok(logs.some((l) => /LOCAL review mode/.test(l)) && logs.some((l) => /file --local/.test(l)), "skip path points at local review mode explicitly");
+    ok(logs.some((l) => /review rounds will NOT work without a login/.test(l)) && logs.some((l) => /pingfusi setup/.test(l)), "skipping the login says review rounds won't work + how to log in later");
+    ok(!logs.some((l) => /--local|__review|LOCAL review mode/.test(l)), "no remnant of the removed local review mode in setup output");
   }
 
   // ── unattended (non-TTY): silence never installs or opens logins ─────────────

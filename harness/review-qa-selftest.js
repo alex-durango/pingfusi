@@ -164,36 +164,25 @@ ok(exp.code === 1 && /EXPIRED/.test(exp.out), "an expired unanswered round fails
   ok(overridden.code === 0 || /pending|0 answers/.test(overridden.out), "--allow-comparison consciously overrides the refusal");
 }
 
-// ── LOCAL review mode: file --local → serve's submission → verify, no network at all ──
+// ── LOCAL review mode is REMOVED (2026-07-10): the independent reviewer on the review
+// service is the ONLY path. These lock the removal: the flags refuse loudly (an old doc
+// or an agent's stale memory must hit a wall, not a silent no-op), serve.js no longer
+// ships the /__review machinery, and a legacy local round can never pass verify.
 {
-  const { applySubmission } = require("./serve.js");
-  // NO SILENT DOWNGRADE: with a login present, --local is refused unless the operator
-  // explicitly allows it (found live: a tunnel rate limit made an agent quietly swap an
-  // independent remote round for an operator-trusted local one)
-  const fBlocked = runLoggedIn(["file", NAME, "--local", "--region", "the header"]);
-  ok(fBlocked.code === 1 && /refusing --local/.test(fBlocked.out) && /tell the operator/.test(fBlocked.out), "file --local REFUSED while a pingfusi login exists (agents must not downgrade the review)");
-  const fAllowed = runLoggedIn(["file", NAME, "--local", "--allow-local", "--region", "the header"]);
-  ok(fAllowed.code === 0 && /--allow-local: operator-requested/.test(fAllowed.out), "--allow-local overrides as an explicit operator request (and says so)");
-  fs.writeFileSync(path.join(dir, "review-qa.json"), JSON.stringify({ rounds: [] }, null, 2)); // reset for the no-login flow below
-  const fLocal = runNoLogin(["file", NAME, "--local", "--region", "the header"]);
-  ok(fLocal.code === 0 && /LOCAL review/.test(fLocal.out) && /__review/.test(fLocal.out) && /operator-trusted/.test(fLocal.out), "file --local records a local round (no draft, no tunnel, no API) and states the trust model");
-  const hqL = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-  const lr = hqL.rounds[hqL.rounds.length - 1];
-  ok(lr.provider === "local" && /^local-/.test(lr.ping_id) && lr.spec && lr.spec.steps.length > 0, "local round carries provider:local + the full spec for the review page");
-  ok(run(["verify", NAME]).code === 1, "verify: local round pending until the review page submits");
-  // comment-only submission → recorded, but the gate still refuses (same contract as remote)
-  ok(applySubmission(hqL, { comments: [{ selector: "#logo", text: "sits low" }] }).ok, "review page accepts a submission");
-  fs.writeFileSync(path.join(dir, "review-qa.json"), JSON.stringify(hqL, null, 2));
-  const vCommentOnly = run(["verify", NAME]);
-  ok(vCommentOnly.code === 1 && /NO verdict pick/.test(vCommentOnly.out) && /sits low/.test(vCommentOnly.out), "a comment-only local review is refused exactly like a remote one");
-  // approving submission on a FRESH round → verify passes, marked operator-trusted
-  runNoLogin(["file", NAME, "--local", "--region", "the header"]);
-  const hqL2 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-  ok(applySubmission(hqL2, { choice: hqL2.rounds[hqL2.rounds.length - 1].approve_verdicts[0], free_text: "looks right" }).ok, "approving submission accepted");
-  ok(!applySubmission(hqL2, { choice: "again" }).ok, "double-submission on an answered round refused");
-  fs.writeFileSync(path.join(dir, "review-qa.json"), JSON.stringify(hqL2, null, 2));
-  const vOk = run(["verify", NAME]);
-  ok(vOk.code === 0 && /LOCAL review — operator-trusted/.test(vOk.out), "verify approves the local round and the output carries the operator-trusted marker");
+  const fLocal = runLoggedIn(["file", NAME, "--local", "--region", "the header"]);
+  ok(fLocal.code === 1 && /local review mode was removed/.test(fLocal.out) && /pingfusi setup/.test(fLocal.out), "file --local refuses: mode removed, points at setup");
+  const fAllow = runNoLogin(["file", NAME, "--allow-local", "--region", "the header"]);
+  ok(fAllow.code === 1 && /local review mode was removed/.test(fAllow.out), "--allow-local refuses the same way (no backdoor)");
+  const serveExports = require("./serve.js");
+  ok(!serveExports.applySubmission && !serveExports.renderReviewPage, "serve.js no longer exports the /__review machinery");
+  // a legacy provider:"local" round from an old kit version can't sneak through verify
+  const hqLegacy = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
+  hqLegacy.rounds.push({ ping_id: "local-deadbeef", provider: "local", approve_verdicts: ["Header identical"], raw_response: { status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Header identical" }] } });
+  fs.writeFileSync(path.join(dir, "review-qa.json"), JSON.stringify(hqLegacy, null, 2));
+  const vLegacy = run(["verify", NAME]);
+  ok(vLegacy.code === 1 && /LOCAL round from a removed mode/.test(vLegacy.out), "verify refuses a legacy local round by name (never operator-trusted approval)");
+  hqLegacy.rounds.pop();
+  fs.writeFileSync(path.join(dir, "review-qa.json"), JSON.stringify(hqLegacy, null, 2));
 }
 
 // ── filing while pre-review gates are red is refused (astryx round-2 process miss) ──

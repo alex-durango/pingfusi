@@ -680,8 +680,8 @@ function delegate(relScript, args) {
 const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enforced, gated workflow
 
   pingfusi setup                                     FIRST CONTACT — one interactive command: global
-                                                     install, cloudflared, review login (skippable —
-                                                     local review mode needs no account), agent skills.
+                                                     install, cloudflared, the review login (required
+                                                     for review rounds), agent skills.
                                                      Also: npx pingfusi setup
   pingfusi doctor                                    read-only preflight re-check, fix command per miss
   pingfusi agent-setup [--force]                     teach your AI agent: installs the clone-site skill

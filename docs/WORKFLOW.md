@@ -129,16 +129,13 @@ key match between live and clone.
   its per-frame states are for the review round to judge.
 
 ### The `reviewer` phase (harness/review-qa.js)
-Two providers, one contract (an explicit review verdict + pins, machine-checkably
-recorded): **remote** (pingfusi, the default — independent reviewers open a hosted
-draft url pushed with `pingfusi draft <name> push`, or a verified tunnel for adopted
-builds) and **local** (`file --local` — the kit's own serve hosts the
-review page at `/__review`: the clone in a same-origin iframe with click-to-pin, the
-same generated step list, the same mandatory verdict buttons; no account, no tunnel).
-The trust model is explicit and travels in the receipts: local rounds record
-`provider:"local"` and verify prints "operator-trusted" — an agent with browser control
-*could* forge a local submission, which is exactly why remote review exists and why
-agents are forbidden from ever opening or submitting `/__review` themselves.
+One provider, one contract: every round goes to an INDEPENDENT reviewer on the pingfusi
+service, who opens the hosted draft url (pushed with `pingfusi draft <name> push`; a
+verified tunnel for adopted builds) side by side with the original, pins what looks
+wrong, and picks an explicit verdict — machine-checkably recorded. Neither the operator
+nor the agent ever answers a round: independence is the point (a self-supplied verdict
+would be forgeable, and the service refuses self-review). Requires the pingfusi login;
+there is no offline review path.
 
 The gates prove what the tool measures; a reviewer proves the measured set is what a person
 actually *sees* (LEARNINGS "the gate vs your eyes"). The verdict is machine-checkable, so

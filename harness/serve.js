@@ -25,107 +25,16 @@ function resolvePath(urlPath, { cloneDir, toolsDir }) {
   return fp;
 }
 
-// ── LOCAL review mode (/__review) ─────────────────────────────────────────────
-// The no-login path: the review page renders the latest LOCAL round's spec (same
-// scope-pin/steps/changelog the remote round would carry), shows the clone in a
-// same-origin iframe with click-to-pin, and enforces the SAME contract — a verdict
-// button pick is mandatory; comments alone can't pass the gate. The submission is
-// written into review-qa.json where `review-qa.js verify` reads it. Trust model: local
-// verdicts are operator-trusted and recorded as provider:"local" — agents never open
-// or submit this page themselves.
-function latestLocalRound(hq) {
-  const r = (hq && hq.rounds || [])[Math.max(0, (hq.rounds || []).length - 1)];
-  return r && r.provider === "local" ? r : null;
-}
-
-// Pure: apply a review submission to the hq state. Returns {ok, message}.
-function applySubmission(hq, body) {
-  const round = latestLocalRound(hq);
-  if (!round) return { ok: false, message: "no LOCAL round is latest — file one: pingfusi review <name> file --local" };
-  if (round.raw_response && round.raw_response.n_received) return { ok: false, message: "this round is already answered — file a new round for another review" };
-  if (!body || (body.choice == null && !(body.comments || []).length && !(body.free_text || "").trim())) return { ok: false, message: "empty submission" };
-  const comments = (body.comments || []).filter((c) => c && c.text);
-  const free = comments.length
-    ? `${comments.length} comment(s): ` + comments.map((c) => `<${c.selector || "?"}> — ${c.text}`).join(" | ") + ((body.free_text || "").trim() ? " | " + body.free_text.trim() : "")
-    : (body.free_text || "").trim() || null;
-  round.raw_response = { status: "complete", n_received: 1, n_target: 1, responses: [{ choice: body.choice != null ? body.choice : null, free_text: free }], comments };
-  round.answered_at = new Date().toISOString();
-  return { ok: true, message: `recorded — verdict: ${body.choice != null ? JSON.stringify(body.choice) : "NONE (comments only — the gate will refuse; pick a verdict button)"}` };
-}
-
-function renderReviewPage(hq, name) {
-  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const round = latestLocalRound(hq);
-  if (!round) return `<!doctype html><meta charset="utf-8"><body style="font:16px system-ui;padding:2rem">No local review round is pending for <b>${esc(name)}</b>.<br>File one: <code>pingfusi review ${esc(name)} file --local</code></body>`;
-  if (round.raw_response && round.raw_response.n_received) return `<!doctype html><meta charset="utf-8"><body style="font:16px system-ui;padding:2rem">This round is already answered (${esc((round.raw_response.responses[0] || {}).choice || "no verdict")}).<br>File a new round for another review.</body>`;
-  const spec = round.spec || { title: "Review", instructions: "", steps: [], verdict_options: round.approve_verdicts || ["Approve"] };
-  return `<!doctype html><meta charset="utf-8"><title>${esc(spec.title)}</title>
-<body style="margin:0;font:14px/1.45 system-ui;display:grid;grid-template-columns:minmax(340px,28%) 1fr;height:100vh">
-<div style="overflow:auto;padding:16px;border-right:1px solid #ddd;background:#fafafa">
-  <h2 style="margin:0 0 8px;font-size:16px">${esc(spec.title)} <span style="color:#888;font-weight:normal">(local review)</span></h2>
-  <p style="color:#444">${esc(spec.instructions)}</p>
-  <ol style="padding-left:18px;color:#333">${(spec.steps || []).map((s) => `<li style="margin:6px 0">${esc(s.text)}</li>`).join("")}</ol>
-  <p><button id="pin" style="padding:6px 10px">📌 Pin mode: OFF</button> <span style="color:#888">— toggle, then click anything in the clone that looks wrong</span></p>
-  <ul id="pins" style="padding-left:18px"></ul>
-  <p><textarea id="free" placeholder="anything else?" style="width:100%;height:56px"></textarea></p>
-  <p><b>Verdict (required):</b><br>${(spec.verdict_options || []).map((v) => `<label style="display:block;margin:4px 0"><input type="radio" name="v" value="${esc(v)}"> ${esc(v)}</label>`).join("")}</p>
-  <p><button id="go" style="padding:8px 14px;font-weight:600">Submit review</button> <span id="msg" style="color:#c00"></span></p>
-</div>
-<iframe id="clone" src="/" style="border:0;width:100%;height:100%"></iframe>
-<script>
-var pins=[],mode=false;
-var pinBtn=document.getElementById('pin');
-pinBtn.onclick=function(){mode=!mode;pinBtn.textContent='📌 Pin mode: '+(mode?'ON':'OFF')};
-document.getElementById('clone').addEventListener('load',function(){
-  var doc=this.contentDocument;
-  doc.addEventListener('click',function(e){
-    if(!mode)return;e.preventDefault();e.stopPropagation();
-    var el=e.target;
-    var sel=el.id?('#'+el.id):(el.tagName.toLowerCase()+(el.className&&typeof el.className==='string'?'.'+el.className.trim().split(/\\s+/).slice(0,2).join('.'):''));
-    var txt=prompt('What looks wrong here? ('+sel+')');
-    if(txt){pins.push({selector:sel,text:txt});
-      var li=document.createElement('li');li.textContent=sel+' — '+txt;document.getElementById('pins').appendChild(li);}
-  },true);
-});
-document.getElementById('go').onclick=function(){
-  var v=document.querySelector('input[name=v]:checked');
-  if(!v){document.getElementById('msg').textContent='pick a verdict button — comments alone cannot pass the gate';return;}
-  fetch('/__review/submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({choice:v.value,free_text:document.getElementById('free').value,comments:pins})})
-    .then(r=>r.json()).then(function(r){document.body.innerHTML='<div style="font:16px system-ui;padding:2rem">'+(r.ok?'✓ recorded. You can close this tab — the agent picks it up via verify.':'❌ '+r.message)+'</div>'});
-};
-</script></body>`;
-}
+// (Local review mode — the /__review page — was removed 2026-07-10: the independent
+// reviewer on the review service is the only review path.)
 
 function serve(name, port) {
   const PKG = path.resolve(__dirname, "..");   // the installed kit: /tools/* served from here
   const WORK = process.cwd();                  // the user's dir: targets/<name>/clone lives here
   const cloneDir = path.join(WORK, "targets", name, "clone");
   const toolsDir = path.join(PKG, "tools");
-  const hqPath = path.join(WORK, "targets", name, "review-qa.json");
-  const readHq = () => { try { return JSON.parse(fs.readFileSync(hqPath, "utf8")); } catch (e) { return { rounds: [] }; } };
   if (!fs.existsSync(cloneDir)) { console.error(`no targets/${name}/clone — run: pingfusi new ${name} <url>`); process.exit(1); }
   http.createServer((req, res) => {
-    const u = req.url.split("?")[0];
-    if (u === "/__review" && req.method === "GET") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderReviewPage(readHq(), name));
-      return;
-    }
-    if (u === "/__review/submit" && req.method === "POST") {
-      let body = "";
-      req.on("data", (d) => { body += d; if (body.length > 1e6) req.destroy(); });
-      req.on("end", () => {
-        let parsed = null;
-        try { parsed = JSON.parse(body); } catch (e) {}
-        const hq = readHq();
-        const r = applySubmission(hq, parsed);
-        if (r.ok) fs.writeFileSync(hqPath, JSON.stringify(hq, null, 2) + "\n");
-        console.log(`local review submission: ${r.message}`);
-        res.writeHead(r.ok ? 200 : 400, { "content-type": "application/json" });
-        res.end(JSON.stringify(r));
-      });
-      return;
-    }
     const fp = resolvePath(req.url, { cloneDir, toolsDir });
     if (!fp) { res.writeHead(403); res.end("403 forbidden"); return; }
     fs.readFile(fp, (e, buf) => {
@@ -159,4 +68,4 @@ if (require.main === module) {
   if (!name) { console.error("usage: pingfusi serve <target-name> [port]"); process.exit(1); }
   serve(name, port);
 }
-module.exports = { resolvePath, serve, applySubmission, renderReviewPage };
+module.exports = { resolvePath, serve };

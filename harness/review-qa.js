@@ -261,48 +261,28 @@ async function main() {
     } else if (cmd === "file" && args.includes("--anyway")) {
       console.error("⚠ --anyway: filing without the pre-review gates all green — deliberate out-of-band round");
     }
-    // LOCAL review mode (--local): no login, no tunnel, no credits — the kit's own serve
-    // hosts the review page at /__review (clone in an iframe, click-to-pin, the SAME
-    // verdict-button contract), and the submission lands in review-qa.json where verify
-    // reads it. The trust model is explicit: a local verdict is OPERATOR-trusted (an agent
-    // with browser control could forge it — the review service is the independent option),
-    // so the round records provider:"local" and every receipt built on it says so. Agents
-    // must never open or submit /__review themselves.
-    const local = args.includes("--local");
+    // Local review mode is GONE (removed 2026-07-10): the independent reviewer on the
+    // review service is the only path — an operator-trusted local verdict was a forgeable
+    // downgrade and confused the product story. A round is always answered by a reviewer
+    // on the other side of the service, never by the operator, never by the agent.
+    if (args.includes("--local") || args.includes("--allow-local")) {
+      console.error("❌ local review mode was removed — review rounds go through the review service only.\n   no login? run: pingfusi setup");
+      process.exit(1);
+    }
     let draft = opt("--draft");
-    if (!local) {
-      // Default --draft to the HOSTED draft this target RECORDED (harness/draft.js push
-      // writes it only after byte-verifying the served bytes), then to a verified tunnel
-      // (adopted builds — a live dev server can't be pushed as static files).
-      const dp = path.join(targetDir(name), "draft.json");
-      const tp = path.join(targetDir(name), "tunnel.json");
-      if (!draft && fs.existsSync(dp)) draft = readJson(dp).url;
-      if (!draft && fs.existsSync(tp)) draft = readJson(tp).url;
-      if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
-        console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.\n(no login? review locally instead: node harness/review-qa.js file " + name + " --local)");
-        process.exit(1);
-      }
+    // Default --draft to the HOSTED draft this target RECORDED (harness/draft.js push
+    // writes it only after byte-verifying the served bytes), then to a verified tunnel
+    // (adopted builds — a live dev server can't be pushed as static files).
+    const dp = path.join(targetDir(name), "draft.json");
+    const tp = path.join(targetDir(name), "tunnel.json");
+    if (!draft && fs.existsSync(dp)) draft = readJson(dp).url;
+    if (!draft && fs.existsSync(tp)) draft = readJson(tp).url;
+    if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
+      console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.");
+      process.exit(1);
     }
-    const spec = buildSpec(name, draft || "local review — served by pingfusi serve at /__review", opt("--region"), opt("--changelog"));
+    const spec = buildSpec(name, draft, opt("--region"), opt("--changelog"));
     if (cmd === "template") { console.log(JSON.stringify(spec, null, 2)); return; }
-    if (local) {
-      // NO SILENT DOWNGRADE (operator rule): with a login present, local mode is not a
-      // fallback an agent may reach for when tunnels misbehave — a remote round is
-      // independent review, a local one is operator-trusted, and that swap is the OPERATOR's
-      // call. Found live: a tunnel rate limit made an agent quietly file --local while the
-      // operator sat waiting for a verdict that never came.
-      if (cmd === "file" && resolveToken() && !args.includes("--allow-local")) {
-        console.error(`❌ refusing --local — a login exists, so review rounds go through the review service (independent verdicts). Local mode is only for setups with no login, or when the OPERATOR explicitly asks for it.\n   blocked on tunnels? STOP and tell the operator exactly what failed — do not downgrade the review.\n   operator really wants local: re-run with --local --allow-local`);
-        process.exit(1);
-      }
-      if (cmd === "file" && args.includes("--allow-local")) console.error("⚠ --allow-local: operator-requested local round despite an existing login");
-      const pingId = "local-" + require("crypto").randomBytes(6).toString("hex");
-      const hq = loadHq(name);
-      hq.rounds.push({ ping_id: pingId, provider: "local", draft_url: null, region: spec.title, approve_verdicts: spec.approve_verdicts, filed_at: new Date().toISOString(), spec: { title: spec.title, instructions: spec.instructions, steps: spec.steps, verdict_options: spec.verdict_options }, raw_response: null, last: null, checked_at: null });
-      saveHq(name, hq);
-      console.log(`✓ filed round ${hq.rounds.length} (LOCAL review) — ${pingId}\n  approve verdict: "${spec.approve_verdicts[0]}"\n  review it in a browser: http://localhost:8080/__review   (pingfusi serve ${name} must be running)\n  the reviewer pins what looks wrong and MUST pick a verdict button; then:\n  node harness/review-qa.js verify ${name}\n  ⚠ local verdicts are operator-trusted (recorded as provider:"local"); agents never open or submit /__review themselves.`);
-      return;
-    }
     // A round filed against a dead/wrong draft url burns the whole review round. Re-verify
     // AT FILE TIME: reachable is required; byte-identical to clone/index.html is expected
     // for a standalone clone (warn-only — a component served by an app dev server
@@ -339,13 +319,13 @@ async function main() {
     const hq = loadHq(name);
     if (!hq.rounds.length) { console.error(`no review round recorded — file one: node harness/review-qa.js file ${name} --draft <public-url>`); process.exit(1); }
     const round = hq.rounds[hq.rounds.length - 1];
-    // Local rounds: the review page's submission (written by serve.js's /__review/submit)
-    // IS the result — same shape the API returns, same classification below, and the
-    // provider travels into the receipt so a local verdict is never mistaken for an
-    // independent one.
-    const sc = round.provider === "local"
-      ? (round.raw_response || { status: "pending", n_received: 0, n_target: 1, responses: [] })
-      : await rpc("get_test_results", { ping_id: round.ping_id });
+    // Local rounds no longer exist (removed 2026-07-10) — a round recorded by an old kit
+    // version can't be verified as an independent verdict; refuse it by name.
+    if (round.provider === "local") {
+      console.error(`round ${hq.rounds.length} is a LOCAL round from a removed mode — local verdicts are not independent review. File a remote round: node harness/review-qa.js file ${name}`);
+      process.exit(1);
+    }
+    const sc = await rpc("get_test_results", { ping_id: round.ping_id });
     // Real response schema (verified empirically): the verdict pick is `choice`, prose is
     // `free_text`; older/other shapes may use `verdict`/`notes` — accept both.
     round.last = { status: sc.status, n_received: sc.n_received, n_target: sc.n_target, responses: (sc.responses || []).map((r) => ({ verdict: r.choice != null ? r.choice : (r.verdict != null ? r.verdict : null), notes: r.free_text || r.notes || r.comment || null })) };
@@ -370,7 +350,7 @@ async function main() {
       console.error(`round ${n} NOT approved — ${rejected.map((r) => `"${r.verdict}"${r.notes ? ` — ${r.notes}` : ""}`).join("; ")}\nfix the flags (PLAYBOOK Phase 6: --inspect the flagged marks), redeploy, then refile: node harness/review-qa.js file ${name} --draft <url>`);
       process.exit(1);
     }
-    console.log(`round ${n} approved by ${resp.length} reviewer(s): "${resp[0].verdict}" (${round.provider === "local" ? "LOCAL review — operator-trusted, " : ""}ping ${round.ping_id})`);
+    console.log(`round ${n} approved by ${resp.length} reviewer(s): "${resp[0].verdict}" (ping ${round.ping_id})`);
     return;
   }
 

@@ -20,8 +20,9 @@ own source, repeat until an approving verdict.
    reviewer-loop-only path — no pixel gates, the review verdict is the check.
 4. **Publish**: `pingfusi tunnel <name> --url http://localhost:<port>` (byte-verified public
    URL for the reviewer).
-5. **The loop**: `pingfusi review <name> file [--region "…"]` → tell the user a review ping is
-   coming (they pin what's wrong + MUST pick a verdict button). Immediately after filing,
+5. **The loop**: `pingfusi review <name> file [--region "…"]` → tell the user the round is
+   filed with an independent reviewer on the pingfusi service (the reviewer pins what's
+   wrong + picks a verdict — the user does not review). Immediately after filing,
    start `pingfusi wait <ping_id>` as a BACKGROUND task — a parked agent is not resumed
    when the verdict lands, and the loop dies silently at round 1 (the most common failure).
    Can't run self-waking background tasks? Tell the user: "answer the ping, then tell me
@@ -34,6 +35,6 @@ own source, repeat until an approving verdict.
      the run is not complete until an approving verdict is recorded.
 6. **Rules**: all review contact through `pingfusi review <name> …` (never any MCP
    directly); polls one-sided only; never submit or open a review yourself; screenshots
-   for triage, never as proof of a match. If a pingfusi login exists, rounds go through
-   the remote review service — never fall back to `--local` because tunnels failed (the
-   tool refuses it); stop and tell the user what's blocked instead.
+   for triage, never as proof of a match. No login? Stop and have the user run
+   `pingfusi setup` — review rounds require it; there is no offline review path. If
+   anything else blocks a round, stop and tell the user what failed.

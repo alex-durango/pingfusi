@@ -93,7 +93,7 @@ async function setup(io, opts) {
     steps.push("global-skipped");
   }
 
-  // 3. cloudflared — remote review tunnels; LOCAL mode needs none
+  // 3. cloudflared — the capture-sink tunnel + adopted-build dev servers
   if (io.probe("cloudflared", ["--version"])) {
     io.log("✓ cloudflared");
     steps.push("cloudflared-present");
@@ -101,7 +101,7 @@ async function setup(io, opts) {
     io.run("brew", ["install", "cloudflared"]);
     steps.push("cloudflared-installed");
   } else {
-    io.log("⚠ cloudflared not installed — remote review needs it; LOCAL review mode works without it.\n  install later: brew install cloudflared  (or developers.cloudflare.com/cloudflared)");
+    io.log("⚠ cloudflared not installed — capture delivery (the sink tunnel) needs it.\n  install later: brew install cloudflared  (or developers.cloudflare.com/cloudflared)");
     steps.push("cloudflared-skipped");
   }
 
@@ -123,7 +123,7 @@ async function setup(io, opts) {
     io.run(process.execPath, [path.join(PKG, "vendor", "pingfusi-review.mjs"), "setup"].concat(opts.mcpClient ? ["--client", opts.mcpClient] : []));
     steps.push("login-run");
   } else {
-    io.log("⚠ skipped — LOCAL review mode needs no account: your agent files rounds with\n  `pingfusi review <name> file --local` and you review at http://localhost:8080/__review");
+    io.log("⚠ skipped — review rounds will NOT work without a login (an independent reviewer\n  answers them; there is no offline path). Log in later: pingfusi setup");
     steps.push("login-skipped");
   }
 
