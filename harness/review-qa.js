@@ -296,7 +296,6 @@ async function main() {
         : await require("./tunnel.js").verifyServes(draft, idx);
       if (!v.ok && /unreachable|HTTP \d+/.test(v.reason)) { console.error(`❌ refusing to file — draft url is not serving: ${v.reason}`); process.exit(1); }
       if (!v.ok) console.error(`⚠ ${v.reason} — filing anyway (expected only when the draft is not the standalone clone)`);
-      if (!/pingfusi\.com\/qa-toolbar\.js/.test(fs.readFileSync(idx, "utf8"))) console.error("⚠ clone/index.html has no pingfusi qa-toolbar <script> — reviewers can still review, but pinned comments/align data will be limited (capture-build --qa-toolbar adds it)");
     }
     const { approve_verdicts, ...toolArgs } = spec;
     const r = await rpc("request_review", toolArgs);

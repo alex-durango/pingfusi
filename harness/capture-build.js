@@ -1,4 +1,4 @@
-// harness/capture-build.js <name> [dom.html] [--qa-toolbar] — build the clone BY CAPTURE.
+// harness/capture-build.js <name> [dom.html] [--fixes] — build the clone BY CAPTURE.
 //
 // WHY THIS EXISTS (LEARNINGS #19). The gate's chronic blind spot is TECHNIQUE mismatches —
 // a clone that lands the same numbers by a different construction and rasterises
@@ -32,13 +32,12 @@
 // self-host, a stripped script that removed a load-bearing class, and environment drift.
 //
 // USAGE
-//   node harness/capture-build.js <name> [domFile] [--qa-toolbar] [--fixes]
-//   pingfusi capture-build <name> [domFile] [--qa-toolbar] [--fixes]
-// domFile defaults to targets/<name>/dom.html. --qa-toolbar injects the pingfusi
-// toolbar before </head> for review rounds (off by default: keep the clone byte-honest).
+//   node harness/capture-build.js <name> [domFile] [--fixes]
+//   pingfusi capture-build <name> [domFile] [--fixes]
+// domFile defaults to targets/<name>/dom.html.
 // --fixes injects <script src="fixes.js" defer></script> before </body> — the ONE vanilla
 // reproduction script for the `behavior` phase (docs/WORKFLOW.md; method: lovable_dupe_html's
-// CLONE_PLAYBOOK.md §8). It's a flag, not automatic, for the same reason --qa-toolbar is:
+// CLONE_PLAYBOOK.md §8). It's a flag, not automatic:
 // a capture-built clone defaults to byte-honest (no script tags at all — the whole point of
 // §18/#19 is that a static clone renders identically to a stripped-JS snapshot of live). Only
 // once you've written targets/<name>/clone/fixes.js do you opt in to loading it. Re-running
@@ -151,7 +150,10 @@ async function main() {
   const args = process.argv.slice(2);
   const flags = new Set(args.filter((a) => a.startsWith("--")));
   const [name, domArg] = args.filter((a) => !a.startsWith("--"));
-  if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--qa-toolbar]"); process.exit(2); }
+  if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); }
+  // The web QA toolbar is GONE (reviewing happens in the review app, which brings its own
+  // pinning UI): the injected <script> just 404'd on every draft view. Refuse the stale flag.
+  if (flags.has("--qa-toolbar")) { console.error("❌ --qa-toolbar was removed — reviewers use the review app's own tools; no script tag is injected into clones."); process.exit(1); }
   if (typeof fetch !== "function") { console.error("capture-build needs node >= 18 (built-in fetch)"); process.exit(1); }
 
   const dir = path.join(WORK, "targets", name);
@@ -264,8 +266,6 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
 
   // inline <style> blocks get the same treatment as downloaded CSS (base = the page URL)
   html = html.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (m, open, css, close) => open + rewriteCss(css, target.url, state) + close);
-
-  if (flags.has("--qa-toolbar")) html = html.replace(/<\/head>/i, '<script src="https://pingfusi.com/qa-toolbar.js"></script></head>');
 
   // --fixes: wire the ONE vanilla behavior-reproduction script (never generated here — you
   // write clone/fixes.js by hand, per-target, following lovable_dupe_html/CLONE_PLAYBOOK.md

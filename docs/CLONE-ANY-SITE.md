@@ -63,7 +63,7 @@ always tells you what's next):**
    Settle the live page (load, scroll bottom-and-back, confirm stable
    scrollHeight + node count twice), capture the doctype-exact DOM
    (`pxSendDom('http://localhost:7799/dom.html')`, sink running in
-   `targets/{{NAME}}/`), then `pingfusi capture-build {{NAME}} --qa-toolbar`.
+   `targets/{{NAME}}/`), then `pingfusi capture-build {{NAME}}`.
    Delivery blocked? Fall back per RUNBOOK (stash/chunked `pxRead`; or curl the
    SSR HTML **only after verifying** its structure matches the hydrated DOM —
    element-count comparison minimum). Attest `assets` with real evidence.
