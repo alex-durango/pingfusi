@@ -43,10 +43,19 @@ end; the user's job is to answer review pings.
    the pipeline; their browser's rendering of the original is the ground truth (the
    reference site may serve their browser a different variant than yours — LEARNINGS #20).
 
-5. **Iterate until done.** Act on every verdict immediately: fix from the site's own
-   captured artifacts (authored mechanisms, never invented values), re-green the gates,
-   refile with a changelog. Done = `pingfusi gate <NAME> done` exits 0 — all ten phases,
-   including a real approving verdict from the user.
+5. **Iterate until done — and never park without a waiter.** The single most common way
+   a run dies is HERE: the agent files a round, ends its turn "waiting", and nothing
+   wakes it when the verdict lands — the user sees a first draft and then silence.
+   So: immediately after FILING any round, start `pingfusi wait <ping_id>` as a
+   BACKGROUND task, before anything else — its exit is what wakes you to act. If your
+   environment can't run background tasks that re-invoke you, say so and tell the user
+   plainly: "answer the ping, then tell me to continue." Act on every verdict
+   immediately: fix from the site's own captured artifacts (authored mechanisms, never
+   invented values), re-green the gates, refile with a changelog, re-arm the waiter.
+   Done = `pingfusi gate <NAME> done` exits 0 — all ten phases, including a real
+   approving verdict from the user. A first draft, green machine gates, or a filed
+   round are NOT done: ending your turn before done, without being blocked on the
+   reviewer, is an incomplete run — say exactly what remains and what will wake you.
 
 6. **Report with receipts**: the final `pingfusi status <NAME>` table, gate outputs, the round
    history, and the clone's location (`targets/<NAME>/clone/`).

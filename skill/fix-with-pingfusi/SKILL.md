@@ -21,12 +21,17 @@ own source, repeat until an approving verdict.
 4. **Publish**: `pingfusi tunnel <name> --url http://localhost:<port>` (byte-verified public
    URL for the reviewer).
 5. **The loop**: `pingfusi review <name> file [--region "…"]` → tell the user a review ping is
-   coming (they pin what's wrong + MUST pick a verdict button). On each verdict:
+   coming (they pin what's wrong + MUST pick a verdict button). Immediately after filing,
+   start `pingfusi wait <ping_id>` as a BACKGROUND task — a parked agent is not resumed
+   when the verdict lands, and the loop dies silently at round 1 (the most common failure).
+   Can't run self-waking background tasks? Tell the user: "answer the ping, then tell me
+   to continue." On each verdict:
    - Approved → done; report with the round history.
    - Pins → fix each in the DRAFT'S OWN source (its components/styles — match its
      idioms; derive fixes from the original site's real markup/CSS, never invent),
      verify the dev server picked them up, `pingfusi tunnel <name> --check`, refile with
-     `--changelog "what changed since your last review"`. Repeat.
+     `--changelog "what changed since your last review"`, re-arm the waiter. Repeat —
+     the run is not complete until an approving verdict is recorded.
 6. **Rules**: all review contact through `pingfusi review <name> …` (never any MCP
    directly); polls one-sided only; never submit or open a review yourself; screenshots
    for triage, never as proof of a match. If a pingfusi login exists, rounds go through
