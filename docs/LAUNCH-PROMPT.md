@@ -36,16 +36,17 @@ Environment notes (operational, not workflow):
   After filing a round, start `pingfusi wait <ping_id>` as a BACKGROUND task before
   doing anything else; its exit is what wakes you to act on the verdict.
 - Review drafts: `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified,
-  stable url — no clone tunnel needed). Tunnels remain only for the capture sink and
-  for adopted builds running their own dev server.
-- Delivery: start `node tools/sink.js` and `node harness/tunnel.js --sink` FIRST — the
-  automation extension blocks page→localhost fetch (a clean ~4s abort), and the sink
-  tunnel restores one-call delivery for every capture (pxSend / pxSendDom /
-  pxBehaviorSend). A `text/plain` form POST to the sink also works when the site's CSP
-  has no form-action directive. Stash + chunked pxRead is the LAST resort.
-  Large captures (> ~500 KB) or any 409 from the sink: use `pxSaveDom`/`pxSave` (browser
-  download → ~/Downloads, byte-exact — RUNBOOK Step 0); a 409 means the delivery was
-  truncated/corrupted in transport — switch method, don't retry it.
+  stable url — no clone tunnel needed). Tunnels remain only for adopted builds running
+  their own dev server (and optionally a sink POST loop, below).
+- Delivery is TUNNEL-FREE by default: `pxSave('live.json')` / `pxSaveDom('dom.html')`
+  save byte-exact through the browser's download path (→ ~/Downloads; move into
+  targets/{{NAME}}/ and verify the returned sha256 — RUNBOOK Step 0). For tight
+  re-capture loops, `node tools/sink.js` + a direct localhost POST is quicker WHEN the
+  environment allows page→localhost fetch (probe it first — RUNBOOK Step 0); the sink
+  TUNNEL (`node harness/tunnel.js --sink`, needs cloudflared) is only for POST loops in
+  environments that block localhost. A 409 from the sink means the delivery was
+  truncated/corrupted in transport — switch to pxSave, don't retry it. Stash + chunked
+  pxRead is the LAST resort.
 - If a tunnel verify fails, do NOT kill + re-run tunnel.js in a loop — each run mints a
   new hostname and re-races DNS propagation. Its probes already fall back to pinned
   public DNS; a run that still fails is genuinely broken (dead cloudflared, wrong port,

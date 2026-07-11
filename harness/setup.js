@@ -1,7 +1,7 @@
 // harness/setup.js — `npx pingfusi setup` / `pingfusi setup`: the one-command onboarding.
 //
 // Everything a newcomer needs, in one interactive pass: global install (when run via
-// npx; upgrades an old pixel-perfect-kit install), cloudflared (offered via brew), the
+// npx; upgrades an old pixel-perfect-kit install), the
 // review-service device login + MCP install (the vendored installer — skippable, LOCAL
 // review mode needs no account), the optional ditto fast-builder check, and the agent
 // skills. Interactive steps CANNOT live in npm postinstall (silenced, breaks CI), which
@@ -93,16 +93,15 @@ async function setup(io, opts) {
     steps.push("global-skipped");
   }
 
-  // 3. cloudflared — the capture-sink tunnel + adopted-build dev servers
+  // 3. cloudflared — OPTIONAL, deliberately NOT offered here: the default clone flow is
+  // tunnel-free (captures deliver via pxSave/localhost sink; drafts are HOSTED). Only
+  // `pingfusi tunnel <name> --url` — reviewing a live dev-server draft — needs it.
   if (io.probe("cloudflared", ["--version"])) {
-    io.log("✓ cloudflared");
+    io.log("✓ cloudflared (optional — only needed to tunnel a live dev-server draft)");
     steps.push("cloudflared-present");
-  } else if (io.probe("brew", ["--version"]) && saidYes(await io.ask("cloudflared not found (public tunnels for remote review) — install now? (brew install cloudflared) [Y/n] "), io.isTTY)) {
-    io.run("brew", ["install", "cloudflared"]);
-    steps.push("cloudflared-installed");
   } else {
-    io.log("⚠ cloudflared not installed — capture delivery (the sink tunnel) needs it.\n  install later: brew install cloudflared  (or developers.cloudflare.com/cloudflared)");
-    steps.push("cloudflared-skipped");
+    io.log("· cloudflared not installed — fine: the default clone flow is tunnel-free.\n  Reviewing a live dev-server draft (`pingfusi tunnel <name> --url`) needs it:\n  brew install cloudflared  (or developers.cloudflare.com/cloudflared)");
+    steps.push("cloudflared-absent");
   }
 
   // 4. review-service login + MCP install — the vendored installer (device flow, patches

@@ -100,31 +100,31 @@ timing: a **clean ~4s abort** on a site that sends no CSP header is the *automat
 extension* blocking page→localhost fetch (environment-level); a **45s hang** is the
 site's `connect-src` (CSP-level).
 
-**Blocked either way? Tunnel the SINK — this replaces the stash/chunk dance:**
+**Blocked either way? Save to disk — byte-exact, no network, no tunnel:**
+```js
+await pxSave('live.json')      // → ~/Downloads/live.json; returns {bytes, sha256}
+await pxSaveDom('dom.html')    // the full post-hydration DOM, same path
+```
+Move the file into `targets/<name>/` and confirm `shasum -a 256` matches the returned
+sha256 before building from it. This is also the REQUIRED path for large payloads
+(> ~500 KB) and after ANY 409 from the sink: POST transports have silently truncated big
+DOMs (an 817 KB capture lost bytes on EVERY network path — tunnel, localhost, fresh
+tab — and the gates then certified the truncated page). `pxSend`/`pxSendDom` declare
+their byte count + sha256 and the sink REFUSES a mismatched delivery with HTTP 409 —
+treat a 409 as "switch to pxSave", never "retry until it sticks".
+
+**Need a POST loop anyway** (many incremental re-captures, where a download per
+iteration is too clumsy)? Tunnel the SINK — needs cloudflared, the one remaining tunnel
+use besides adopted-build dev servers:
 ```sh
 node tools/sink.js &                      # the receiver, as usual
 node harness/tunnel.js --sink &           # public HTTPS in front of it (verified by the
                                           # sink's own signature; records ./sink-tunnel.json)
 ```
 then from any page, live or clone: `await pxSend('<sink-tunnel-url>/live.json')` /
-`pxSendDom('<url>/dom.html')` / `pxBehaviorSend('<url>/behaviors-live.json')` — one call,
-full payload, no truncation caps. Stash + chunked `pxRead` (Step 3) is the LAST resort,
-only for when outbound HTTPS itself is blocked (rare — that's a real site CSP with a
-strict `connect-src`, and even those often allow `*.trycloudflare.com`... probe it).
-
-**Large payloads (> ~500 KB), or ANY 409 from the sink: save to disk instead of POSTing.**
-POST transports have silently truncated big DOMs (an 817 KB capture lost bytes on EVERY
-network path — tunnel, localhost, fresh tab — and the gates then certified the truncated
-page). `pxSend`/`pxSendDom` now declare their byte count + sha256 and the sink REFUSES a
-mismatched delivery with HTTP 409 instead of writing it — treat a 409 as "switch delivery
-method", never "retry until it sticks". The byte-exact method is the browser's own
-download path:
-```js
-await pxSaveDom('dom.html')    // → ~/Downloads/dom.html; returns {bytes, sha256}
-await pxSave('live.json')      // full snapshot, same path
-```
-Move the file into `targets/<name>/` and confirm `shasum -a 256` matches the returned
-sha256 before building from it.
+`pxSendDom('<url>/dom.html')` / `pxBehaviorSend('<url>/behaviors-live.json')`. Stash +
+chunked `pxRead` (Step 3) is the LAST resort, only for when outbound HTTPS itself is
+blocked (rare — that's a real site CSP with a strict `connect-src`).
 
 ## Step 1 — both windows to the same width
 Resize the clone tab and the live tab to the same width (e.g. 1728). Confirm

@@ -3,7 +3,7 @@
 The ONE-SHOT pipeline: hand this to an agent and wait; the deliverable comes back
 pixel-perfect **with receipts** — every gate green, in order, and a real reviewer's
 approval recorded as the `reviewer` phase. The operator's only job is to have run
-`pingfusi setup` once (pingfusi auth) and have `cloudflared` installed.
+`pingfusi setup` once (pingfusi auth).
 
 **Fill in:**
 - `{{URL}}` — the live page to clone, e.g. `https://www.example.com/`

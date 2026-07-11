@@ -74,7 +74,7 @@ function main() {
   const { resolveToken } = require("./review-qa.js");
   const checks = [
     checkNode(process.versions.node),
-    checkBinary("cloudflared", ["--version"], "public tunnels — the capture sink + adopted-build dev servers (hosted drafts need none)", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
+    checkBinary("cloudflared", ["--version"], "OPTIONAL — only `pingfusi tunnel --url` (live dev-server drafts) needs it; the default clone flow is tunnel-free", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
     checkReviewToken(resolveToken),
     checkBinary("ffmpeg", ["-version"], "optional — frame-level video verification", "brew install ffmpeg", false),
   ];

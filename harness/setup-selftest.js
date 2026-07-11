@@ -43,7 +43,8 @@ function fakeIO({ probes, answers, tty, paths }) {
     const r = await setup(io, { home, sourceCheckout: false, resolveToken: () => null, dittoApiKey: false });
     ok(r.ok, "fresh-machine run completes");
     ok(runs.includes("npm i -g pingfusi"), "npx's ephemeral bin doesn't count as installed — global install prompt fires and runs on consent");
-    ok(runs.includes("brew install cloudflared"), "installs cloudflared via brew on consent");
+    ok(!runs.includes("brew install cloudflared"), "cloudflared is NOT installed by setup (the default flow is tunnel-free)");
+    ok(logs.some((l) => /cloudflared not installed — fine/.test(l)), "absent cloudflared is reported as optional, not a warning");
     ok(runs.some((r2) => /vendor[\\/]pingfusi-review\.mjs setup$/.test(r2)), "login step runs the VENDORED MCP installer (device flow + config patch), not npx cpyany");
     ok(logs.some((l) => /ditto \(optional fast builder\): connect its MCP/.test(l)), "ditto guidance is MCP/API-key based — never a binary probe (macOS ships /usr/bin/ditto, a guaranteed false positive)");
     ok(logs.some((l) => /taught your AI agent: .*pixel-perfect-clone/.test(l)), "installs the agent skills");

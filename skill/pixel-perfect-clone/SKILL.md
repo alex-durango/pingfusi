@@ -27,7 +27,9 @@ not by the user, and never by you.
    - Build by CAPTURE (`pingfusi capture-build`), never hand-reconstruction.
    - Every phase advances only through its gate: `pingfusi advance <NAME> <phase>`. Never
      use --force. `pingfusi status <NAME>` always tells you what's next.
-   - Sink + `node <KIT>/harness/tunnel.js --sink` first for one-call capture delivery.
+   - Capture delivery is tunnel-free: `pxSave`/`pxSaveDom` (byte-exact browser download,
+     RUNBOOK Step 0), or the localhost sink when the environment allows page→localhost
+     fetch. Drafts are hosted: `pingfusi draft <NAME> push`. No cloudflared needed.
    - All reviewer contact through `pingfusi review <NAME> …` (file/poll/verify) — never through
      any MCP directly. Refiles carry `--changelog "what changed"`.
    - No pingfusi login (doctor shows it missing)? STOP and tell the user to run
