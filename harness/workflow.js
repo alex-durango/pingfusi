@@ -536,7 +536,19 @@ function cmdStatus(name) {
     const g = safeGate(nextRequired, name);
     console.log(`\n  next: ${nextRequired.key} — ${nextRequired.title}`);
     console.log(`  gate: ${g.ok ? "READY (gate passes) → advance it" : "blocked — " + g.reason}`);
-    console.log(`  run:  ${CMD} advance ${name} ${nextRequired.key}` + (nextRequired.kind === "attested" ? ' --evidence "…"' : ""));
+    if (nextRequired.key === "review" && !g.ok) {
+      // A filed-and-pending round means WAIT (re-filing burns a credit and re-enters the
+      // queue); no round at all means the file ritual hasn't happened — say which.
+      const pend = /pending[^(]*\(ping ([0-9a-f-]{36})\)/.exec(g.reason);
+      if (pend) {
+        console.log(`  run:  pingfusi wait ${pend[1]}   (BACKGROUND task — round already filed; the verdict wakes you, do NOT refile)`);
+      } else {
+        console.log(`  run:  ${CMD} draft ${name} push   →   ${CMD} review ${name} file   →   pingfusi wait <ping_id> (background)`);
+        console.log(`        (green machine gates are NOT done — a reviewer's approving verdict is the gate)`);
+      }
+    } else {
+      console.log(`  run:  ${CMD} advance ${name} ${nextRequired.key}` + (nextRequired.kind === "attested" ? ' --evidence "…"' : ""));
+    }
   } else {
     console.log(`\n  ✓ all phases passed — this clone is verified pixel-perfect end to end.`);
   }
@@ -612,7 +624,17 @@ function cmdAdvance(name, phaseKey, opts) {
   console.log(`  ${g.reason}`);
   if (rec.forced) console.log(`  ⚠ enforcement bypassed (${overrode.join(", ")}) — flagged in workflow.jsonl; the done gate refuses forced phases.`);
   const next = PHASES.find((p) => st.phases[p.key].status !== "pass");
-  console.log(next ? `  next: ${CMD} advance ${name} ${next.key}` : `  ✓ workflow complete — verified pixel-perfect.`);
+  // The most dangerous moment in the pipeline is the LAST machine gate going green:
+  // "0 fails" reads like completion, the agent declares victory, and no round is ever
+  // filed (seen in the field). The breadcrumb for the review hop is therefore explicit
+  // and unmissable, not a generic "advance".
+  if (!next) console.log(`  ✓ workflow complete — verified pixel-perfect.`);
+  else if (next.key === "review") {
+    console.log(`  next: REVIEW — green machine gates are NOT done. The clone needs a reviewer's approving verdict:`);
+    console.log(`    1. ${CMD} draft ${name} push       (hosted draft url for the round)`);
+    console.log(`    2. ${CMD} review ${name} file      (files the round — the reviewer gets a side-by-side)`);
+    console.log(`    3. pingfusi wait <ping_id>  as a BACKGROUND task — the verdict wakes you; fix + refile until approved.`);
+  } else console.log(`  next: ${CMD} advance ${name} ${next.key}`);
 }
 
 function cmdLedger(name) {
