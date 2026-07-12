@@ -31,20 +31,33 @@ So the rules below are about avoiding slow/blocked paths, not compute.
 
 ## Prereqs
 - Your clone dev server running (note its port).
-- The sink running to receive the clone snapshot: `node tools/sink.js` (listens on 7799).
+- A delivery path from Step 0: the hosted capture session (default), or the local
+  sink (`node tools/sink.js`, :7799) for the fast inner loop where localhost works.
 
 ## Build by capture (the DEFAULT build step — do once, before the diff loop)
 Don't hand-rebuild the markup: capture it (LEARNINGS #19 — a reconstruction manufactures
 exactly the technique mismatches the gate is blind to; a capture inherits live's doctype,
 authored line-heights, and drawing primitives by construction).
 
-1. Let the live page **settle** at the target width: load, wait ~2s, scroll to the bottom
-   and back (mounts lazy/animated content), wait, confirm `scrollHeight` + node count are
-   stable across two reads.
-2. Inject `tools/browser-capture.js` as plain source on the live tab (same rules as
-   measurement — never fetch+eval), then with the sink running in `targets/<name>/`:
+1. Inject `tools/browser-capture.js` as plain source on the live tab (same rules as
+   measurement — never fetch+eval), then let the page **settle mechanically** — do not
+   hand-scroll and hope:
    ```js
-   await pxSendDom('http://localhost:7799/dom.html')   // doctype-exact post-hydration DOM
+   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0}
+   ```
+   It walks the full page (firing IntersectionObservers + lazy loaders, re-reading
+   scrollHeight as sections mount), waits for reveal transitions to land, and returns to
+   top so sticky-header state matches what the gates measure. **Check the return value:**
+   `frozenOpacity0 > 0` means some scroll-reveals STILL haven't fired — inspect those
+   elements before capturing. Paid for on aloyoga: a top-of-page capture shipped a clone
+   with one section missing entirely (lazy, never rendered — its content lived only in a
+   `<script>` the build strips) and four blocks frozen invisible at inline `opacity:0`.
+   This step existed here as prose ("scroll to the bottom and back") and was skipped —
+   which is why it is now a command with a checkable result, not an instruction.
+2. Deliver the doctype-exact post-hydration DOM:
+   ```js
+   await pxSendDom('<sink_url>/dom.html')   // hosted session (Step 0) — or
+   await pxSendDom('http://localhost:7799/dom.html')   // local sink, when localhost works
    ```
    CSP-blocked POST → `pxStash(null, 900, pxDomHtml())` + batched `pxRead` (Step 3 below).
    Big page (> ~500 KB DOM) or a 409 from the sink → `pxSaveDom('dom.html')` (Step 0).
@@ -88,43 +101,42 @@ stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(o
    real behaviors merging into one invented hybrid — the gate refuses undisposed declared
    rows for the same reason.
 
-## Step 0 — probe live delivery (do this before anything else)
-Inject `tools/browser-capture.js` source on the live tab, then try a direct POST:
+## Step 0 — open the delivery path (do this before anything else)
+**Default: a hosted capture session** — one-call, integrity-verified delivery from any
+page; no tunnels, no downloads, unlimited calls:
+```sh
+pingfusi capture open <name>      # → sink_url (24h session on the review service)
+```
+then on any page, live or clone: `await pxSendDom('<sink_url>/dom.html')` /
+`await pxSend('<sink_url>/live.json')` / `pxBehaviorSend('<sink_url>/behaviors-live.json')`.
+Each call answers `ok <file> — N bytes, sha256 …`; a **409 means the payload was
+truncated/corrupted in transport and NOTHING was stored** — re-send, never ignore.
+Retrieve everything with `pingfusi capture pull <name> --all` — each file is re-verified
+against the service-recorded bytes+sha256 before it lands in `targets/<name>/`.
+
+**Faster inner loop (optional):** a direct localhost POST to `node tools/sink.js`
+(run it from `targets/<name>/` — files land in the sink's cwd) skips the network
+round-trip WHEN the environment allows page→localhost fetch. Probe once:
 ```js
-fetch('http://localhost:7799/live.json', {method:'POST', body: pxCapture(null,{compact:true})})
+fetch('http://localhost:7799/probe.json',{method:'POST',body:'{"probe":1}'})
   .then(r=>r.text()).then(t=>window.__post=t).catch(e=>window.__post='ERR:'+e.message)
 ```
-Check whether `./live.json` appeared on disk. **If it did, you're done delivering** —
-capture both pages with one `pxSend` each and skip Steps 3. Diagnose a refusal by its
-timing: a **clean ~4s abort** on a site that sends no CSP header is the *automation
-extension* blocking page→localhost fetch (environment-level); a **45s hang** is the
-site's `connect-src` (CSP-level).
+Diagnose a refusal by its signature: a **clean ~4s abort**, OR a **45s hang with no
+entry in the sink log even though the site sends no CSP header**, is the automation
+extension blackholing page→localhost (environment-level — both signatures seen live);
+a 45s hang on a site that DOES ship a strict `connect-src` is the site's CSP. Either
+way: use the hosted session above.
 
-**Blocked either way? Save to disk — byte-exact, no network, no tunnel:**
-```js
-await pxSave('live.json')      // → ~/Downloads/live.json; returns {bytes, sha256}
-await pxSaveDom('dom.html')    // the full post-hydration DOM, same path
-```
-Move the file into `targets/<name>/` and confirm `shasum -a 256` matches the returned
-sha256 before building from it. This is also the REQUIRED path for large payloads
-(> ~500 KB) and after ANY 409 from the sink: POST transports have silently truncated big
-DOMs (an 817 KB capture lost bytes on EVERY network path — tunnel, localhost, fresh
-tab — and the gates then certified the truncated page). `pxSend`/`pxSendDom` declare
-their byte count + sha256 and the sink REFUSES a mismatched delivery with HTTP 409 —
-treat a 409 as "switch to pxSave", never "retry until it sticks".
+**Offline / no login:** `pxSave('live.json')` / `pxSaveDom('dom.html')` (browser
+download → ~/Downloads) is byte-exact BUT silently rationed: Chrome allows ONE
+programmatic download per tab — every later save no-ops while still returning a
+success-shaped `{bytes, sha256}` (LEARNINGS #21). Use a FRESH TAB per save and
+confirm each file landed (`shasum -a 256` matches the returned sha) before building
+from it.
 
-**Need a POST loop anyway** (many incremental re-captures, where a download per
-iteration is too clumsy)? Tunnel the SINK — needs cloudflared, the one remaining tunnel
-use besides adopted-build dev servers:
-```sh
-node tools/sink.js &                      # the receiver, as usual
-node harness/tunnel.js --sink &           # public HTTPS in front of it (verified by the
-                                          # sink's own signature; records ./sink-tunnel.json)
-```
-then from any page, live or clone: `await pxSend('<sink-tunnel-url>/live.json')` /
-`pxSendDom('<url>/dom.html')` / `pxBehaviorSend('<url>/behaviors-live.json')`. Stash +
-chunked `pxRead` (Step 3) is the LAST resort, only for when outbound HTTPS itself is
-blocked (rare — that's a real site CSP with a strict `connect-src`).
+**Last resorts:** the sink tunnel (`node harness/tunnel.js --sink`, needs cloudflared)
+for POST loops in blocked environments; stash + chunked `pxRead` (Step 3) only when
+outbound HTTPS itself is blocked (a real site CSP with a strict `connect-src`).
 
 ## Step 1 — both windows to the same width
 Resize the clone tab and the live tab to the same width (e.g. 1728). Confirm

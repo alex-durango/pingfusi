@@ -24,9 +24,9 @@ assumption you have.
 
 **Work the FAST loop (RUNBOOK "The fast fix loop") — the reviewer answers in
 minutes, so the agent is the bottleneck, not the reviewer:**
-- Start `node tools/sink.js` and `node harness/tunnel.js --sink` (background)
-  FIRST — every capture (pxSend/pxSendDom/pxBehaviorSend) then delivers in one
-  call through the sink tunnel; stash/chunked-read is a last resort.
+- Open the delivery path: `pingfusi capture open {{NAME}}` (hosted session — default)
+  FIRST — every capture (pxSend/pxSendDom/pxBehaviorSend) then delivers in one call
+  to its sink_url, and `pingfusi capture pull {{NAME}} --all` retrieves them verified.
 - After a scoped fix, re-capture only the affected targets and fold them in with
   `node tools/merge-snapshot.js` — full N-target re-captures are for the final
   pass only (the done gate enforces one clean full capture at the end).

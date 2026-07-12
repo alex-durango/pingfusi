@@ -517,7 +517,17 @@ const saveState = (name, st) => fs.writeFileSync(statePath(name), JSON.stringify
 const appendLedger = (name, rec) => fs.appendFileSync(ledgerPath(name), JSON.stringify(rec) + "\n");
 
 // ── commands ────────────────────────────────────────────────────────────────
-function cmdStatus(name) {
+// `--assert-done` turns status into a GATE, not a report. Paid for on aloyoga: the
+// workflow correctly refused `advance done` (behavior + review pending) and said so the
+// whole time — but nothing READ the ledger before the iteration wrote "green, converged,
+// pixel-perfect". The gates never lied; the summary did. workflow.js is a ledger, not a
+// driver: it can refuse a bad advance, it cannot compel an agent to finish. So the claim
+// of success now has to be backed by an exit code, per the kit's own rule — never claim
+// "pixel-perfect" or "caught" from anything but a command that exits 0.
+// Forced phases do NOT count as done: --force is a legitimate escape hatch, but a forced
+// gate and an earned one must never read the same in a final report. --allow-forced opts
+// back in, deliberately and visibly.
+function cmdStatus(name, opts = {}) {
   const st = loadState(name);
   // target.json is the CANONICAL url/width (the target gate reads it); workflow.json only
   // snapshots them at init. Display the live values so a legitimately re-targeted width
@@ -532,6 +542,9 @@ function cmdStatus(name) {
     console.log(`  ${mark.padEnd(11)} ${p.key.padEnd(9)} ${p.title}`);
     if (!nextRequired && ph.status !== "pass") nextRequired = p;
   }
+  const pending = PHASES.filter((p) => st.phases[p.key].status !== "pass");
+  const forced = PHASES.filter((p) => st.phases[p.key].status === "pass" && st.phases[p.key].forced);
+
   if (nextRequired) {
     const g = safeGate(nextRequired, name);
     console.log(`\n  next: ${nextRequired.key} — ${nextRequired.title}`);
@@ -549,8 +562,25 @@ function cmdStatus(name) {
     } else {
       console.log(`  run:  ${CMD} advance ${name} ${nextRequired.key}` + (nextRequired.kind === "attested" ? ' --evidence "…"' : ""));
     }
+  } else if (forced.length) {
+    // every phase "passed", but some were forced — that is NOT a verified clone.
+    console.log(`\n  ⚠ all phases passed, but ${forced.length} was/were FORCED: ${forced.map((p) => p.key).join(", ")}`);
+    console.log(`    a forced gate is an override, not a verification — do not report this as pixel-perfect.`);
   } else {
     console.log(`\n  ✓ all phases passed — this clone is verified pixel-perfect end to end.`);
+  }
+
+  if (opts.assertDone) {
+    const reasons = [];
+    if (pending.length) reasons.push(`${pending.length} phase(s) never ran: ${pending.map((p) => p.key).join(", ")}`);
+    if (forced.length && !opts.allowForced) reasons.push(`${forced.length} phase(s) were --force'd: ${forced.map((p) => p.key).join(", ")}`);
+    if (reasons.length) {
+      console.error(`\n❌ assert-done FAILED — "${name}" is NOT a finished iteration:`);
+      for (const r of reasons) console.error(`   • ${r}`);
+      console.error(`   Do not report this clone as green, converged, or pixel-perfect.`);
+      process.exit(1);
+    }
+    console.log(`\n✓ assert-done — every phase earned (none pending, none forced).`);
   }
 }
 
@@ -708,6 +738,9 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
   pingfusi tunnel  <name> --url <http://localhost:3000>   tunnel an adopted build's own dev server
                                                      (reachability-verified; ditto/next/vite etc. — live
                                                      dev servers can't be pushed as static drafts)
+  pingfusi capture open <name>                       hosted capture session (remote sink, 24h): pages
+                                                     deliver with pxSend/pxSendDom to the printed sink_url
+  pingfusi capture pull <name> --all                 pull delivered captures back, integrity-verified
   pingfusi tunnel  --sink [port]                     tunnel the snapshot SINK: live pages deliver captures
                                                      with one pxSend call even when the environment blocks
                                                      page→localhost (replaces the stash/chunk fallback)
@@ -736,6 +769,7 @@ function main() {
   switch (cmd) {
     case "new": { if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); } return delegate("harness/new-target.js", [name, ...rest]); }
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
+    case "capture": { if (!name || !rest[0]) { console.error("usage: pingfusi capture open <name> | pingfusi capture pull <name> <file>|--all"); process.exit(2); } return delegate("harness/capture-remote.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
     case "draft": { if (!name || !rest[0]) { console.error("usage: pingfusi draft <name> push|status|delete"); process.exit(2); } return delegate("harness/draft.js", [rest[0], name]); }
@@ -753,7 +787,7 @@ function main() {
   if (!name) { console.error(`"${cmd}" needs a <name>`); process.exit(2); }
   switch (cmd) {
     case "init": { const [url, width] = rest.filter((a) => !a.startsWith("--")); initWorkflow(name, url, width ? +width : undefined, { force: rest.includes("--force") }); console.log(`✓ workflow initialized for ${name} — ${CMD} status ${name}`); break; }
-    case "status": cmdStatus(name); break;
+    case "status": cmdStatus(name, { assertDone: rest.includes("--assert-done"), allowForced: rest.includes("--allow-forced") }); break;
     case "gate": cmdGate(name, rest[0]); break;
     case "advance": cmdAdvance(name, rest[0], parseOpts(rest)); break;
     case "ledger": cmdLedger(name); break;

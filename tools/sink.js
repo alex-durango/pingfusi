@@ -110,6 +110,6 @@ if (require.main === module) {
       console.error(`sink failed: ${e.message}`);
       process.exit(1);
     })
-    .listen(PORT, () => console.log(`sink on http://localhost:${PORT}  (POST /<name>.json → ./<name>.json)`));
+    .listen(PORT, () => console.log(`sink on http://localhost:${PORT}  (POST /<name>.json → ${process.cwd()}/<name>.json — files land in THIS directory; run it from targets/<name>/)`));
 }
 module.exports = { classifyBody, sanitizeName, parseDeclared, checkIntegrity, MAX_BYTES };

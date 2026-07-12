@@ -27,9 +27,10 @@ not by the user, and never by you.
    - Build by CAPTURE (`pingfusi capture-build`), never hand-reconstruction.
    - Every phase advances only through its gate: `pingfusi advance <NAME> <phase>`. Never
      use --force. `pingfusi status <NAME>` always tells you what's next.
-   - Capture delivery is tunnel-free: `pxSave`/`pxSaveDom` (byte-exact browser download,
-     RUNBOOK Step 0), or the localhost sink when the environment allows page→localhost
-     fetch. Drafts are hosted: `pingfusi draft <NAME> push`. No cloudflared needed.
+   - Capture delivery: `pingfusi capture open <NAME>` (hosted session), then
+     pxSend/pxSendDom from any page to the printed sink_url;
+     `pingfusi capture pull <NAME> --all` retrieves everything integrity-verified.
+     Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
    - All reviewer contact through `pingfusi review <NAME> …` (file/poll/verify) — never through
      any MCP directly. Refiles carry `--changelog "what changed"`.
    - No pingfusi login (doctor shows it missing)? STOP and tell the user to run
@@ -55,7 +56,7 @@ not by the user, and never by you.
    immediately: fix from the site's own captured artifacts (authored mechanisms, never
    invented values), re-green the gates, refile with a changelog, re-arm the waiter.
    Done = `pingfusi gate <NAME> done` exits 0 — all ten phases, including a real
-   approving verdict from the user. A first draft, green machine gates, or a filed
+   approving verdict from the reviewer. A first draft, green machine gates, or a filed
    round are NOT done: ending your turn before done, without being blocked on the
    reviewer, is an incomplete run — say exactly what remains and what will wake you.
 

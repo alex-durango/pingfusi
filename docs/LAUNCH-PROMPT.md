@@ -38,15 +38,13 @@ Environment notes (operational, not workflow):
 - Review drafts: `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified,
   stable url — no clone tunnel needed). Tunnels remain only for adopted builds running
   their own dev server (and optionally a sink POST loop, below).
-- Delivery is TUNNEL-FREE by default: `pxSave('live.json')` / `pxSaveDom('dom.html')`
-  save byte-exact through the browser's download path (→ ~/Downloads; move into
-  targets/{{NAME}}/ and verify the returned sha256 — RUNBOOK Step 0). For tight
-  re-capture loops, `node tools/sink.js` + a direct localhost POST is quicker WHEN the
-  environment allows page→localhost fetch (probe it first — RUNBOOK Step 0); the sink
-  TUNNEL (`node harness/tunnel.js --sink`, needs cloudflared) is only for POST loops in
-  environments that block localhost. A 409 from the sink means the delivery was
-  truncated/corrupted in transport — switch to pxSave, don't retry it. Stash + chunked
-  pxRead is the LAST resort.
+- Delivery: `pingfusi capture open {{NAME}}` FIRST (hosted capture session — the
+  default), then every capture delivers in one call from any page:
+  pxSend / pxSendDom / pxBehaviorSend to the printed sink_url, and
+  `pingfusi capture pull {{NAME}} --all` retrieves them integrity-verified. A 409
+  means truncated/corrupted transport — re-send; nothing was stored. Localhost sink,
+  pxSave (ONE download per tab — fresh tab per save, verify on disk), sink tunnel,
+  and stash/chunked pxRead are the fallbacks, in that order (RUNBOOK Step 0).
 - If a tunnel verify fails, do NOT kill + re-run tunnel.js in a loop — each run mints a
   new hostname and re-races DNS propagation. Its probes already fall back to pinned
   public DNS; a run that still fails is genuinely broken (dead cloudflared, wrong port,

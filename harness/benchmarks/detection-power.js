@@ -18,15 +18,30 @@
 
 const path = require("path");
 const { scoreGate } = require("./battery.js");
+const { scoreCorpus } = require("./corpus.js");
 const NEW = require("../../tools/pixel-diff.js");
 
 const args = process.argv.slice(2);
 const vsIdx = args.indexOf("--vs");
 const pad = (s, n) => String(s).padEnd(n);
 
+// Score BOTH the synthetic battery and the frozen real-site corpus, summed into one
+// scorecard. A gate change must satisfy both — synthetic keeps it fast/deterministic,
+// the corpus keeps it honest against real captures.
+const scoreAll = (fn) => {
+  const b = scoreGate(fn), c = scoreCorpus(fn);
+  return {
+    rows: b.rows.concat(c.rows),
+    caught: b.caught + c.caught, defects: b.defects + c.defects,
+    falsePos: b.falsePos + c.falsePos, controls: b.controls + c.controls,
+    realCases: c.rows.length,
+  };
+};
+
 if (vsIdx === -1) {
   // ── ABSOLUTE mode ── current gate must catch all defects and flag no controls.
-  const r = scoreGate(NEW.diffSnapshots);
+  const r = scoreAll(NEW.diffSnapshots);
+  if (r.realCases) console.log(`(including ${r.realCases} real-site corpus case(s))\n`);
   console.log(pad("case", 24) + pad("kind", 9) + "result");
   console.log("─".repeat(52));
   for (const row of r.rows)
@@ -55,7 +70,8 @@ if (!ref.includes("/") && !ref.endsWith(".js")) {
   fs.writeFileSync(baselinePath, src);
 }
 const OLD = require(path.resolve(baselinePath));
-const a = scoreGate(OLD.diffSnapshots), b = scoreGate(NEW.diffSnapshots);
+const a = scoreAll(OLD.diffSnapshots), b = scoreAll(NEW.diffSnapshots);
+if (b.realCases) console.log(`(including ${b.realCases} real-site corpus case(s))\n`);
 
 console.log(pad("case", 24) + pad("kind", 9) + pad(`OLD (${ref})`, 16) + pad("NEW (worktree)", 16) + "note");
 console.log("─".repeat(92));

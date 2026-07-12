@@ -324,6 +324,26 @@ shows, ask which *variant* of live their tool is rendering before engineering an
 
 ---
 
+## 21. The browser silently rations programmatic downloads — ONE per tab
+
+Found on the 2026-07-12 fresh-user run (pingfusi.com landing clone). The pxSave
+delivery path saves captures through a Blob + `<a download>` click. Chrome's
+"automatic downloads" heuristic allows exactly ONE such download per tab: the first
+lands in ~/Downloads, and **every later save in that tab silently no-ops** — `a.click()`
+doesn't throw, the promise resolves, and pxSave still returns a success-shaped
+`{bytes, sha256}` computed from the in-page payload. Isolated A/B across three tabs:
+first download always lands (any size/extension), second never does, a fresh tab
+resets the allowance. The permission chip that would unblock it lives in browser UI
+no automation can click. An agent that trusts the return value builds and gates
+against a stale or missing file — the same silent-truncation class as #18's transport
+loss, wearing a different coat.
+
+Rules: **a pxSave return value is not delivery** — the file on disk is (`shasum -a 256`
+must match the returned sha). One save per tab; open a fresh tab for the next, or
+better, don't download at all: the hosted capture session (`pingfusi capture open`,
+RUNBOOK Step 0) delivers unlimited files with server-verified integrity and is the
+default for exactly this reason.
+
 ## The gate vs your eyes — the one split that keeps this general
 Every lesson here is one of two kinds. Keep them apart, or you'll re-measure what the
 tool guarantees and eyeball what it can't:

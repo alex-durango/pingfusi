@@ -222,10 +222,46 @@
     const body = capture(targets, { compact: true });
     return withIntegrity(url, utf8(body)).then((u) => fetch(u, { method: "POST", body })).then((r) => r.text());
   };
+  // pxScrollSettle — walk the FULL page before a DOM capture, then return to top.
+  // Paid for on aloyoga: dom.html was captured at top-of-page, so (a) a lazy section
+  // ("AS SEEN ON") had never rendered — it existed only as JSON inside a <script> the
+  // build then stripped, gone without trace — and (b) every below-fold scroll-reveal was
+  // frozen at its inline START state (opacity:0 + transition), invisible forever in the
+  // static clone. Scrolling fires the IntersectionObservers and lazy loaders; waiting lets
+  // reveals finish and inline styles land at their END state; scrolling back restores the
+  // top-of-page header state (sticky headers change class/geometry mid-scroll) so the
+  // capture still matches what the gates measure. Returns {scrolledTo, frozenOpacity0} —
+  // a nonzero frozenOpacity0 means some reveals STILL haven't fired (viewport-specific
+  // triggers, hover-gated) — inspect them before capturing, don't hope.
+  root.pxScrollSettle = function (opts) {
+    const o = opts || {};
+    const pause = o.pause || 300;        // per-step: long enough for observers + image kicks
+    const settle = o.settle || 1500;     // at bottom and back at top: reveal transitions run ~1s
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    return (async () => {
+      const step = Math.max(400, Math.floor(root.innerHeight * 0.8));
+      let y = 0, guard = 0;
+      // scrollHeight GROWS as lazy sections mount — re-read it every step, don't snapshot it
+      while (y + root.innerHeight < document.documentElement.scrollHeight && guard++ < (o.maxSteps || 300)) {
+        y += step;
+        root.scrollTo(0, y);
+        await sleep(pause);
+      }
+      const scrolledTo = document.documentElement.scrollHeight;
+      root.scrollTo(0, scrolledTo);
+      await sleep(settle);
+      root.scrollTo(0, 0);
+      await sleep(settle);
+      const frozenOpacity0 = document.querySelectorAll('[style*="opacity: 0"], [style*="opacity:0"]').length;
+      return { scrolledTo, frozenOpacity0 };
+    })();
+  };
   // The full post-hydration DOM, doctype INCLUDED-OR-ABSENT exactly as live ships it —
   // outerHTML alone drops the doctype, and adding a tidy one to a quirks-mode site moves
   // pixels with every computed style identical (LEARNINGS #18). Feed the result to
-  // `pingfusi capture-build <name>` (the default build strategy).
+  // `pingfusi capture-build <name>` (the default build strategy). On any page with
+  // below-fold content, run `await pxScrollSettle()` FIRST — a top-of-page capture
+  // freezes lazy sections out of existence and scroll-reveals at opacity:0.
   root.pxDomHtml = function () {
     const dt = document.doctype;
     const doctype = dt
