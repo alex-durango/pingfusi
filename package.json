@@ -1,6 +1,6 @@
 {
   "name": "pingfusi",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "pingfusi: clone websites pixel-perfect and polish any AI-built draft, verified with review rounds. Enforced, gated workflow — a green check is a command that exits 0, never a screenshot.",
   "keywords": [
     "pingfusi",
@@ -43,6 +43,6 @@
   "homepage": "https://pingfusi.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alex-durango/pingfusi.git"
+    "url": "git+https://github.com/alex-durango/pingfusi.git"
   }
 }
