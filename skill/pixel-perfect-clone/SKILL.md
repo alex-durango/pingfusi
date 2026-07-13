@@ -25,11 +25,19 @@ not by the user, and never by you.
    contract + environment notes) and KIT/docs/CLONE-ANY-SITE.md (the method), and execute them
    with the three values. They override any assumption you have. Key expectations:
    - Build by CAPTURE (`pingfusi capture-build`), never hand-reconstruction.
+   - **Settle the page before capturing the DOM, and CHECK that it settled.**
+     `await pxScrollSettle()` returns `{stable, …}` — **`stable:false` means STOP, do not
+     capture**: the page was still mounting content and the DOM is one that never existed.
+     Reaching the bottom is not being settled; a late-hydrating section is missing from the
+     capture, so it is missing from the leaf enumeration, so *every gate goes green over a page
+     with a hole in it*. After building, `clone-lint` must exit 0 — it FAILs an empty mount
+     point, a frozen reveal, and the automation extension's own overlay DOM if it was captured.
    - Every phase advances only through its gate: `pingfusi advance <NAME> <phase>`. Never
      use --force. `pingfusi status <NAME>` always tells you what's next.
-   - Capture delivery: `pingfusi capture open <NAME>` (hosted session), then
-     pxSend/pxSendDom from any page to the printed sink_url;
-     `pingfusi capture pull <NAME> --all` retrieves everything integrity-verified.
+   - Capture delivery: `pingfusi capture open <NAME>` (hosted session), then ONE call
+     per tab — `await pxCaptureAll('<sink_url>')` on live (settle+enumerate+measure+
+     deliver; read its report before advancing), `{prefix:'clone'}` on the clone —
+     then `pingfusi capture pull <NAME> --all` retrieves everything integrity-verified.
      Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
    - All reviewer contact through `pingfusi review <NAME> …` (file/poll/verify) — never through
      any MCP directly. Refiles carry `--changelog "what changed"`.

@@ -9,7 +9,9 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import open from "open";
+// `open` is imported LAZILY at its single call site (device-flow browser launch): a
+// top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
+// a browser — crash on load in a dependency-less checkout of the standalone fork.
 
 const VERSION = "0.3.0";
 const execFileP = promisify(execFile);
@@ -551,6 +553,7 @@ async function performDeviceLogin() {
 
   await waitForEnter(pc.dim("Press Enter to open the browser, or Ctrl-C to quit..."));
   try {
+    const { default: open } = await import("open");
     await open(authorization.verification_uri_complete);
   } catch {
     console.log(pc.dim("  Couldn't open a browser — visit the link above manually."));

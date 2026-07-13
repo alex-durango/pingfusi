@@ -171,6 +171,23 @@ function compareMeasured(key, kind, liveM, cloneM) {
     if (!cloneEnd || cloneEnd.filter !== liveEnd.filter)
       misses.push(`filter: live="${liveEnd.filter}" clone="${cloneEnd ? cloneEnd.filter : "missing"}"`);
   }
+  // visibility: exact match, same rationale as filter — `hidden` vs `visible` is not a
+  // measurement with sampling noise, it is the whole state of a visibility-driven reveal.
+  if (liveEnd && liveEnd.visibility) {
+    if (!cloneEnd || !cloneEnd.visibility) misses.push(`visibility: live="${liveEnd.visibility}" clone=missing`);
+    else if (cloneEnd.visibility !== liveEnd.visibility)
+      misses.push(`visibility: live="${liveEnd.visibility}" clone="${cloneEnd.visibility}"`);
+  }
+  // An INCONCLUSIVE hover probe (see tools/behavior-capture.js): the operator named this trigger,
+  // so something is claimed to open there, but a synthetic pointer can neither set `:hover` nor
+  // satisfy trusted-event-gated JS — so "nothing moved" proves nothing. aloyoga's mega-menu is
+  // exactly this: pre-mounted, `visibility: hidden`, opened by a JS class-toggle on a real
+  // pointer. Passing it green would be laundering absence of evidence into evidence of absence —
+  // a clone with no menu at all produces the identical row. It must be DISPOSED: reproduced and
+  // confirmed in a review round, or written down in behavior-deviations.json.
+  if (liveM && liveM.inconclusive === true) {
+    misses.push(`hover probe INCONCLUSIVE on live — ${liveM.inconclusiveReason || "the synthetic probe cannot fire this trigger"}. "changed:false" here is absence of evidence, not evidence of absence (a clone with no menu produces the same row). Dispose it: verify the reveal in a review round and document it in behavior-deviations.json`);
+  }
   // hover-mount / reveal: live observed a real change — clone must too (a frozen start state
   // reproduces nothing, even if the numbers above happen to be absent on both sides)
   if (liveM && liveM.changed === true && !(cloneM && cloneM.changed === true)) misses.push(`changed: live=true clone=${cloneM ? cloneM.changed : "missing"} (clone never mounted/toggled the content)`);
@@ -195,6 +212,12 @@ function behaviorGate(name) {
   if (!live.behaviors || typeof live.behaviors !== "object")
     return { ok: false, reason: `behaviors-live.json missing a "behaviors" object (even an empty {} is required to prove discovery ran)` };
 
+  // A capture taken in a HIDDEN (background) tab is not a measurement: Chrome throttles its
+  // timers and does not advance CSS transitions, so every duration/opacity in it is an artifact
+  // of the capture environment. Refuse it rather than compare it — a live-foregrounded vs
+  // clone-hidden diff invents misses that do not exist on the page.
+  if (live.discovery && live.discovery.documentHidden === true)
+    return { ok: false, reason: `behaviors-live.json was captured while the tab was HIDDEN (background) — Chrome throttles timers and freezes CSS transitions there, so its durations/opacities are artifacts of the capture, not the page. Re-capture with the tab visible and in the foreground.` };
   const liveKeys = Object.keys(live.behaviors);
   // Declared-but-unfired rows (schema-gated: absent on pre-worksheet inventories). In an
   // environment-inverted run (no-js / bot-gated choreography) NOTHING fires live, yet the
@@ -213,6 +236,8 @@ function behaviorGate(name) {
   if (!exists(clonePath))
     return { ok: false, reason: `targets/${name}/behaviors-clone.json missing — capture the clone (with clone/fixes.js loaded) the SAME way: ${liveKeys.length} observed live behavior(s) [${liveKeys.join(", ")}]${declaredKeys.length ? ` + ${declaredKeys.length} declared` : ""} have nothing to compare against` };
   let clone; try { clone = readJson(clonePath); } catch (e) { return { ok: false, reason: `behaviors-clone.json is not valid JSON: ${e.message}` }; }
+  if (clone.discovery && clone.discovery.documentHidden === true)
+    return { ok: false, reason: `behaviors-clone.json was captured while the tab was HIDDEN (background) — throttled timers and frozen CSS transitions make its durations/opacities meaningless. Re-capture with the clone tab visible and in the foreground.` };
   const cloneBehaviors = (clone && clone.behaviors) || {};
 
   const devPath = path.join(dir, "behavior-deviations.json");
@@ -278,19 +303,81 @@ const PHASES = [
     title: "Real assets extracted (fonts/icons/logo)",
     kind: "attested", // "not hand-drawn" isn't machine-provable; we light-check woff2 magic + require evidence
     gate(name) {
-      // Light machine check: any shipped .woff2 must have real wOF2 magic bytes (catches a
+      // Light machine check: every shipped FONT must have real magic bytes (catches a
       // renamed/hand-faked font). We do NOT require fonts to exist (some sites use system
       // fonts), so a clean pass here still needs an --evidence attestation at advance time.
+      //
+      // THE HOLE THIS CLOSES (lelabo, 2026-07-12): the check walked for `.woff2` ONLY. lelabo
+      // self-hosts 26 fonts and NONE are woff2 — they are .eot/.ttf/.woff (an older stack). So
+      // the gate validated ZERO files and passed, printing "0 woff2 asset(s) validated". Every
+      // one of those fonts could have been a 404 HTML page renamed .ttf and nothing would have
+      // said so. "I checked nothing" must never render as a pass — same absence-of-evidence
+      // class as #22. Validate whatever formats are actually present, and say the count per
+      // format so the receipt shows WHAT was checked.
       const cloneDir = path.join(targetDir(name), "clone");
       if (!exists(cloneDir)) return { ok: false, reason: `targets/${name}/clone/ missing` };
-      const woffs = [];
-      const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const fp = path.join(d, e.name); if (e.isDirectory()) walk(fp); else if (e.name.endsWith(".woff2")) woffs.push(fp); } };
+
+      // magic-byte validators, by extension. eot has no leading magic — its MagicNumber (0x504C)
+      // sits at offset 34, little-endian.
+      const FONT_MAGIC = {
+        ".woff2": (b) => b.subarray(0, 4).toString("latin1") === "wOF2",
+        ".woff": (b) => b.subarray(0, 4).toString("latin1") === "wOFF",
+        ".otf": (b) => b.subarray(0, 4).toString("latin1") === "OTTO",
+        ".ttf": (b) => {
+          const m = b.subarray(0, 4);
+          return (m[0] === 0x00 && m[1] === 0x01 && m[2] === 0x00 && m[3] === 0x00) ||
+            m.toString("latin1") === "true" || m.toString("latin1") === "ttcf";
+        },
+        ".eot": (b) => b.length > 35 && b[34] === 0x4c && b[35] === 0x50,
+      };
+      const fonts = [];
+      const walk = (d) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const fp = path.join(d, e.name);
+          if (e.isDirectory()) walk(fp);
+          else { const ext = path.extname(e.name).toLowerCase(); if (FONT_MAGIC[ext]) fonts.push([fp, ext]); }
+        }
+      };
       walk(cloneDir);
-      for (const w of woffs) {
-        const magic = fs.readFileSync(w).subarray(0, 4).toString("latin1");
-        if (magic !== "wOF2") return { ok: false, reason: `${path.relative(WORK, w)} is not a real woff2 (bad magic bytes) — extract it, don't rename` };
+      const byExt = {};
+      for (const [f, ext] of fonts) {
+        const buf = fs.readFileSync(f);
+        if (!buf.length) return { ok: false, reason: `${path.relative(WORK, f)} is EMPTY (0 bytes) — the download failed; re-extract it` };
+        if (!FONT_MAGIC[ext](buf))
+          return { ok: false, reason: `${path.relative(WORK, f)} is not a real ${ext.slice(1)} (bad magic bytes — a 404 page or a renamed file?) — extract it, don't rename` };
+        byExt[ext] = (byExt[ext] || 0) + 1;
       }
-      return { ok: true, reason: `${woffs.length} woff2 asset(s) validated; attest icons/logo are captured (not redrawn)`, artifact: cloneDir };
+
+      // A self-hosted font the CSS REFERENCES but that is not on disk 404s in the browser and the
+      // text silently falls back — while `font.family` still computes to the declared family, so
+      // --visual stays green and nothing ever says the glyphs are wrong. Only relative refs are
+      // checked; an absolute URL is a documented remote-origin tradeoff, not a missing file.
+      const missing = [];
+      const cssDir = path.join(cloneDir, "assets", "css");
+      if (exists(cssDir)) {
+        for (const f of fs.readdirSync(cssDir)) {
+          if (!f.endsWith(".css")) continue;
+          const css = fs.readFileSync(path.join(cssDir, f), "utf8");
+          for (const m of css.matchAll(/url\(\s*['"]?([^'")]+\.(?:woff2|woff|ttf|otf|eot))(?:[?#][^'")]*)?['"]?\s*\)/gi)) {
+            const ref = m[1];
+            if (/^(https?:)?\/\//i.test(ref) || ref.startsWith("data:")) continue; // remote/inline — not ours to verify
+            // A ref is a URL the BROWSER resolves against the serve root, not a filesystem path.
+            // capture-build writes root-relative refs (/assets/fonts/x), which serve.js maps to
+            // clone/assets/fonts/x — but path.resolve(cssDir, "/assets/…") discards cssDir and
+            // probes the FILESYSTEM root, flagging every such font as missing. Measured: 50
+            // phantom "missing" fonts on lelabo, a target fully green with all fonts on disk.
+            const abs = ref.startsWith("/") ? path.join(cloneDir, ref) : path.resolve(cssDir, ref);
+            if (!exists(abs)) missing.push(`${f} → ${ref}`);
+          }
+        }
+      }
+      if (missing.length)
+        return { ok: false, reason: `${missing.length} self-hosted font(s) referenced by the clone's CSS are NOT on disk — they 404 and the text silently falls back while font.family still matches (--visual stays green): ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` … +${missing.length - 3} more` : ""}` };
+
+      const summary = fonts.length
+        ? Object.entries(byExt).map(([e, n]) => `${n}${e}`).join(" + ") + " font(s) validated"
+        : "no self-hosted fonts (system fonts?) — nothing to validate";
+      return { ok: true, reason: `${summary}; attest icons/logo are captured (not redrawn)`, artifact: cloneDir };
     },
   },
   {
@@ -796,4 +883,7 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { PHASES, initWorkflow, loadState, targetDir, main, sha256OfFile };
+// compareMeasured is exported so the behavior gate can be SCORED like the visual one
+// (harness/benchmarks/behavior-battery.js + detection-power's A/B). Without this the
+// behavior gate had no instrument at all, so no behavior-class miss could ever be promoted.
+module.exports = { PHASES, initWorkflow, loadState, targetDir, main, sha256OfFile, compareMeasured };

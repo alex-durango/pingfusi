@@ -1,0 +1,5 @@
+{
+  "kind": "control",
+  "note": "lelabo homepage @1728px, region=page: 80 painted leaves, --visual 1360 comparisons 0 fails, strict 3924 with 1 documented phantom (prevGap vs a stripped <script> sibling), coverage 80/80. Capture-built from a SAME-SESSION dom+live capture (artifact and reference describe one frame). behavior gate green: 3 inconclusive hover rows + a slick carousel, all disposed with real-pointer evidence / documented deviations.",
+  "from": "lelabo"
+}

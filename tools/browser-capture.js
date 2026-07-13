@@ -133,6 +133,26 @@
     return wrap(el.getBoundingClientRect(), { src: "box" });
   };
 
+  // `rect.prevGap` is the distance from the previous sibling's right edge — a LAYOUT fact, so it
+  // must be measured against a sibling that actually LAYS OUT. previousElementSibling counts
+  // elements that render nothing (<script>, <style>, <link>, <meta>, <template>, <noscript>), and
+  // capture-build STRIPS exactly those (LEARNINGS #19). So a leaf preceded by a <script> gets a
+  // different "previous sibling" on live than in the clone, and the strict gate reports a delta
+  // for a page where nothing moved — a FALSE POSITIVE the kit manufactures itself.
+  //
+  // Measured on lelabo: the screenreader <h1 id="homepage-h1">Le Labo</h1> is preceded by
+  // `<script> headerInitialize(); </script>`. Live: prev = the script (zero box, right edge 0) →
+  // prevGap -1. Clone: the script is gone, prev = <header> (right edge 1728) → prevGap -1729. A
+  // 1728px "delta" on a page where --visual is green on all 1394 comparisons. Skipping the
+  // non-rendered siblings makes the measurement invariant under the build's own transform.
+  // Kept schema-identical with pixel-diff.js's measure().
+  const NON_RENDERED = /^(SCRIPT|STYLE|LINK|META|TEMPLATE|NOSCRIPT|TITLE|BASE|HEAD)$/;
+  const prevRenderedSibling = (el) => {
+    let p = el.previousElementSibling;
+    while (p && (NON_RENDERED.test(p.tagName) || getComputedStyle(p).display === "none")) p = p.previousElementSibling;
+    return p;
+  };
+
   function measure(el, want) {
     if (!el) return { present: false };
     const r = el.getBoundingClientRect();
@@ -140,7 +160,7 @@
     const vw = window.innerWidth;
     const parent = el.parentElement;
     const pc = parent ? getComputedStyle(parent) : null;
-    const prev = el.previousElementSibling;
+    const prev = prevRenderedSibling(el);
     const out = {
       present: true,
       rect: { x: num(r.x), y: num(r.y), w: num(r.width), h: num(r.height), top: num(r.top), right: num(r.right), bottom: num(r.bottom), fromRight: num(vw - r.right) },
@@ -233,27 +253,75 @@
   // capture still matches what the gates measure. Returns {scrolledTo, frozenOpacity0} —
   // a nonzero frozenOpacity0 means some reveals STILL haven't fired (viewport-specific
   // triggers, hover-gated) — inspect them before capturing, don't hope.
+  // REACHING THE BOTTOM IS NOT THE SAME AS BEING SETTLED. The original loop walked down until
+  // `y + innerHeight >= scrollHeight` and returned — but a section that mounts ASYNCHRONOUSLY
+  // (fetched after load, hydrated by a framework) lands a beat AFTER the walk passes its slot, so
+  // the walk ends, the DOM is captured, and the section is not in it.
+  //
+  // Measured on gorjana (2026-07-13): settle returned `scrolledTo: 4439`; moments later the live
+  // document was **5877px** — a Shopify product-recommendations carousel (23 product tiles, 25
+  // swipers, a 583px-tall slider) had hydrated into `<div data-vue="recommendations">` after the
+  // sweep finished. The clone was built from that pre-hydration DOM and shipped an EMPTY mount
+  // point. And because the leaf enumeration is derived from the same captured DOM, the missing
+  // section was never enumerated: `--visual` 1300/1300, strict 4144/4144, coverage 88/88 — every
+  // gate green over a page with a hole in it. A gate cannot see what was never enumerated.
+  //
+  // So: sweep, then REQUIRE the document height to hold still across consecutive checks; if it
+  // grew, sweep again (the new content may itself lazy-load). Bounded, and the evidence is
+  // returned — `stable:false` means the page was STILL growing when we gave up, and a DOM
+  // captured then is not the page.
   root.pxScrollSettle = function (opts) {
     const o = opts || {};
     const pause = o.pause || 300;        // per-step: long enough for observers + image kicks
     const settle = o.settle || 1500;     // at bottom and back at top: reveal transitions run ~1s
+    const stableChecks = o.stableChecks || 3;   // consecutive equal heights required
+    const stableGapMs = o.stableGapMs || 500;   // wait between height checks
+    const maxSweeps = o.maxSweeps || 5;         // re-sweep this many times if the page grew
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const docHeight = () => document.documentElement.scrollHeight;
     return (async () => {
-      const step = Math.max(400, Math.floor(root.innerHeight * 0.8));
-      let y = 0, guard = 0;
-      // scrollHeight GROWS as lazy sections mount — re-read it every step, don't snapshot it
-      while (y + root.innerHeight < document.documentElement.scrollHeight && guard++ < (o.maxSteps || 300)) {
-        y += step;
-        root.scrollTo(0, y);
-        await sleep(pause);
+      const heights = [];
+      let sweeps = 0, stable = false;
+      const sweepOnce = async () => {
+        const step = Math.max(400, Math.floor(root.innerHeight * 0.8));
+        let y = 0, guard = 0;
+        // scrollHeight GROWS as lazy sections mount — re-read it every step, don't snapshot it
+        while (y + root.innerHeight < docHeight() && guard++ < (o.maxSteps || 300)) {
+          y += step;
+          root.scrollTo(0, y);
+          await sleep(pause);
+        }
+        root.scrollTo(0, docHeight());
+        await sleep(settle);
+      };
+      // The watch loop MUST be bounded. An unbounded "wait until it holds still" hangs forever on a
+      // page that never holds still (an infinite feed) — that trades a silent miss for a silent
+      // hang, which is not a fix. Bounded here, and bounded again by maxSweeps.
+      const maxChecks = o.maxChecks || stableChecks * 4 + 8;
+      while (sweeps < maxSweeps) {
+        sweeps++;
+        await sweepOnce();
+        // hold at the bottom and watch the height: an async section mounts here, not during the walk
+        const before = docHeight();
+        heights.push(before);
+        let held = 1, checks = 0;
+        while (held < stableChecks && checks++ < maxChecks) {
+          await sleep(stableGapMs);
+          const h = docHeight();
+          if (h !== heights[heights.length - 1]) { heights.push(h); held = 1; }  // it grew — restart the count
+          else held++;
+        }
+        // stable only if the height held through every check AND is the one we started this watch on
+        if (held >= stableChecks && docHeight() === before) { stable = true; break; }
+        // it grew (or never held) → sweep again: the new content may itself lazy-load
       }
-      const scrolledTo = document.documentElement.scrollHeight;
-      root.scrollTo(0, scrolledTo);
-      await sleep(settle);
       root.scrollTo(0, 0);
       await sleep(settle);
       const frozenOpacity0 = document.querySelectorAll('[style*="opacity: 0"], [style*="opacity:0"]').length;
-      return { scrolledTo, frozenOpacity0 };
+      const scrolledTo = docHeight();
+      // `stable:false` = the document was still growing when we hit the sweep cap. Capturing the
+      // DOM now yields a page that does not exist. Do not proceed — investigate, don't hope.
+      return { scrolledTo, frozenOpacity0, stable, sweeps, heights };
     })();
   };
   // The full post-hydration DOM, doctype INCLUDED-OR-ABSENT exactly as live ships it —
@@ -262,12 +330,31 @@
   // `pingfusi capture-build <name>` (the default build strategy). On any page with
   // below-fold content, run `await pxScrollSettle()` FIRST — a top-of-page capture
   // freezes lazy sections out of existence and scroll-reveals at opacity:0.
+  // THE AGENT'S OWN DOM IS NOT THE SITE'S DOM. A browser-automation extension injects overlay
+  // nodes into the very page it is measuring — Claude-in-Chrome paints a glow border
+  // (#claude-agent-glow-border), a phantom cursor (#claude-phantom-cursor) and a <style
+  // id="claude-agent-animation-styles"> of @keyframes, and it injects them WHILE the agent acts.
+  // outerHTML returns them, so a DOM captured mid-run BAKES the agent's overlay into the clone —
+  // and the clone then ships a pulsing border that belongs to the instrument, not the site.
+  // Measured on gorjana: pxDomHtml() included #claude-agent-glow-border; behavior discovery
+  // reported its pulse as a behavior of the SITE. The instrument must not measure itself.
+  // Narrow by construction: keyed on the agent's own ID NAMESPACE, never on a class/text match
+  // (a site is free to have a class named "claude-*"; only these ids are the extension's).
+  root.pxAgentDomSelector = '[id^="claude-agent-"], [id^="claude-phantom-"]';
+  root.pxIsAgentDom = function (el) {
+    return !!(el && el.nodeType === 1 && (el.matches ? el.matches(root.pxAgentDomSelector) : false) ||
+      (el && el.closest && el.closest(root.pxAgentDomSelector)));
+  };
   root.pxDomHtml = function () {
     const dt = document.doctype;
     const doctype = dt
       ? "<!DOCTYPE " + dt.name + (dt.publicId ? ' PUBLIC "' + dt.publicId + '"' : "") + (!dt.publicId && dt.systemId ? " SYSTEM" : "") + (dt.systemId ? ' "' + dt.systemId + '"' : "") + ">\n"
       : "";
-    return doctype + document.documentElement.outerHTML;
+    // Serialize from a CLONE so the live page is never mutated (removing the agent's nodes for
+    // real would fight the extension and could break the automation mid-capture).
+    const rootEl = document.documentElement.cloneNode(true);
+    for (const el of rootEl.querySelectorAll(root.pxAgentDomSelector)) el.remove();
+    return doctype + rootEl.outerHTML;
   };
   root.pxSendDom = function (url) {
     // CSP-blocked POST? Fall back to the stash path: pxStash(null, 900, pxDomHtml()) + pxRead.
@@ -309,4 +396,111 @@
     const size = Number(ta.dataset.chunk) || DEFAULT_CHUNK;
     return ta.value.slice(i * size, (i + 1) * size);
   };
+
+  // ── pxEnumerateLeaves + pxCaptureAll — the whole capture as ONE call ─────────
+  // Two costs this removes, both measured live: (a) leaf enumeration used to be a
+  // prose instruction each agent improvised per run — an ad-hoc enumerator that
+  // under-included <video> is exactly how yc round 1's height mismatch slipped every
+  // pixel gate; (b) orchestrating settle→enumerate→capture→deliver as ~30 separate
+  // automation calls pays a slow round-trip plus agent deliberation at every seam
+  // (11 min between two gates on the 2026-07-13 yc run, while the measuring itself
+  // took 8 s). One call per tab does the whole motion and returns a compact,
+  // checkable report; the granular steps all remain for sites that misbehave.
+  // Classification is PURE + exported so the leaf rules are fixtured in node.
+  const MEDIA_TAGS = new Set(["img", "svg", "video", "canvas", "picture", "iframe", "input", "select", "textarea", "button", "embed", "object"]);
+  const SKIP_TAGS = new Set(["script", "style", "link", "meta", "template", "noscript", "br", "wbr", "head", "title"]);
+  // facts → {leaf, kind, text}. Encodes the failure catalog:
+  //  - media tags are ALWAYS their own leaf, even inside a counted subtree (yc <video> miss)
+  //  - a solid-painted container is a target even when it holds leaves (coverage rule:
+  //    "0 missed solid-color containers" — the red announcement-bar class)
+  function classifyLeaf(f) {
+    if (SKIP_TAGS.has(f.tag) || !(f.w > 0) || !(f.h > 0)) return { leaf: false };
+    if (MEDIA_TAGS.has(f.tag)) return { leaf: true, kind: "media", text: false };
+    if (f.hasOwnText) return { leaf: true, kind: "text", text: true };
+    if (f.bgImage) return { leaf: true, kind: "bg-image", text: false };
+    if (f.bgColorDiffers || f.borderPaints) return { leaf: true, kind: f.leafDescendants ? "painted-container" : "painted-box", text: false };
+    return { leaf: false };
+  }
+  // Stable, collision-free target names in traversal order (pure).
+  function slugName(f, used) {
+    const hint = (f.hint || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 28);
+    let name = hint && hint !== f.tag ? `${f.tag}_${hint}` : f.tag;
+    if (used.has(name)) { let i = 2; while (used.has(`${name}_${i}`)) i++; name = `${name}_${i}`; }
+    used.add(name);
+    return name;
+  }
+  function leafFacts(el, leafDescendants) {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    const parentBg = el.parentElement ? getComputedStyle(el.parentElement).backgroundColor : null;
+    const own = ownText(el);
+    return {
+      tag: el.tagName.toLowerCase(),
+      w: r.width, h: r.height,
+      hasOwnText: !!own,
+      bgImage: s.backgroundImage !== "none",
+      bgColorDiffers: !isTransparent(s.backgroundColor) && s.backgroundColor !== parentBg,
+      borderPaints: ["Top", "Right", "Bottom", "Left"].some((side) => (parseFloat(s["border" + side + "Width"]) || 0) > 0 && s["border" + side + "Style"] !== "none"),
+      leafDescendants,
+      hint: (own || el.getAttribute("aria-label") || el.getAttribute("alt") || el.id || (typeof el.className === "string" ? el.className.split(/\s+/)[0] : "") || "").slice(0, 40),
+    };
+  }
+  root.pxEnumerateLeaves = function () {
+    const out = [], used = new Set();
+    const walk = (el) => {
+      if (el.nodeType !== 1 || SKIP_TAGS.has(el.tagName.toLowerCase()) || root.pxIsAgentDom(el)) return false;
+      let childHasLeaf = false;
+      for (const c of el.children) childHasLeaf = walk(c) || childHasLeaf;
+      if (!inRegion(el)) return childHasLeaf;
+      const f = leafFacts(el, childHasLeaf);
+      const v = classifyLeaf(f);
+      if (!v.leaf) return childHasLeaf;
+      out.push({ name: slugName(f, used), el, text: v.text, kind: v.kind });
+      return true;
+    };
+    if (document.body) walk(document.body);
+    return out;
+  };
+  // The one call per tab: settle → enumerate → measure → deliver, one compact report.
+  // Region defaults to the WHOLE page (the kit's default scope); pass {region: {...}}
+  // to narrow, {prefix: 'clone'} on the clone tab, {dom: false} to skip the DOM send.
+  // The report is data about what happened — read it before advancing: ok:false or a
+  // non-empty `failed` list means a delivery did not land; settle.frozenOpacity0 > 0
+  // means reveals never fired (inspect before trusting the capture).
+  root.pxCaptureAll = async function (sinkUrl, opts) {
+    const o = opts || {};
+    const prefix = o.prefix || "live";
+    if (o.region !== undefined) root.pxRegion = o.region;
+    else root.pxRegion = {}; // whole page unless the caller narrows
+    const report = { prefix, leaves: 0, byKind: {}, delivered: [], failed: [] };
+    report.settle = o.settle === false ? "skipped" : await root.pxScrollSettle(o.settleOpts);
+    const leaves = root.pxEnumerateLeaves();
+    report.leaves = leaves.length;
+    for (const l of leaves) report.byKind[l.kind] = (report.byKind[l.kind] || 0) + 1;
+    const targets = leaves.map((l) => [l.name, () => l.el, l.text]);
+    const base = String(sinkUrl || "").replace(/\/+$/, "");
+    const send = async (file, body) => {
+      try {
+        const bytes = utf8(body);
+        const h = await sha256Hex(bytes);
+        const r = await fetch(base + "/" + file + "?bytes=" + bytes.length + (h ? "&sha256=" + h : ""), { method: "POST", body });
+        const text = await r.text();
+        (r.ok ? report.delivered : report.failed).push({ file, status: r.status, bytes: bytes.length, server: text.slice(0, 90) });
+      } catch (e) {
+        report.failed.push({ file, error: String((e && e.message) || e).slice(0, 120) });
+      }
+    };
+    await send(prefix + ".json", capture(targets, { compact: true }));
+    if (prefix === "live") {
+      await send("coverage.json", JSON.stringify(leaves.map((l) => l.name)));
+      if (o.dom !== false) await send("dom.html", root.pxDomHtml());
+    }
+    report.ok = report.failed.length === 0;
+    return report;
+  };
+
+  // Expose the pure sibling walk to node so the prevGap invariance can be fixtured without
+  // driving a browser (same reason behavior-capture.js exports probeHover). Harmless in the
+  // browser — `module` is undefined there.
+  if (typeof module !== "undefined" && module.exports) module.exports = { prevRenderedSibling, classifyLeaf, slugName };
 })(typeof window !== "undefined" ? window : globalThis);

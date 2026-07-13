@@ -60,7 +60,10 @@ function checkIntegrity(declared, buf) {
 }
 
 if (require.main === module) {
-  http
+  // PPK_SINK_PORT=0 asks the OS for a free port; the banner below reports the port actually
+  // BOUND (server.address()), never the one requested — a caller (or a test) can only discover
+  // an ephemeral port if the server tells the truth about which one it got.
+  const server = http
     .createServer((q, s) => {
       s.setHeader("Access-Control-Allow-Origin", "*");
       if (q.method === "OPTIONS") { s.end(); return; }
@@ -110,6 +113,6 @@ if (require.main === module) {
       console.error(`sink failed: ${e.message}`);
       process.exit(1);
     })
-    .listen(PORT, () => console.log(`sink on http://localhost:${PORT}  (POST /<name>.json → ${process.cwd()}/<name>.json — files land in THIS directory; run it from targets/<name>/)`));
+    .listen(PORT, () => console.log(`sink on http://localhost:${server.address().port}  (POST /<name>.json → ${process.cwd()}/<name>.json — files land in THIS directory; run it from targets/<name>/)`));
 }
 module.exports = { classifyBody, sanitizeName, parseDeclared, checkIntegrity, MAX_BYTES };

@@ -344,6 +344,164 @@ better, don't download at all: the hosted capture session (`pingfusi capture ope
 RUNBOOK Step 0) delivers unlimited files with server-verified integrity and is the
 default for exactly this reason.
 
+---
+
+## 22. `changed: false` was ABSENCE OF EVIDENCE — the hover probe could not fire the menu it was probing
+Found on aloyoga, corroborated on lelabo. Both sites hide a full mega-menu behind a nav
+hover; both panels are **pre-mounted** and hidden by `visibility: hidden` (opacity stays
+`1` the entire time); both open on a **real pointer**. The behavior probe dispatches
+synthetic `MouseEvent`s (`pointerover`/`pointerenter`/`mouseover`/`mouseenter`) — and a
+synthetic event sets no CSS `:hover` pseudo-class and satisfies no trusted-event-gated JS.
+So on both sites the probe observed *nothing*, wrote `changed: false`, and the gate went
+green — **and `changed: false` is byte-identical to what a clone with no menu at all
+produces.** The clone reproduced none of the mega-menu and the behavior phase certified it.
+Two independent mechanisms, one observable failure: aloyoga toggles a class
+(`navOpenOnHoverChild`) on a trusted pointer event; lelabo needs no JS at all — the reveal
+is pure CSS `:hover`. Neither is reachable from in-page script, and `styleSnap` was blind
+to both anyway, because it recorded `opacity`/`transform`/`filter` and the reveal moves
+**only `visibility`**.
+**Lesson:** a probe that cannot fire the mechanism it is probing must never be allowed to
+report a *negative*. Naming a hover trigger is the operator ASSERTING that something opens
+there, so a probe that observes nothing is **inconclusive**, not "no behavior" — absence of
+evidence is not evidence of absence, and laundering the one into the other is how a gate
+certifies a missing menu. The same rule generalises past hover: any trigger the automation
+cannot authentically produce (trusted events, real pointers, gestures) yields an
+inconclusive row that must be *disposed* — reproduced and confirmed in a review round, or
+written down as a deviation — never silently green. And when a reveal is invisible in every
+property you snapshot, the snapshot is the bug: `visibility` is a painted state, exactly as
+`background-color` was in #16.
+> 🔒 **Enforced now:** `tools/behavior-capture.js` — `probeHover` sets
+> `inconclusive: true` + a reason whenever it could not fire a **named** trigger, and
+> `styleSnap` records `visibility` alongside opacity/transform/filter. `harness/workflow.js`'s
+> behavior gate REFUSES an inconclusive row instead of passing it. Locked by
+> `harness/fixtures/22-css-hover-reveal.js` + `23-css-hover-capture.js`, and scored by the new
+> `harness/benchmarks/behavior-battery.js` (defects `hover-probe-inconclusive`,
+> `visibility-reveal-stuck`; controls `adv-fired-hover-not-inconclusive`,
+> `adv-hover-mount-reproduced`, `adv-visibility-reproduced`, `adv-behavior-old-schema` —
+> a hover that DID fire is never flagged inconclusive, and a reproduced reveal never flags).
+> Adopted at +2 defect classes gained / 0 regressions vs HEAD.
+> 👁 **Still yours:** actually *driving* the real pointer. The gate can refuse a
+> non-measurement; it cannot manufacture one. Hover the trigger yourself (or put it in front
+> of a reviewer), and note that a **hidden/occluded tab** (`document.hidden`) is not a
+> measurement environment either — Chrome throttles its timers and freezes transitions, so
+> the behavior gate refuses those captures too.
+
+---
+
+
+## 23. The gate INVENTED a delta — and the instrument could not see the fix
+Found on lelabo. `rect.prevGap` is measured against `previousElementSibling` — which counts
+elements that render nothing (`<script>`, `<style>`, `<link>`, `<meta>`, `<template>`,
+`<noscript>`). And the default build **strips exactly those** (capture-build, #19). lelabo's
+screenreader `<h1>` sits right after `<script> headerInitialize(); </script>`:
+
+| | previous sibling | prevGap |
+|---|---|---|
+| live | the `<script>` (zero box, right edge 0) | **-1** |
+| clone | script stripped → `<header>` (right edge 1728) | **-1729** |
+
+A 1728px "structural delta" on a page where **nothing moved** — `--visual` was green on all 1394
+comparisons. The operator's only moves were to "fix" a non-defect, or to write the noise into
+`deviations.json`. Both are corrosive: **a gate that invents friction teaches you to document
+noise, and a documented deviation that means nothing is how a real one stops being read.** A false
+positive is not a lesser sin than a miss; it spends the same trust.
+**Lesson:** a measurement must be **invariant under the kit's own transforms**. If the build
+strips `<script>`, then nothing measured may depend on `<script>` being there — measure `prevGap`
+against the previous **rendered** sibling. More generally: before trusting a delta, ask whether
+*you* created it. The build is part of the instrument.
+
+**The second half, and the sharper one — the instrument was blind to its own cure.** The fix
+gains **zero** defects by construction (it removes a phantom; it catches nothing new), and
+`detection-power` credited only defects flipping MISS→caught. A control flipping FALSE+→pass hit
+no branch and scored **0**, while a *new* false positive counted as a regression. So the scorer
+**punished inventing friction and paid nothing for removing it** — and since `promote-learning`
+required `+N gained`, *every false-positive fix in the kit was structurally unpromotable, forever*.
+Worse, the battery only ever fed pre-built snapshots to the **diff**; it never called the
+**capture**, so a whole layer — the number that got *recorded*, as opposed to how it was
+*compared* — had no instrument at all. The gate change was correct, provable by hand, and
+**unscorable**.
+**Lesson (the durable one):** when a correct improvement cannot be scored, **the instrument is the
+defect** — fix the ruler, not the measurement. And check the ruler for asymmetry: a scorer that
+counts one direction of error and not the other will quietly make an entire class of improvement
+impossible, and it will never announce that it is doing so.
+> 🔒 **Enforced now:** `tools/browser-capture.js` + `tools/pixel-diff.js` measure `prevGap` against
+> the previous RENDERED sibling (schema-identical). `harness/benchmarks/capture-battery.js` is the
+> new CAPTURE instrument — it drives the real `measure()` over a DOM shim and scores it with the
+> STRICT diff (prevGap is structural; the visual gate never compares it), and `detection-power`
+> A/Bs the baseline's OWN capture so a capture fix is scorable at all. `detection-power` now counts
+> `+M false positive(s) removed` and `promote-learning` accepts `+N caught OR +M removed`, with 0
+> regressions still absolute. Locked by `harness/fixtures/25-prevgap-nonrendered-sibling.js`.
+> Adopted at **+0 gained / +2 false positives removed / 0 regressions** vs the pre-fix baseline —
+> a verdict the old instrument could not have produced.
+> 👁 **Still yours:** noticing that a delta is *phantom* in the first place. The gate cannot tell
+> you that it invented one; it can only tell you the numbers differ. When a delta is enormous
+> (a full viewport width) and `--visual` is green, suspect the instrument before the clone.
+
+---
+
+## 24. THE INSTRUMENT PAINTED ON THE PAGE — the agent's own overlay became the site's behavior
+Found on gorjana, through a sweep that was green everywhere: `--visual` 1300/1300, strict
+4144/4144, coverage 88/88, `clone-lint` clean. The browser-automation extension driving the
+capture injects its own DOM into the page it is measuring — a glow border
+(`#claude-agent-glow-border`) that **pulses** via a `@keyframes` it also injects, and a
+`#claude-phantom-cursor`. Discovery scans `document.body`, so it found the glow, watched its
+opacity move 0.697 → 0.609 across the scroll sweep, and recorded
+**`reveal:claude-agent-glow-border-inner` as a behavior of gorjana** — alongside
+`declared:claude-phantom-cursor` as site choreography awaiting reproduction, and `claude-pulse`
+among the site's own keyframes. A behavior the site does not have and the clone can never
+reproduce: the gate would report a miss on a page where nothing is wrong. Worse, `pxDomHtml()`
+returned the overlay too, so a DOM captured while the agent was acting would have **baked the
+agent's cursor and border into the clone shipped to a reviewer.**
+**Lesson:** the measuring apparatus is *part of the page it measures*. Every previous instrument
+lesson (#19, #23) said the BUILD transforms the artifact; this one says the **observer paints on
+the subject**. Before trusting anything a capture recorded, ask which of it came from the site and
+which from the thing doing the looking — and strip the latter at the source, not downstream.
+> 🔒 **Enforced now:** `pxDomHtml` strips the automation's overlay (serializing a *clone*, so the
+> live page is never mutated), `tools/behavior-capture.js` excludes it from discovery (`inRegion`,
+> plus `keyframeNames` skipping the agent's own stylesheet **by `ownerNode`**, never by guessing at
+> rule names), and `clone-lint` FAILs a built clone that still contains it — the artifact-level
+> backstop. Keyed on the extension's **ID namespace** (`#claude-agent-*`, `#claude-phantom-*`),
+> never a substring: a site is free to ship a class or id containing "claude" and it is untouched.
+> `harness/fixtures/29-agent-dom-contamination.js` locks all three halves in; the new
+> `harness/benchmarks/artifact-battery.js` scores it (defect `lint-agent-dom`; controls
+> `adv-lint-site-claude-name`, `adv-lint-clean-clone`). Adopted at **+3 gained / +1 false positive
+> removed / 0 regressions**. Proven on the real target: contaminants 3 → 0, the site's own 33
+> keyframes and 8 hover triggers untouched.
+> 👁 **Still yours:** noticing it at all. Nothing in a green table says "this row is *you*." When a
+> discovered behavior has no plausible owner in the design — a pulse nobody would ship, an element
+> with your tool's name on it — suspect your own instrument before you engineer a reproduction of it.
+
+---
+
+## 25. A gate that called faithfully-hidden content a hole
+Found on gorjana. `clone-lint`'s `frozen-reveal` rule greps inline `opacity: 0` — a scroll-reveal
+caught at its start state, invisible forever without JS (the aloyoga defect, #19). gorjana ships a
+mobile app-download banner to desktop as `display:none; visibility:hidden; opacity:0`: invisible on
+LIVE, with full JS, at the captured viewport. The capture recorded it faithfully and the clone
+renders exactly what live renders — nothing. The rule failed it anyway, BLOCKING at `region: page`,
+and told the operator to "re-capture after `pxScrollSettle()`" — but no amount of scrolling reveals
+an element live never shows. The only moves left were to "fix" a non-defect or `--force` past a
+lying gate, and a forced phase poisons the `done` gate.
+**Lesson:** the distinction is mechanical, not a judgment call: **a CSS transition can never fire on
+`display:none`**, so an inline style setting *both* `opacity:0` and `display:none` is *suppression*,
+not a reveal frozen mid-flight. Hidden is not the same as missing. Before a gate calls something a
+hole, it must be able to state what would fill it — and here nothing ever would, because live shows
+nothing either. (Same family as #23: a gate that invents friction spends the same trust as one that
+misses a defect.)
+> 🔒 **Enforced now:** `clone-lint` exempts `opacity:0` **only** when the same inline style also sets
+> `display:none`. `visibility:hidden` and bare `opacity:0` stay flagged — visibility *does*
+> transition, and pre-mounted hover menus hide exactly that way (#22).
+> `harness/fixtures/28-frozen-reveal-display-none.js` locks it in; the artifact battery scores both
+> directions (defect `lint-visibility-hidden-reveal` must stay caught; control
+> `adv-lint-display-none-suppression` must stop being flagged). Adopted at **+3 gained / +1 false
+> positive removed / 0 regressions** — the false-positive removal is the point.
+> 👁 **Still yours:** the same rule also matches *empty mount points*, and there the artifact alone
+> cannot tell you whether a container is empty because your capture was too early (a real hole) or
+> because live renders nothing into it either (gorjana's `wishlist-item-persist` / `error-dialog`,
+> both zero-height on live). Check live before you "fix" one.
+
+---
+
 ## The gate vs your eyes — the one split that keeps this general
 Every lesson here is one of two kinds. Keep them apart, or you'll re-measure what the
 tool guarantees and eyeball what it can't:
@@ -356,12 +514,23 @@ tool guarantees and eyeball what it can't:
   these, they match — pushing further is fitting sub-pixel noise (#15). *When you find a
   new class of miss, add it to the tool (as underline/smoothing were added), not to a
   reviewer checklist — that's how it stops recurring.*
+  Before the diff ever runs, the **capture** is gated too: the settle refuses a page still
+  growing (`stable:false` — RUNBOOK "Build by capture", locked by `harness/fixtures/30-scroll-settle-stability.js`), and the automation's own overlay DOM is stripped from
+  every capture and REFUSED in a built clone (`agent-dom`, **#24**). And the **artifact** is
+  gated: `clone-lint` FAILs an empty mount point (incl. framework mounts — `data-vue`,
+  `data-react*`), a frozen reveal, and the agent's overlay — while a `display:none` container
+  live itself hides is correctly **not** a hole (**#25**).
 - 👁 **Judgment — the diff can't see these; they stay on you.** *Which* element paints a
   mark (may be an ancestor — the tool special-cases underlines, not every shadow/outline);
   **reproducing the technique** vs a magic offset; **coverage** (every painted leaf has a
   target); **fixing the whole mark in one shot** (`--inspect`, not one facet); and the
   **flicker/overlay** final check that catches a technique/rasterisation mismatch the
   numbers pass. A green table only proves what you measured, drawn however you drew it.
+  Two more, both learned the hard way: **is this row even the site's?** — nothing in a green
+  table says "this behavior is *you*" (**#24**), so when a discovered behavior has no plausible
+  owner in the design, suspect your own instrument before reproducing it. And **is this
+  "hole" really a hole?** — an empty mount point looks identical whether your capture was too
+  early or live renders nothing there either (**#25**); check live before you "fix" it.
 
 ## Checklist distilled from the above
 1. **Text** → the text-glyph box via `Range` + **all** font metrics (incl.
@@ -416,3 +585,18 @@ tool guarantees and eyeball what it can't:
     clone from the captured post-hydration DOM (self-hosted CSS/fonts, doctype preserved),
     eliminating the technique-mismatch class the gate can't see. 👁 Rebuild by hand only
     when the deliverable is a component in your stack — and expect every rule above.
+19. 🔒 **Reaching the bottom is not being settled** — `pxScrollSettle` waits for the document
+    height to HOLD STILL and returns `stable`. 👁 **`stable:false` ⇒ do not capture**: the DOM
+    is a page that never existed. A section that hydrates a beat after the walk passes it is
+    missing from the capture, and therefore from the leaf enumeration, and therefore from every
+    gate — green over half a page (gorjana: 4439 → 5877px; 88 leaves → 184).
+20. 🔒 **The instrument paints on the page** (#24) — the automation extension injects its own
+    overlay (`#claude-agent-*`, `#claude-phantom-*`); the capture strips it, discovery ignores
+    it, and `clone-lint` REFUSES a clone that ships it. 👁 Nothing in a green table says "this
+    row is *you*" — when a discovered behavior has no plausible owner in the design, suspect
+    your own instrument before you reproduce it.
+21. 🔒 **Hidden is not missing** (#25) — `clone-lint` FAILs empty mount points (incl. framework
+    mounts: `data-vue`, `data-react*`) and frozen reveals, but a transition cannot fire on
+    `display:none`, so a container live itself hides is faithful, not a hole. 👁 An empty mount
+    looks identical whether your capture was too early or live renders nothing there either —
+    **check live before you "fix" one.**

@@ -43,24 +43,44 @@ authored line-heights, and drawing primitives by construction).
    measurement — never fetch+eval), then let the page **settle mechanically** — do not
    hand-scroll and hope:
    ```js
-   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0}
+   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0, stable, sweeps, heights}
    ```
-   It walks the full page (firing IntersectionObservers + lazy loaders, re-reading
-   scrollHeight as sections mount), waits for reveal transitions to land, and returns to
-   top so sticky-header state matches what the gates measure. **Check the return value:**
-   `frozenOpacity0 > 0` means some scroll-reveals STILL haven't fired — inspect those
-   elements before capturing. Paid for on aloyoga: a top-of-page capture shipped a clone
-   with one section missing entirely (lazy, never rendered — its content lived only in a
-   `<script>` the build strips) and four blocks frozen invisible at inline `opacity:0`.
-   This step existed here as prose ("scroll to the bottom and back") and was skipped —
-   which is why it is now a command with a checkable result, not an instruction.
-2. Deliver the doctype-exact post-hydration DOM:
+   It walks the full page (firing IntersectionObservers + lazy loaders), then **waits for the
+   document height to HOLD STILL**, re-sweeping if it grew, and returns to top. Two fields in
+   the return value are load-bearing:
+
+   - **`stable: false` ⇒ STOP. Do not capture.** The page was still growing; the DOM you take
+     now is a page that never existed. Read `heights` and find out what is still mounting.
+   - `frozenOpacity0 > 0` ⇒ some scroll-reveals still haven't fired — inspect them first.
+
+   *Reaching the bottom is not the same as being settled* — a section that hydrates a beat after
+   the walk passes it is missing from the capture, hence from the leaf enumeration, hence from
+   every gate (LEARNINGS #19; locked by `harness/fixtures/30-scroll-settle-stability.js`).
+   **The tool checks this; your job is to believe it and not capture anyway.**
+2. **Or do steps 1–2 (and the measurement capture) as ONE call** — with a hosted
+   session open (Step 0), on the live tab:
+   ```js
+   await pxCaptureAll('<sink_url>')                    // settle → enumerate → live.json + coverage.json + dom.html
+   ```
+   and later on the clone tab: `await pxCaptureAll('<sink_url>', {prefix:'clone'})`.
+   READ the returned report before advancing: `ok:false`/non-empty `failed` means a
+   delivery didn't land; `settle.frozenOpacity0 > 0` means reveals never fired;
+   `leaves`/`byKind` should be plausible for the page (a media-heavy page with
+   byKind.media of 0 is under-enumeration). Then `pingfusi capture pull <name> --all`.
+   Prefer this path; the granular steps here and in Step 2/3 below remain for sites
+   that need manual intervention. Delivering the DOM by hand instead:
    ```js
    await pxSendDom('<sink_url>/dom.html')   // hosted session (Step 0) — or
    await pxSendDom('http://localhost:7799/dom.html')   // local sink, when localhost works
    ```
    CSP-blocked POST → `pxStash(null, 900, pxDomHtml())` + batched `pxRead` (Step 3 below).
    Big page (> ~500 KB DOM) or a 409 from the sink → `pxSaveDom('dom.html')` (Step 0).
+
+   **The automation's own DOM is not the site's DOM** (LEARNINGS #24): the extension driving the
+   capture paints overlay nodes into the page it is measuring. `pxDomHtml()` strips them and
+   discovery ignores them — but only in a CURRENT `browser-capture.js`. You inject this file as
+   plain source, so *the copy you pasted is the code that runs*: **re-paste after pulling**, or
+   `clone-lint` will FAIL the build with `agent-dom`.
 3. Build the standalone clone from it:
    ```sh
    pingfusi capture-build <name>          # or: node harness/capture-build.js <name>
@@ -102,8 +122,16 @@ stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(o
    rows for the same reason.
 
 ## Step 0 — open the delivery path (do this before anything else)
+> **The hosted session is the default, but it is NOT universal — PROBE IT.** A site with a
+> strict `connect-src` blocks a POST to the service's origin exactly as it blocks localhost.
+> Measured on lelabofragrances.com (2026-07-12): `fetch('https://pingfusi.com/…', {method:'POST'})`
+> → **`TypeError: Failed to fetch` in 285ms**. Note the signature — a **CSP-blocked cross-origin
+> POST fails FAST (~300ms)**, while a blackholed **localhost** POST **hangs the full 45s**. Same
+> outcome, different tell. When the hosted origin is blocked too, drop to the relay at the bottom
+> of this section; do not burn a session assuming "hosted works from any page."
+
 **Default: a hosted capture session** — one-call, integrity-verified delivery from any
-page; no tunnels, no downloads, unlimited calls:
+page whose CSP permits the service origin; no tunnels, no downloads, unlimited calls:
 ```sh
 pingfusi capture open <name>      # → sink_url (24h session on the review service)
 ```
@@ -137,6 +165,44 @@ from it.
 **Last resorts:** the sink tunnel (`node harness/tunnel.js --sink`, needs cloudflared)
 for POST loops in blocked environments; stash + chunked `pxRead` (Step 3) only when
 outbound HTTPS itself is blocked (a real site CSP with a strict `connect-src`).
+
+### The POPUP RELAY — when the page can reach NO sink (CSP blocks every origin)
+Paid for on lelabo, where all three normal paths were shut at once: localhost **hung 45s**
+(connect-src), the hosted origin **failed fast** (same), and downloads gave exactly **one save
+per tab** (#21) before Chrome blocked the origin outright — including a download behind a real
+trusted click.
+
+**`postMessage` is not governed by CSP.** So relay through a window on an origin you already
+control (your clone server, `harness/serve.js`), and let THAT page do the POST:
+
+1. serve a tiny receiver page from the clone origin (`clone/__recv.html`) that listens for
+   `message`, then `fetch`es the payload into the sink (`http://localhost:7799/<file>?bytes=…&sha256=…`);
+2. on the live page, `const w = window.open('http://localhost:8080/__recv.html')` **from a real
+   click handler** (a popup opened without user activation is blocked), then
+   `w.postMessage({name, body}, '*')` on an interval until it acknowledges.
+
+It carries the full payload byte-exactly (a 616 KB `{dom, live, paths}` bundle went through
+whole), and it works **inbound** too: have the popup `fetch` the kit's real tool source from
+`/tools/…` and `postMessage` it back for the live page to `eval` — that way the artifact is
+produced by the kit's ACTUAL code, never a hand transcription.
+
+**Delete the receiver before the draft is pushed** — anything left in `clone/` ships to the
+reviewer. And note the relay depends on OS focus (below), which makes it the last resort, not a
+default.
+
+### The window is part of the instrument (three stalls on lelabo)
+- **A minimized / fullscreen-on-another-Space window reports `document.hidden === true`.** Chrome
+  then throttles its timers and does not advance CSS transitions, so a behavior discovery run
+  either never finishes or returns frame-noise. The behavior gate REFUSES such a capture
+  (`discovery.documentHidden`) and is right to — but you can waste an hour before noticing.
+  **Check `document.hidden === false` before any behavior capture**, and never trust a number
+  measured in a hidden tab.
+- **Trusted clicks and ⌘C stop landing when Chrome is not the frontmost app.** The popup relay,
+  the download-behind-a-click path, and the clipboard path all die silently that way.
+- **`resize_window` is a no-op on a macOS-fullscreen window** — `innerWidth` stays at the screen
+  width and `(width: 1440px)` never matches. If you need an exact viewport, take the window out
+  of fullscreen FIRST; otherwise you will measure at the wrong width, and `target.json` will be
+  a lying receipt (the `measure` gate catches the mismatch, but only after you have done the work).
 
 ## Step 1 — both windows to the same width
 Resize the clone tab and the live tab to the same width (e.g. 1728). Confirm

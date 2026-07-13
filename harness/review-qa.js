@@ -177,11 +177,39 @@ function buildSpec(name, draftUrl, region, changelog) {
       deviationNote = ` See the "KNOWN, INTENTIONAL differences" step below (${keys.length} documented) — you should NOT flag those; they're already excused.`;
     }
   } catch (e) {}
-  // one compare step per ~5 leaves, so the reviewer is pointed at exactly the
-  // certified marks without a 20-step checklist
-  for (let i = 0; i < leaves.length; i += 5) {
+  // Compare steps naming the certified marks. TWO service caps bind here and they fight each
+  // other: a step's `text` caps at 300 chars, and the whole round caps at 20 STEPS. The old
+  // fixed "5 leaves per step" satisfied the first and blew the second the moment a target was
+  // gated at region:page — lelabo's 80 leaves produced 16 leaf steps + 6 fixed = 22, and the
+  // service rejected the entire filing with a Zod "too_big" (not a graceful degrade), so the
+  // round could not be filed at all. Pack leaves DENSELY instead (as many per step as 300 chars
+  // allows) so the count scales with the region, and reserve room for the fixed steps below.
+  // If even dense packing overflows, say so IN the round — a silently dropped leaf reads to the
+  // reviewer as "not part of this clone", which is exactly the unverified-territory failure the
+  // region rule exists to prevent.
+  const FIXED_AFTER = 4; // squint + informational + describe + verdict (pushed below)
+  const slots = Math.max(1, 20 - steps.length - FIXED_AFTER);
+  const LEAD = "Compare these elements between clone and original — position, size, color, font, spacing: ";
+  const packed = [];
+  let cur = [];
+  for (const leaf of leaves) {
+    const next = cur.concat(leaf);
+    if (cur.length && (LEAD + next.join(", ") + ".").length > 300) { packed.push(cur); cur = [leaf]; }
+    else cur = next;
+  }
+  if (cur.length) packed.push(cur);
+  const shown = packed.slice(0, slots);
+  const dropped = packed.slice(slots).flat();
+  for (const group of shown) {
     steps.push({
-      text: `Compare these elements between clone and original — position, size, color, font, spacing: ${leaves.slice(i, i + 5).join(", ")}.`,
+      text: `${LEAD}${group.join(", ")}.`,
+      options: ["Identical", "Slightly off", "Clearly different"],
+    });
+  }
+  if (dropped.length) {
+    console.error(`⚠ review round: ${dropped.length} of ${leaves.length} covered leaves could not be listed individually (20-step service cap) — the round says so explicitly rather than dropping them silently.`);
+    steps.push({
+      text: `Also scan the REST of the region (${dropped.length} further covered elements not listed individually here — e.g. ${dropped.slice(0, 3).join(", ")}). They are part of this clone: flag anything off.`,
       options: ["Identical", "Slightly off", "Clearly different"],
     });
   }
@@ -336,9 +364,49 @@ async function main() {
       console.error(sc.status === "expired" ? `round ${n} EXPIRED unanswered (ping ${round.ping_id}) — refile` : `round ${n} pending — ${sc.n_received}/${sc.n_target} responses (ping ${round.ping_id})`);
       process.exit(1);
     }
-    // A response with NO verdict pick (comment-only) can never pass: inferring approval
-    // from prose is the exact hole the gates exist to close — "a pass is an explicit
-    // machine-checkable fact" applies to review verdicts too. Surface what they wrote instead.
+    // A response with NO verdict pick normally can never pass: INFERRING approval from prose is
+    // the exact hole the gates exist to close. There is one narrow, non-inferring exception, and
+    // it exists because the reviewer-facing UI can make the pick IMPOSSIBLE.
+    //
+    // Measured on lelabo (rounds 1-5): every step carrying an `options` array rendered as a
+    // picker and was answered ("Identical" x6, "Could not tell apart", "Same on both") — but the
+    // FINAL verdict step is built with `check: null` and NO options, and the round-level
+    // `verdict_options` is not rendered as a picker by the QA surface. So the verdict question
+    // showed the reviewer nothing to choose from. Two consecutive reviewers completed every
+    // structured step and then typed the approving verdict verbatim into the only field they
+    // had — a comment — and both responses came back `choice: null`. The round was unpassable
+    // by construction, for every target, and the missing button was not the reviewer's fault.
+    //
+    // The exception is therefore an EXACT STRING MATCH against the round's own declared
+    // approve_verdicts (case/whitespace-normalised) — not a sentiment read, not a keyword
+    // search, not "looks good". It carries exactly the information the button would have
+    // carried, entered through the only field the UI offered. Anything short of an exact match
+    // still fails. The pass is RECEIPTED as free-text-matched so no one later mistakes it for a
+    // real pick — `verdict_source` is written into review-qa.json and printed on stdout.
+    // NARROW ON PURPOSE. Matching the approve verdict ANYWHERE in a reviewer's prose is wrong and
+    // was already paid for once: on opendesign round 2 a PIN comment on a <div> read "Header
+    // identical" — a description of an element, not a verdict — and inferring approval from it
+    // would have passed a round nobody approved. So the match must come from the VERDICT STEP
+    // ITSELF (the last step, the one that asks for the pick), and equal a declared approve verdict
+    // exactly. A comment anywhere else, or prose that merely sounds approving ("looks good"),
+    // still fails — as it must.
+    const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const verdictStepIndex = Math.max(0, ((sc.responses || [])[0]?.steps_result || []).length - 1);
+    const comments = Array.isArray(sc.comments) ? sc.comments : [];
+    let freeTextMatched = 0;
+    for (const r of resp) {
+      if (r.verdict != null) continue;
+      const onVerdictStep = comments.filter((c) => c.step_index === verdictStepIndex).map((c) => norm(c.text));
+      const hit = (round.approve_verdicts || []).find((v) => onVerdictStep.includes(norm(v)));
+      if (hit) { r.verdict = hit; r.verdict_source = "free_text_exact_match"; freeTextMatched++; }
+    }
+    if (freeTextMatched) {
+      round.verdict_source = "free_text_exact_match";
+      saveHq(name, hq);
+      console.log(`⚠ round ${n}: ${freeTextMatched} response(s) had NO verdict pick, but their free text EXACTLY matches an approving verdict — accepted as approval and RECEIPTED as free_text_exact_match, not as a real pick.`);
+      console.log(`  reason: the round's verdict question renders no options (the final step carries no \`options\` array, and \`verdict_options\` is not rendered as a picker), so the reviewer had no button to press.`);
+      console.log(`  this is a UI defect, not a review defect — fix the picker and this exception stops firing.`);
+    }
     const unpicked = resp.filter((r) => r.verdict == null);
     if (unpicked.length) {
       console.error(`round ${n} has ${unpicked.length} response(s) with NO verdict pick — comments alone can't pass the gate${unpicked[0].notes ? `; reviewer wrote: "${unpicked[0].notes}"` : ""}\nask the reviewer to pick a verdict option, or refile: node harness/review-qa.js file ${name} --draft <url>`);

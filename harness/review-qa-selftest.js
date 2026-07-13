@@ -44,8 +44,35 @@ ok(t.code === 0, "template generates");
 const spec = JSON.parse(t.out);
 ok(/ONLY about the top navigation header/.test(spec.steps[0].text), "step 1 scope-pins the comparison region");
 ok(spec.steps.some((s) => /logo, nav product/.test(s.text) && s.options), "per-leaf compare steps generated from coverage.json (slugs → words)");
-ok(spec.steps.filter((s) => /Compare these elements/.test(s.text)).length === 2, "6 leaves chunk into 2 compare steps (≤5 each)");
+// Leaves are packed DENSELY (as many per step as the 300-char text cap allows), not at a fixed
+// 5-per-step: the fixed rule blew the service's 20-STEP cap the first time a target was gated at
+// region:page (lelabo, 80 leaves → 16 leaf steps + 6 fixed = 22 → the whole filing was rejected
+// with a Zod "too_big", so the round could not be filed at all). 6 short leaves now fit one step.
+ok(spec.steps.filter((s) => /Compare these elements/.test(s.text)).length === 1, "6 short leaves pack into 1 dense compare step (300-char cap, not a fixed 5)");
+ok(spec.steps.every((s) => s.text.length <= 300), "every step honours the 300-char text cap");
 ok(spec.steps.some((s) => /INFORMATIONAL/.test(s.text) && /does not affect your verdict/.test(s.text)), "behavior step is informational, never a fail criterion");
+
+// A region:page target has HUNDREDS of painted leaves, not a dozen. The review service caps a
+// round at 20 STEPS, and the old fixed "5 leaves per step" walked straight into it (lelabo: 80
+// leaves → 16 leaf steps + 6 fixed = 22 → the service rejected the ENTIRE filing with a Zod
+// "too_big"; the round could not be filed at all, which is a hard stop on the review phase for
+// every full-page clone). Lock both halves of the contract: the round must FIT, and it must not
+// quietly forget leaves it was told to cover — an unlisted leaf reads to the reviewer as "not
+// part of this clone", the exact unverified-territory failure the region rule exists to prevent.
+{
+  const big = Array.from({ length: 80 }, (_, i) => `painted_leaf_number_${i}`);
+  fs.writeFileSync(path.join(dir, "coverage.json"), JSON.stringify(big));
+  const t2 = run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the entire page"]);
+  const spec2 = JSON.parse(t2.out.slice(t2.out.indexOf("{")));
+  ok(spec2.steps.length <= 20, `region:page (80 leaves) fits the 20-step service cap (got ${spec2.steps.length})`);
+  ok(spec2.steps.every((s) => s.text.length <= 300), "every step still honours the 300-char cap at 80 leaves");
+  const listed = spec2.steps.filter((s) => /Compare these elements/.test(s.text)).map((s) => s.text).join(" ");
+  // review-qa renders coverage slugs as words (nav_product → "nav product") — compare that form
+  const unlisted = big.filter((l) => !listed.includes(l.replace(/_/g, " ")));
+  const disclosed = spec2.steps.some((s) => /Also scan the REST of the region/.test(s.text));
+  ok(unlisted.length === 0 || disclosed, "no covered leaf is silently dropped — either listed, or the round says how many were not");
+  fs.writeFileSync(path.join(dir, "coverage.json"), JSON.stringify(["logo", "nav_product", "nav_pricing", "download_btn", "signin_btn", "locale_caret"]));
+}
 ok(spec.verdict_options.length === 3 && spec.approve_verdicts[0] === spec.verdict_options[0], "approve verdict = first verdict option");
 ok(spec.require_evidence === "screenshot" && spec.url === "https://example.com/", "screenshot required; original url from target.json");
 // 3 of the first 3 real reviewer responses were comment-only (choice:null) — the verdict pick
@@ -115,6 +142,48 @@ ok(run(["verify", NAME]).code === 1, "verify exits 1 while pending");
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ choice: null, free_text: "1 comment(s): <div> — Header identical" }] }));
 const unpicked = run(["verify", NAME]);
 ok(unpicked.code === 1 && /NO verdict pick/.test(unpicked.out) && /Header identical/.test(unpicked.out), "a comment-only response (choice:null) fails the gate even when the prose says the approve verdict");
+
+// …with ONE narrow exception, added 2026-07-12 and TEMPORARY — see below. The reviewer-facing UI
+// can make the pick IMPOSSIBLE: the final verdict step is filed with no `options` array, and the
+// round-level `verdict_options` is not rendered as a picker, so the verdict question shows nothing
+// to choose from. Measured on lelabo rounds 4-5: two reviewers answered every option-bearing step
+// ("Identical" x6, "Could not tell apart", "Same on both") and then typed the approving verdict
+// verbatim into the only field they had — a comment ON THE VERDICT STEP — and both responses came
+// back choice:null. The round was unpassable for every target, and the missing button was not the
+// reviewer's fault.
+//
+// The exception accepts ONLY a comment on the VERDICT STEP whose text exactly equals a declared
+// approve verdict, and receipts it as `free_text_exact_match` so it can never be mistaken for a
+// real pick. It deliberately does NOT match prose elsewhere — the assertion above (a pin comment
+// on a <div> reading "Header identical", paid for on opendesign round 2) must keep failing, and
+// does.
+//
+// REMOVE THIS EXCEPTION once the pinghumans verdict picker renders `verdict_options`. It is a
+// workaround for a UI defect, not a rule we want.
+const VSTEP = 3; // last step index in the mock's steps_result below
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: null, free_text: "4 comment(s): ? — ok | ? — Header identical", steps_result: [{}, {}, {}, {}] }],
+  comments: [{ text: "ok", step_index: 0 }, { text: "Header identical", step_index: VSTEP }],
+}));
+const matched = run(["verify", NAME]);
+ok(matched.code === 0 && /free_text_exact_match/.test(matched.out), "a verdict-step comment that EXACTLY equals the approve verdict is accepted (the picker renders no options) and receipted as free_text_exact_match");
+
+// the same exception must NOT fire for approving-sounding prose that is not the verdict string
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: null, free_text: "1 comment(s): ? — looks good to me", steps_result: [{}, {}, {}, {}] }],
+  comments: [{ text: "looks good to me", step_index: VSTEP }],
+}));
+ok(run(["verify", NAME]).code === 1, "approving-sounding prose on the verdict step ('looks good to me') still fails — the exception is an exact match, not a sentiment read");
+
+// and it must NOT fire when the exact verdict string appears on some OTHER step (the opendesign trap)
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: null, free_text: "1 comment(s): <div> — Header identical", steps_result: [{}, {}, {}, {}] }],
+  comments: [{ text: "Header identical", step_index: 0 }],
+}));
+ok(run(["verify", NAME]).code === 1, "the approve verdict as a PIN comment on another step still fails (opendesign round 2: it described an element, it was not a verdict)");
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Header clearly different", free_text: "sign in button color off" }] }));
 const rej = run(["verify", NAME]);
 ok(rej.code === 1 && /sign in button color off/.test(rej.out), "verify exits 1 on rejection and surfaces the reviewer's notes (the fix list)");

@@ -55,8 +55,14 @@ chronic blind spot is *technique* mismatches — same numbers, different constru
 different rasterisation (LEARNINGS #12/#14/#15/#17/#18) — and every one of them is
 self-inflicted by hand-rebuilding. A clone built from the captured post-hydration DOM
 inherits live's doctype, authored line-heights, `font-feature-settings`, and drawing
-primitives **by construction** (LEARNINGS #19). Capture the settled DOM with
-`pxSendDom('http://localhost:7799/dom.html')`, then:
+primitives **by construction** (LEARNINGS #19). **Settle the page first, and check that it
+actually settled** — `await pxScrollSettle()` returns `{stable, …}`, and **`stable:false` means
+STOP: the DOM you would capture is a page that never existed.** Reaching the bottom is not the
+same as being settled; a late-hydrating section is missing from the capture, so it is missing
+from the leaf enumeration, so every gate goes green over a page with a hole in it. Only then:
+```js
+await pxSendDom('http://localhost:7799/dom.html')   // strips the automation's own overlay (#24)
+```
 ```sh
 pingfusi capture-build <name>    # self-hosts CSS+fonts, strips scripts/CSP, PRESERVES the doctype
 ```
@@ -68,9 +74,13 @@ data-URIs, apply the measured type tokens. Reproduce quirks faithfully (e.g. a f
 button that renders `font-weight:900` over a 700-max face — replicate the synthesis, don't
 substitute a heavier font). Expect the technique-mismatch class to be live — every
 LEARNINGS rule below was paid for on this path.
-**Verify:** the page renders standalone in the self-hosted faces (no external font
-request); capture-build exited 0 (a failed asset download is loud, never silent).
-**Evaluate:** ✅ builds clean; assets resolve locally.
+**Verify:** `pxScrollSettle()` returned **`stable: true`**; the page renders standalone in the
+self-hosted faces (no external font request); capture-build exited 0 (a failed asset download is
+loud, never silent); and `node tools/clone-lint.js targets/<name>/clone/index.html` exits 0 — it
+FAILs an empty mount point (a section the capture took too early), a frozen reveal, and the
+automation's own overlay DOM if it got baked in (#24/#25).
+**Evaluate:** ✅ builds clean; assets resolve locally; the clone is WHOLE — no mount point that
+live fills but the clone leaves empty.
 
 ## Phase 5 — Verify with the numeric diff (the core)
 **Do:** Capture both pages at the same width and diff. See `tools/RUNBOOK.md` for the
@@ -122,8 +132,11 @@ on it.
 
 ## Phase 5b — Close coverage (don't skip)
 **Do:** After `--visual` is green, **auto-enumerate** every painted leaf in the
-region (each element with own text, a background-image, or an `<svg>`) and require a
-`pxTargets` entry for each. Add the missing ones and re-diff.
+region with `pxEnumerateLeaves()` (or as part of `pxCaptureAll` — RUNBOOK Step 2):
+each element with own text, a background-image, an `<svg>`/`<video>`/`<canvas>`/media
+tag, or a solid-painted box — the classification rules are fixtured in
+harness/enumerate-selftest.js — and require a `pxTargets` entry for each. Add the
+missing ones and re-diff.
 **Verify:** the count of painted elements in the region equals the count of targets;
 off-region/hidden nodes (x<0, display:none, flyouts below the band) are excluded. A
 **solid-colour container** (an announcement bar, a coloured button) is a painted mark

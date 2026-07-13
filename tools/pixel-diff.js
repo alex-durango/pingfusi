@@ -554,6 +554,21 @@
       return wrap(el.getBoundingClientRect(), { src: "box" });
     };
 
+    // `rect.prevGap` is a LAYOUT fact, so it must be measured against a sibling that actually
+    // LAYS OUT. previousElementSibling counts elements that render nothing (<script>, <style>,
+    // <link>, <meta>, <template>, <noscript>) — and capture-build STRIPS exactly those (#19), so
+    // a leaf preceded by a <script> gets a different "previous sibling" on live than in the
+    // clone and strict reports a delta for a page where nothing moved: a false positive the kit
+    // manufactures itself. (lelabo: a screenreader <h1> preceded by `<script>headerInitialize()`
+    // → live prevGap -1, clone prevGap -1729, while --visual was green on all 1394 comparisons.)
+    // Kept schema-identical with browser-capture.js's measure().
+    const NON_RENDERED = /^(SCRIPT|STYLE|LINK|META|TEMPLATE|NOSCRIPT|TITLE|BASE|HEAD)$/;
+    const prevRenderedSibling = (el) => {
+      let p = el.previousElementSibling;
+      while (p && (NON_RENDERED.test(p.tagName) || getComputedStyle(p).display === "none")) p = p.previousElementSibling;
+      return p;
+    };
+
     // FULL measurement of one element — every property that can shift a pixel.
     function measure(el, want) {
       if (!el) return { present: false };
@@ -562,7 +577,7 @@
       const vw = window.innerWidth;
       const parent = el.parentElement;
       const pc = parent ? getComputedStyle(parent) : null;
-      const prev = el.previousElementSibling;
+      const prev = prevRenderedSibling(el);
       const out = {
         present: true,
         rect: {

@@ -13,7 +13,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { pathToFileURL } = require("url");
-const { verifyPulled } = require("./capture-remote.js");
+const { verifyPulled, safeFileName } = require("./capture-remote.js");
 
 let failed = 0;
 const check = (label, ok, detail) => {
@@ -29,6 +29,16 @@ check("matching bytes+sha verify ok", verifyPulled(buf, { bytes: buf.length, sha
 check("short transfer refused by name", !verifyPulled(buf, { bytes: buf.length + 9, sha256: sha }).ok && /truncated/.test(verifyPulled(buf, { bytes: buf.length + 9, sha256: sha }).reason));
 check("corrupted transfer refused by name", !verifyPulled(buf, { bytes: buf.length, sha256: "0".repeat(64) }).ok && /mismatch/.test(verifyPulled(buf, { bytes: buf.length, sha256: "0".repeat(64) }).reason));
 check("no recorded facts → size/sha not enforced (defensive)", verifyPulled(buf, {}).ok);
+
+// ── safeFileName (pure) — the pulled name is REMOTE-CONTROLLED ────────────────
+// `pull --all` takes the filename straight from the session listing (json.files[].name), so a
+// hostile or compromised sink can name a file `../../../.zshrc` and the integrity checks would
+// all still PASS — the bytes ARE what the server declared; it is the DESTINATION that lies.
+check("a plain filename is accepted", safeFileName("live.json") === "live.json");
+check("dotfiles and hyphens still fine", safeFileName("behaviors-live.json") === "behaviors-live.json");
+for (const evil of ["../x", "../../../.zshrc", "a/b.json", "/etc/passwd", "..", ".", "sub\\win.json", "x\0.json", ""]) {
+  check(`traversal/odd name refused: ${JSON.stringify(evil)}`, safeFileName(evil) === null);
+}
 
 // ── the CLI offline: open + pull against canned file:// responses ─────────────
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-capture-"));
@@ -57,6 +67,35 @@ const run = (args) => {
   const r = run(["pull", "t1", "live.json"]);
   const written = path.join(work, "targets", "t1", "live.json");
   check("pull verifies and writes into targets/<name>/", r.code === 0 && fs.existsSync(written) && fs.readFileSync(written).equals(buf), r.out.slice(0, 160));
+}
+{
+  // END-TO-END: a HOSTILE SINK names a delivered file `../../../pwned.txt`. `pull --all` takes
+  // that name from the server's own listing, so without the guard it would be joined onto the
+  // target dir and escape the tree — with every integrity check passing, because the BYTES are
+  // exactly what the service declared. The pull must refuse it AND write nothing outside.
+  const evil = "../../../pwned.txt";
+  const listPath = path.join(fixtures, "capture-list.json");
+  const good = fs.readFileSync(listPath, "utf8");
+  fs.writeFileSync(listPath, JSON.stringify({ ticket: TICKET, files: [{ name: evil, bytes: buf.length, sha256: sha }] }));
+  fs.writeFileSync(path.join(fixtures, `capture-file-${evil}`.replace(/[\/\\]/g, "_")), buf); // never read; the guard fires first
+  const escaped = path.resolve(work, "targets", "t1", evil); // = <work>/pwned.txt — outside the target dir
+  const r = run(["pull", "t1", "--all"]);
+  check("a traversal filename from the sink is REFUSED by name", r.code === 1 && /path traversal/.test(r.out), r.out.slice(0, 200));
+  check("…and nothing is written outside targets/<name>/", !fs.existsSync(escaped), `wrote ${escaped}`);
+  fs.writeFileSync(listPath, good); // restore for the checks below
+}
+{
+  // END-TO-END: a symlink already sitting at targets/<name>/live.json (a legal, plain name — the
+  // name guard cannot see it) would be FOLLOWED by writeFileSync, redirecting the write anywhere
+  // it points. The pull must lstat the destination and refuse to write through it.
+  const dest = path.join(work, "targets", "t1", "live.json");
+  const outside = path.join(work, "redirect-target.txt");
+  fs.rmSync(dest, { force: true });
+  fs.symlinkSync(outside, dest);
+  const r = run(["pull", "t1", "live.json"]);
+  check("a symlink at the destination is REFUSED (write not followed)", r.code === 1 && /symlink/.test(r.out), r.out.slice(0, 200));
+  check("…and the symlink's target was never written", !fs.existsSync(outside), `wrote ${outside}`);
+  fs.rmSync(dest, { force: true }); // restore for the checks below
 }
 {
   const r = run(["pull", "t1", "bad.json"]);

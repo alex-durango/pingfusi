@@ -99,12 +99,39 @@ async function cmdOpen(name) {
   console.log(`✓ capture session open — expires ${json.expires_at}\n  sink_url: ${json.sink_url}\n  deliver from ANY page (integrity-verified, unlimited calls):\n    await pxSendDom('${json.sink_url}/dom.html')\n    await pxSend('${json.sink_url}/live.json', pxTargets)\n  then: pingfusi capture pull ${name} --all`);
 }
 
+// The file NAME is REMOTE-CONTROLLED: `pull --all` takes it straight from the session's own
+// listing (`json.files[].name`). Joining that onto a local directory is a path traversal — a
+// hostile or compromised sink answers with `../../../.zshrc` and we happily overwrite it, with
+// integrity checks that all pass (the bytes ARE what the server declared; it's the DESTINATION
+// that's a lie). The pulled name must therefore be a plain filename and nothing else: no
+// separators, no `..`, no NUL, no absolute path, byte-identical to its own basename.
+function safeFileName(file) {
+  const f = String(file || "");
+  if (!f || f.includes("\0")) return null;
+  if (f === "." || f === "..") return null;
+  if (f !== path.basename(f)) return null;          // strips "a/b", "../x", "/etc/x", "C:\x"
+  if (/[\/\\]/.test(f)) return null;                // belt-and-braces on the other platform's sep
+  return f;
+}
+
 async function pullOne(name, ticket, file, destDir) {
+  const safe = safeFileName(file);
+  if (!safe) { console.error(`✗ ${file}: refusing a delivered filename that is not a plain name (path traversal)`); return false; }
   const r = await api("file", { ticket, file });
   if (r.status === 404) { console.error(`✗ ${file}: not delivered to this session yet`); return false; }
   const v = verifyPulled(r.bytes, r.meta || {});
   if (!v.ok) { console.error(`✗ ${file}: ${v.reason}`); return false; }
-  const dest = path.join(destDir, file);
+  const dest = path.join(destDir, safe);
+  // second, independent check: refuse to write THROUGH a symlink. safeFileName pins the
+  // destination inside destDir lexically, but writeFileSync FOLLOWS a symlink already sitting at
+  // destDir/<name> — and only lstat can see one (path.resolve is purely lexical; it never touches
+  // the filesystem, so it cannot detect this).
+  try {
+    if (fs.lstatSync(dest).isSymbolicLink()) {
+      console.error(`✗ ${file}: ${path.relative(WORK, dest)} is a symlink — refusing to write through it`);
+      return false;
+    }
+  } catch (e) { /* ENOENT — nothing there yet, the normal case */ }
   fs.writeFileSync(dest, r.bytes);
   console.log(`✓ ${path.relative(WORK, dest)} — ${v.reason}`);
   return true;
@@ -140,5 +167,5 @@ async function main() {
   process.exit(2);
 }
 
-module.exports = { verifyPulled, sessionPath };
+module.exports = { verifyPulled, sessionPath, safeFileName };
 if (require.main === module) main().catch((e) => { console.error(`capture: ${e.message}`); process.exit(1); });

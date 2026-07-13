@@ -29,9 +29,23 @@
   const num = (v) => { const n = parseFloat(v); return isNaN(n) ? v : Math.round(n * 1000) / 1000; };
   const now = () => (root.performance ? root.performance.now() : Date.now());
 
+  // THE INSTRUMENT MUST NOT MEASURE ITSELF. A browser-automation extension injects overlay DOM
+  // into the page it is driving — Claude-in-Chrome paints #claude-agent-glow-border (which
+  // PULSES via a @keyframes it also injects) and #claude-phantom-cursor. Discovery scans
+  // document.body, so it found the glow, saw its opacity move 0.697 → 0.609 across the sweep,
+  // and recorded `reveal:claude-agent-glow-border-inner` as a BEHAVIOR OF GORJANA — plus
+  // `declared:claude-phantom-cursor` and `claude-pulse` in the site's keyframe list. A behavior
+  // the site does not have and the clone can never reproduce: a defect the gate invents about a
+  // page where nothing is wrong (#23), sourced from the measuring apparatus itself.
+  // Narrow by construction: keyed on the agent's own ID NAMESPACE (a site may legitimately use a
+  // class named "claude-*"; only these ids belong to the extension).
+  const AGENT_DOM_SELECTOR = '[id^="claude-agent-"], [id^="claude-phantom-"]';
+  const isAgentDom = (el) => !!(el && el.nodeType === 1 && el.closest && el.closest(AGENT_DOM_SELECTOR));
+
   root.pxRegion = root.pxRegion || { maxY: 200 };
   const inRegion = (el) => {
     const reg = root.pxRegion || {};
+    if (isAgentDom(el)) return false; // the automation's own overlay is not the site's content
     if (reg.sel && !el.closest(reg.sel)) return false;
     const r = el.getBoundingClientRect();
     if (reg.maxY != null && r.top > reg.maxY + (reg.maxYSlack || 4000)) return false; // generous: behaviors can occur below the fold (scroll reveals)
@@ -46,6 +60,11 @@
   function keyframeNames() {
     const names = new Set();
     for (const sheet of Array.from(document.styleSheets)) {
+      // Skip the stylesheet the AUTOMATION injected (<style id="claude-agent-animation-styles">):
+      // its @keyframes (`claude-pulse`) drive the agent's glow overlay, not the site's design.
+      // Identified by its owner NODE, not by guessing at rule names.
+      const owner = sheet.ownerNode;
+      if (owner && owner.id && /^claude-(agent|phantom)-/.test(owner.id)) continue;
       let rules;
       try { rules = sheet.cssRules; } catch (e) { continue; }
       if (!rules) continue;
@@ -89,11 +108,15 @@
   // Per-element snapshot: opacity/transform/filter, the three properties JS-driven reveals
   // and rotations actually touch (per the playbook). Cheap enough to run on every candidate
   // plus a bounded scan of the region without a real perf hit.
+  // `visibility` earns its place next to opacity/transform/filter: a mega-menu revealed by
+  // `visibility: hidden → visible` (aloyoga) moves NONE of the other three — opacity stays 1
+  // the whole time — so a snapshot without it reads an open menu and a closed one as the same
+  // state. Same shape as the backdrop-colour miss (#16): a painted mark the tool never measured.
   function styleSnap(el) {
     const cs = getComputedStyle(el);
-    return { opacity: num(cs.opacity), transform: cs.transform === "none" ? "none" : cs.transform, filter: cs.filter === "none" ? "none" : cs.filter };
+    return { opacity: num(cs.opacity), transform: cs.transform === "none" ? "none" : cs.transform, filter: cs.filter === "none" ? "none" : cs.filter, visibility: cs.visibility };
   }
-  const styleSnapEq = (a, b) => a.opacity === b.opacity && a.transform === b.transform && a.filter === b.filter;
+  const styleSnapEq = (a, b) => a.opacity === b.opacity && a.transform === b.transform && a.filter === b.filter && a.visibility === b.visibility;
 
   // Sample an element's transform translation over a wall-clock window → px/sec on the
   // DOMINANT axis (a logo belt is usually horizontal, a ticker/credits roll is vertical —
@@ -132,6 +155,20 @@
     });
   }
 
+  // waitQuiet settles on MUTATION quiet — but a CSS transition mutates no attribute, so it
+  // returns while an `opacity .3s` fade is still mid-flight and the "end state" snapshot lands on
+  // a random frame (measured on aloyoga: the same four panels read opacity 1, 0.314, 1, 0.315 in
+  // one pass — noise, not a measurement, and the gate would compare it against the clone's noise).
+  // Read the element's own declared transition-duration/delay and wait it out, so `after` is the
+  // SETTLED end state. Bounded by the same cap as everything else — never an unbounded wait.
+  const maxSeconds = (v) => Math.max(0, ...String(v || "0s").split(",").map((s) => parseFloat(s) * (s.indexOf("ms") > -1 ? 1e-3 : 1) || 0));
+  function settleTransition(el, maxMs) {
+    const cs = getComputedStyle(el);
+    const ms = (maxSeconds(cs.transitionDuration) + maxSeconds(cs.transitionDelay)) * 1000;
+    if (!ms) return Promise.resolve();
+    return new Promise((r) => setTimeout(r, Math.min(ms + 50, maxMs))); // +50ms: land past the final frame, not on it
+  }
+
   // Scripted scroll sweep in increments, dwelling briefly at each stop so scroll-linked /
   // IntersectionObserver-triggered reveals get a chance to fire (playbook §8a).
   async function scrollSweep(steps, dwellMs) {
@@ -151,6 +188,20 @@
   // Dispatch a synthetic hover on `el` (pointerover/enter + mouseover/enter — physical hover
   // doesn't persist across separate automation calls, playbook §9), wait for it to settle,
   // return the snapshot delta on `scope` (the element or a documented ancestor scope).
+  // A synthetic MouseEvent cannot reproduce a real pointer: it does not set the CSS `:hover`
+  // pseudo-class, and JS that gates on a trusted event (or reads `matches(':hover')`) ignores it.
+  // On aloyoga the mega-menu is opened by JS class-toggling (`navOpenOnHoverChild`) on a real
+  // pointer: the panel is pre-mounted and `visibility: hidden`, so under the synthetic probe
+  // NOTHING moves — before === after, descendants flat — and the probe recorded `changed: false`.
+  //
+  // That is the trap: `changed: false` is ABSENCE OF EVIDENCE, not evidence of absence, and it
+  // is byte-identical to what a clone with no menu at all produces. The gate then passed a clone
+  // missing the entire mega-menu.
+  //
+  // We cannot fire a real hover from in-page script. What we CAN do is refuse to launder that
+  // failure into a pass: naming a hover trigger is the operator ASSERTING something opens there,
+  // so a probe that observes nothing is INCONCLUSIVE and must be disposed (reproduced and
+  // confirmed in a review round, or written down as a deviation) — never silently green.
   async function probeHover(el, scope, settleMs) {
     // A hover that MOUNTS content (a mega-menu portal) changes the scope's CHILDREN, not the
     // scope's own opacity/transform — snapshotting only the scope's style would read a mounted
@@ -160,12 +211,21 @@
     for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter"])
       el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
     await waitQuiet(scope, 150, settleMs);
+    await settleTransition(scope, settleMs);
     const after = snapScope(scope);
     // reset — move focus away so a later probe doesn't inherit an open state
     for (const type of ["pointerout", "pointerleave", "mouseout", "mouseleave"])
       el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
     await new Promise((r) => setTimeout(r, 60));
-    return { before, after, changed: !styleSnapEq(before, after) || before.descendants !== after.descendants };
+    const eventChanged = !styleSnapEq(before, after) || before.descendants !== after.descendants;
+    const out = { before, after, changed: eventChanged };
+    // Nothing moved under a probe that structurally cannot fire a real-pointer reveal → say so.
+    // The gate turns this into a row that must be disposed, instead of a silent pass.
+    if (!eventChanged) {
+      out.inconclusive = true;
+      out.inconclusiveReason = "the probe observed nothing — which is NOT proof nothing happens. Either the mechanism did not fire (a synthetic MouseEvent sets no CSS :hover and satisfies no trusted-event-gated JS), or the reveal paints OUTSIDE the snapshotted scope (aloyoga: a PRE-MOUNTED panel that only flips `visibility`, so the default scope — document.body — sees neither a style change nor a descendant-count change). Pass a findScope pointing at the element that actually paints, then re-probe";
+    }
+    return out;
   }
 
   // A stable key for a behavior: prefer an explicit id/data-testid/aria-label, else a
@@ -269,6 +329,13 @@
       // behaviors object could otherwise mean "nothing dynamic" OR "the script never fired").
       discovery: {
         startedAt, endedAt, durationMs: num(now() - t0),
+        // A BACKGROUND tab throttles timers and does not advance CSS transitions — a capture taken
+        // there reports whatever frame the fade happened to be stuck on (measured: the same four
+        // panels read opacity 1 foregrounded and 0 hidden). Those numbers are an artifact of the
+        // capture environment, not of the page, and comparing live-foregrounded against
+        // clone-hidden invents a miss that does not exist. Record it so the gate can refuse it —
+        // silently emitting throttled values is how a whole session gets spent chasing a ghost.
+        documentHidden: typeof document.hidden === "boolean" ? document.hidden : null,
         scrollSweep: sweep,
         observeMs: o.settleMs,
         elementsScanned: scanRoot.querySelectorAll("*").length,
@@ -304,4 +371,10 @@
     const size = Number(ta.dataset.chunk) || DEFAULT_CHUNK;
     return ta.value.slice(i * size, (i + 1) * size);
   };
+
+  // Expose the pure, DOM-reading internals to node so the CAPTURE half can be fixtured (the
+  // gate half already was). Without this the capture is only testable by driving a browser,
+  // which is exactly how a capture-side blind spot (a reveal it never records) stays invisible
+  // to the regression suite. Harmless in the browser — `module` is undefined there.
+  if (typeof module !== "undefined" && module.exports) module.exports = { probeHover, styleSnap, styleSnapEq, isAgentDom, AGENT_DOM_SELECTOR };
 })(typeof window !== "undefined" ? window : globalThis);

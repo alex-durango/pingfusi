@@ -105,14 +105,34 @@ ok(sanitizeName("/a/b/clone.json").renamed === true, "sub-path name flagged as s
   { const r = runRA([outFile]); ok(r.code === 2 && /usage/.test(r.out), "no chunk files → exit 2 with usage"); }
 }
 
+// A test that hardcodes a port is not a test of the tool — it is a test of whether anything
+// else on the machine happens to hold that port. Two concurrent cli-selftests (or a stray
+// dev server) fought over 18094/17799: one run's curl reached the OTHER run's server, and the
+// "never written to disk" assertions then checked their own empty tmpdir and passed VACUOUSLY.
+// So: every server here binds an OS-assigned ephemeral port (:0) and REPORTS the port it got;
+// the test discovers it instead of assuming it. A gate whose verdict depends on a global
+// resource another process may hold is not a gate. (LEARNINGS #23: the instrument is the defect.)
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Poll a file the child writes once it is listening — a sync script's event loop never turns,
+// so a child's stdout pipe can't be read here; the filesystem is the only channel that works.
+function awaitPort(file, what, re = /^(\d+)$/, ms = 10000) {
+  for (let waited = 0; waited < ms; waited += 50) {
+    if (fs.existsSync(file)) { const m = re.exec(fs.readFileSync(file, "utf8")); if (m) return +m[1]; }
+    sleep(50);
+  }
+  throw new Error(`${what} never reported a bound port within ${ms}ms`);
+}
+
 // serve.js port collision → actionable error, not a raw stack
 {
-  const holder = cp.spawn(process.execPath, ["-e", "require('http').createServer(() => {}).listen(18094, () => console.log('up')); setTimeout(() => {}, 30000)"], { stdio: ["ignore", "pipe", "ignore"] });
+  const portFile = path.join(dir, "holder.port");
+  // listen(0) → the OS hands out a free port that nothing else can be holding; the holder
+  // writes it out, so the port we collide with is one we KNOW is taken (by us).
+  const holder = cp.spawn(process.execPath, ["-e", `const s = require('http').createServer(() => {}); s.listen(0, () => require('fs').writeFileSync(process.argv[1], String(s.address().port))); setTimeout(() => {}, 30000)`, portFile], { stdio: "ignore" });
   try {
-    let up = false;
-    for (let i = 0; i < 30 && !up; i++) { const ping = cp.spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", "http://127.0.0.1:18094/"], {}); if (ping.status === 0 || ping.status === 52) up = true; else cp.spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 100)"]); }
+    const port = awaitPort(portFile, "the port holder");
     fs.mkdirSync(path.join(dir, "targets", "col", "clone"), { recursive: true });
-    const r = cp.spawnSync(process.execPath, [path.join(__dirname, "..", "harness", "serve.js"), "col", "18094"], { encoding: "utf8", cwd: dir, timeout: 5000 });
+    const r = cp.spawnSync(process.execPath, [path.join(__dirname, "..", "harness", "serve.js"), "col", String(port)], { encoding: "utf8", cwd: dir, timeout: 5000 });
     const out2 = (r.stdout || "") + (r.stderr || "");
     ok(r.status === 1 && /already in use/.test(out2) && !/at Server\./.test(out2), "serve on a taken port → 'already in use' + exit 1, no stack trace");
   } finally { holder.kill(); }
@@ -121,20 +141,21 @@ ok(sanitizeName("/a/b/clone.json").renamed === true, "sub-path name flagged as s
 // sink streaming abort (real server, tiny limit via env): the size bound must hold DURING
 // the stream, not just at end — the aborted body must never reach disk.
 {
-  const port = 17799;
+  // PPK_SINK_PORT=0 → the OS picks; sink's banner reports the port it actually BOUND, which the
+  // test reads back. No fixed port, so a concurrent run can neither collide with us nor answer
+  // our curls in our place (the cross-talk that made the disk assertions below pass vacuously).
+  const log = path.join(dir, "sink.log");
+  const fd = fs.openSync(log, "a");
   const sink = cp.spawn(process.execPath, [path.join(__dirname, "sink.js")], {
     cwd: dir,
-    env: { ...process.env, PPK_SINK_PORT: String(port), PPK_SINK_MAX_BYTES: "1000" },
-    stdio: "ignore",
+    env: { ...process.env, PPK_SINK_PORT: "0", PPK_SINK_MAX_BYTES: "1000" },
+    stdio: ["ignore", fd, fd],
   });
   try {
-    let up = false;
-    for (let i = 0; i < 50 && !up; i++) {
-      const ping = cp.spawnSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "OPTIONS", `http://127.0.0.1:${port}/ping`], { encoding: "utf8" });
-      if (ping.stdout === "200") up = true;
-      else cp.spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 100)"]);
-    }
-    ok(up, "sink starts on an env-configured port");
+    const port = awaitPort(log, "the sink", /localhost:(\d+)/);
+    ok(port > 0, `sink starts on an OS-assigned ephemeral port and reports the port it bound (got ${port})`);
+    const ping = cp.spawnSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "OPTIONS", `http://127.0.0.1:${port}/ping`], { encoding: "utf8" });
+    ok(ping.stdout === "200", `the reported port is the one actually serving (OPTIONS → ${ping.stdout || "no response"})`);
     const r = cp.spawnSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--data-binary", "x".repeat(5000), `http://127.0.0.1:${port}/big.json`], { encoding: "utf8" });
     ok(r.stdout === "413", `oversize body is aborted mid-stream with 413 (got ${r.stdout || "no response"})`);
     ok(!fs.existsSync(path.join(dir, "big.json")), "aborted oversize body is never written to disk");
@@ -144,6 +165,7 @@ ok(sanitizeName("/a/b/clone.json").renamed === true, "sub-path name flagged as s
     ok(!fs.existsSync(path.join(dir, "short.json")), "truncated delivery is never written to disk");
   } finally {
     sink.kill();
+    fs.closeSync(fd);
   }
 }
 

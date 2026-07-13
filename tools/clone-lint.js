@@ -84,11 +84,18 @@ function lintHtml(html) {
   //    The kit's answer is the `behavior` phase (fixes.js), not a gate loosened around it.
   {
     const hits = [];
-    const re = /<([a-z][a-z0-9-]*)\b[^>]*\sdata-[a-z-]*config=["']([^"']*)["'][^>]*>/gi;
+    // A config blob is only ONE way to declare a mount. gorjana mounts its product-recommendations
+    // carousel with `<div class="recommendations" data-vue="recommendations">` — no data-*config
+    // anywhere — so the rule walked straight past an empty container that live fills with 23
+    // product tiles and a 583px slider. Match the FRAMEWORK MOUNT ATTRIBUTES too: whatever the
+    // attribute is called, a container that declares "JS renders here" and paints nothing is a
+    // hole in the clone. Narrow by construction: the container must both DECLARE a mount and
+    // paint NOTHING — a mount attribute on a container that renders is never flagged.
+    const re = /<([a-z][a-z0-9-]*)\b[^>]*\s(?:data-[a-z-]*config|data-vue|data-react[a-z-]*|data-component|data-island|data-controller)=["']([^"']*)["'][^>]*>/gi;
     for (let m; (m = re.exec(html)); ) {
       if (paintsSomething(innerOf(html, m.index))) continue;
       const title = (decode(m[2]).match(/"section_title"\s*:\s*"([^"]*)"/) || [])[1];
-      hits.push(title ? `section_title="${title}"` : `<${m[1]}> with config, renders nothing`);
+      hits.push(title ? `section_title="${title}"` : `<${m[1]}> declares a JS mount ("${decode(m[2]).slice(0, 30)}"), renders nothing`);
     }
     if (hits.length) add("empty-mount-point", hasFixes ? "WARN" : "FAIL", hits,
       `${hits.length} JS mount point(s) that render nothing` + (hasFixes
@@ -104,6 +111,13 @@ function lintHtml(html) {
     const hits = [];
     const re = /<([a-z][a-z0-9-]*)\b[^>]*\sstyle=["']([^"']*opacity:\s*0(?:\.0+)?\s*[;"'][^"']*)["'][^>]*>/gi;
     for (let m; (m = re.exec(html)); ) {
+      // An element whose SAME inline style also sets display:none is not a reveal frozen at its
+      // start state — a transition can never fire on display:none, so there is no animation to
+      // catch mid-flight. Live suppresses it outright (gorjana's mobile app banner ships
+      // display:none;visibility:hidden;opacity:0 to desktop) and a clone matching live is not
+      // missing content. visibility:hidden alone stays flagged — visibility CAN transition, and
+      // pre-mounted hover menus hide exactly that way (LEARNINGS #22).
+      if (/display:\s*none/i.test(m[2])) continue;
       const inner = innerOf(html, m.index);
       const text = inner.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
       const anim = /transition|transform/i.test(m[2]);
@@ -123,6 +137,20 @@ function lintHtml(html) {
     const jsMarkers = (html.match(/data-[a-z-]*config=|react-[a-z-]*container|__NEXT_DATA__|data-reactroot/gi) || []).length;
     if (scripts === 0 && jsMarkers > 0)
       add("stripped-scripts", "WARN", [`${jsMarkers} JS-render marker(s), 0 <script>`], `page is JS-rendered but ships no <script> — content that lived only in script JSON was discarded`);
+  }
+
+  // 5) AGENT DOM — the automation extension driving the capture injects overlay nodes into the
+  //    page it is measuring (Claude-in-Chrome: a pulsing #claude-agent-glow-border and a
+  //    #claude-phantom-cursor, plus a <style> of @keyframes). A DOM captured while the agent is
+  //    acting bakes them into the clone, which then SHIPS the instrument's own cursor and border
+  //    to the reviewer. The capture now strips them (browser-capture.js pxDomHtml); this is the
+  //    artifact-level backstop — the check that would have caught it. Found on gorjana.
+  {
+    const hits = [...html.matchAll(/<([a-z][a-z0-9-]*)\b[^>]*\sid=["'](claude-(?:agent|phantom)-[a-z0-9-]*)["'][^>]*>/gi)]
+      .map((m) => `<${m[1]} id="${m[2]}">`);
+    if (hits.length)
+      add("agent-dom", "FAIL", hits,
+        `${hits.length} node(s) injected by the AUTOMATION EXTENSION, not by the site — the clone would ship the agent's own overlay. Re-capture with a current browser-capture.js (pxDomHtml strips them)`);
   }
 
   return { ok: !rules.some((r) => r.level === "FAIL"), rules };

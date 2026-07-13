@@ -91,7 +91,31 @@ console.log(`\nPromotion check for class "${cls}" (seen on: ${seenOn.join(", ")}
 let battery = [];
 try { battery = require("./benchmarks/battery.js").battery; }
 catch (e) { console.error(`✗ cannot load battery.js: ${e.message}`); process.exit(2); }
-const byName = new Map(battery.map((row) => [row[0], row[1]])); // name → kind
+// The BEHAVIOR gate has its own battery (behavior-battery.js). A behavior-class miss declares
+// its cases there, so a promotion check that only scanned the visual battery would refuse every
+// behavior learning for "no defect case" no matter how well evidenced it was.
+let behaviorBattery = [];
+try { behaviorBattery = require("./benchmarks/behavior-battery.js").behaviorBattery; }
+catch (e) { behaviorBattery = []; }
+// …and the CAPTURE gate has its own battery (capture-battery.js): a miss can live one layer
+// before the diff, in the NUMBER THAT GOT RECORDED. Its cases are declared there, so a check that
+// scanned only the visual + behavior batteries would refuse every capture-class learning for
+// "no defect case" no matter how well evidenced it was — exactly what happened to prevGap.
+let captureBattery = [];
+try { captureBattery = require("./benchmarks/capture-battery.js").captureBattery; }
+catch (e) { captureBattery = []; }
+// …and the ARTIFACT + READINESS battery: two layers sit before the diff — whether the capture
+// recorded the right page at all (pxScrollSettle) and whether the built clone is whole
+// (clone-lint). A check that scanned only the visual + behavior + capture batteries would refuse
+// every learning from those layers for "no defect case" — which is exactly what happened to all
+// five classes found on the 2026-07-13 gorjana run, correct and evidenced though they were.
+let artifactCases = [];
+try { artifactCases = require("./benchmarks/artifact-battery.js").artifactCases; }
+catch (e) { artifactCases = []; }
+// visual rows are [name, kind, …]; behavior rows are [name, kind, behaviorKind, …]; capture rows
+// are [name, kind, buildLive, …] — name and kind sit at the same indices in all three, which is
+// all this check needs.
+const byName = new Map(battery.concat(behaviorBattery).concat(captureBattery).concat(artifactCases).map((row) => [row[0], row[1]])); // name → kind
 const haveDefect = defects.filter((n) => byName.get(n) === "defect");
 const haveControl = controls.filter((n) => byName.get(n) === "control");
 check("battery has a DEFECT case for this class", haveDefect.length >= 1,
@@ -112,10 +136,18 @@ check("generalises (≥2 targets) or narrow-by-construction",
     : "only 1 target and not declared narrow — let a second site corroborate first");
 
 // 4. CLEAN A/B — the battery, not the target, justifies the gate change
-console.log("\nrunning detection-power A/B vs HEAD …\n");
+//
+// The baseline defaults to HEAD, which assumes the tool change is still UNCOMMITTED in the
+// worktree. Once it is committed, HEAD contains it and the A/B compares the change against
+// itself — reporting +0 and refusing a lesson that was, in fact, earned. `--baseline <ref>` names
+// the pre-change ref explicitly (e.g. `--baseline origin/main`) so a class can still be promoted
+// after its fix has landed. It does NOT weaken anything: the A/B still has to come back clean.
+const baseIdx = process.argv.indexOf("--baseline");
+const baseline = baseIdx !== -1 ? process.argv[baseIdx + 1] : "HEAD";
+console.log(`\nrunning detection-power A/B vs ${baseline} …\n`);
 let abClean = false, abOut = "";
 try {
-  abOut = execFileSync("node", ["harness/benchmarks/detection-power.js", "--vs", "HEAD"],
+  abOut = execFileSync("node", ["harness/benchmarks/detection-power.js", "--vs", baseline],
     { cwd: ROOT, encoding: "utf8" });
   abClean = true; // exit 0 ⇒ 0 regressions
 } catch (e) {
@@ -123,9 +155,23 @@ try {
   abClean = false; // nonzero ⇒ a missed defect or a new false positive
 }
 process.stdout.write(abOut);
-const gained = (abOut.match(/\+(\d+) defect class/) || [])[1];
-check("A/B is +N gained, 0 regressions", abClean && Number(gained) > 0,
-  abClean ? `gained ${gained || 0}` : "detection-power reported a regression (missed defect or new FALSE+)");
+// A lesson is EARNED by improving the instrument's score with no regressions — and there are two
+// honest ways to improve it, not one:
+//   • catch a defect the old gate MISSED            (+N gained)
+//   • remove a FALSE POSITIVE the old gate invented (+M false positives removed)
+// Only the first used to count. That made false-positive fixes structurally unpromotable: the
+// scorer punished you for inventing friction (a new FALSE+ is a regression) and gave you nothing
+// for removing it. A gate that invents a delta on a page where nothing moved is just as wrong as
+// one that misses a real defect — worse, in a way, because it teaches the operator to "document"
+// noise, and a documented deviation that means nothing is how a real one stops being read.
+// (Found on prevGap, which removes a phantom the kit manufactured itself and gains 0 defects by
+// construction.) Either counts now; 0 regressions is still absolute.
+const gained = Number((abOut.match(/\+(\d+) defect class/) || [])[1] || 0);
+const fpFixed = Number((abOut.match(/\+(\d+) false positive\(s\) removed/) || [])[1] || 0);
+check("A/B improves detection (+N caught or +M false positives removed), 0 regressions",
+  abClean && (gained > 0 || fpFixed > 0),
+  abClean ? `gained ${gained}, false positives removed ${fpFixed}`
+    : "detection-power reported a regression (missed defect or new FALSE+)");
 
 console.log("\n" + "─".repeat(60));
 if (fail) {
