@@ -1,0 +1,5 @@
+{
+  "kind": "control",
+  "note": "went green: --visual 0/5911, strict 0/18770, coverage 396/396 painted leaves, behavior gate pass (5 deviations documented), viewport 1728x941 matched on both captures",
+  "from": "chrono24"
+}

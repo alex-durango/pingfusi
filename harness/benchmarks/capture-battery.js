@@ -36,6 +36,7 @@ const STYLE = {
   borderBottomStyle: "none", boxSizing: "border-box",
   display: "block", position: "static", top: "auto", left: "auto", verticalAlign: "baseline",
   gap: "0px", backgroundColor: "rgb(255, 255, 255)", backgroundImage: "none",
+  opacity: "1", // the default every real getComputedStyle reports; the opacity cases override it
   getPropertyValue() { return ""; },
 };
 
@@ -44,6 +45,7 @@ function el(tagName, { x = 0, right = 0, text = null, style = {} } = {}) {
   const rect = { x, y: 80, width: right - x, height: 17, top: 80, right, bottom: 97, left: x };
   const node = {
     tagName,
+    nodeType: 1, // a real Element's nodeType; the ancestor walks (effectiveOpacity) test for it
     __style: { ...STYLE, ...style },
     getBoundingClientRect: () => rect,
     parentElement: null,
@@ -54,6 +56,16 @@ function el(tagName, { x = 0, right = 0, text = null, style = {} } = {}) {
     __rect: rect,
   };
   return node;
+}
+
+// One element nested under a styled parent, and the CHILD is what gets measured. The opacity
+// cases need this: a scroll-reveal hides the CONTAINER, and the container's leaves each still
+// compute `opacity: 1` of their own — so a capture that recorded only own-opacity would read 1 on
+// every leaf of an invisible section. The parent is what carries the 0.
+function under(parentStyle, child) {
+  const parent = el("DIV", { x: 0, right: 1728, style: parentStyle });
+  child.parentElement = parent;
+  return child;
 }
 
 // left→right siblings under one parent
@@ -105,6 +117,43 @@ const captureBattery = [
     () => { const [, s] = row(el("DIV", { x: 0, right: 100 }), el("SPAN", { x: 108, right: 288, text: "hi" })); return s; },
     () => { const [, s] = row(el("DIV", { x: 0, right: 100 }), el("SPAN", { x: 108, right: 288, text: "hi" })); return s; },
     "same DOM on both sides → pass"],
+
+  // ── OPACITY (harness/fixtures/38-opacity-painted-property.js) ─────────────────────────────────────────────────────────────────
+  // THE DEFECT the schema could not see. dtf's authored hidden state is a CSS class on the
+  // CONTAINER — `.AnimateContainer { opacity: 0.0001 }` — and GSAP writes an inline `opacity: 1`
+  // when it scrolls into view. A DOM serialized before the reveal bakes no inline opacity, so the
+  // static clone renders that section at 0.0001: invisible forever. dtf shipped 10 such sections,
+  // INCLUDING THE ENTIRE FOOTER, and every gate was green — because opacity was not a field.
+  //
+  // Note the leaf's OWN opacity is 1 on both sides. Only the container's differs. This case
+  // therefore fails unless the capture records the EFFECTIVE (composited) opacity — which is the
+  // whole design of the fix, and an own-opacity implementation would score a silent 0 here.
+  ["capture-stealth-zero-opacity", "defect",
+    () => under({ opacity: "1" }, el("P", { x: 0, right: 200, text: "footer" })),
+    () => under({ opacity: "0.0001" }, el("P", { x: 0, right: 200, text: "footer" })),
+    "a scroll-reveal container left at its authored stealth-zero (0.0001) — the section is invisible in the clone; identical in every other recorded property"],
+
+  // The plain, unsubtle version: a hidden container at a true 0. Must also be caught — the rule is
+  // "the effective opacity differs", not "the string 0.0001 appears".
+  ["capture-zero-opacity-container", "defect",
+    () => under({ opacity: "1" }, el("SPAN", { x: 0, right: 90, text: "hi" })),
+    () => under({ opacity: "0" }, el("SPAN", { x: 0, right: 90, text: "hi" })),
+    "a container at opacity 0 → its leaf paints nothing, while rect/font/box/bg are all identical"],
+
+  // ── CONTROL, and the one dtf explicitly flagged as the false-positive risk of this whole fix:
+  // a LEGITIMATELY translucent mark. dtf's own hero scrim sits at --overlay-opacity: 0.2 on BOTH
+  // sides and is a faithful reproduction. The rule catches DIVERGENCE, never translucency itself.
+  // If this ever flags, the gate has started calling correct clones broken (#23).
+  ["adv-opacity-matching-translucent", "control",
+    () => under({ opacity: "0.2" }, el("DIV", { x: 0, right: 1728, text: "scrim" })),
+    () => under({ opacity: "0.2" }, el("DIV", { x: 0, right: 1728, text: "scrim" })),
+    "a translucent hero scrim at 0.2 on BOTH sides — faithful, must never flag (dtf's own)"],
+
+  // CONTROL: sub-tolerance compositor/float noise must not fail. 0.999 vs 1 is not a visible mark.
+  ["adv-opacity-float-noise", "control",
+    () => under({ opacity: "1" }, el("SPAN", { x: 0, right: 90, text: "hi" })),
+    () => under({ opacity: "0.999" }, el("SPAN", { x: 0, right: 90, text: "hi" })),
+    "0.999 vs 1.0 — below OPACITY_TOL; float noise is not a defect"],
 ];
 
 // ── scoring ───────────────────────────────────────────────────────────────────────────────────

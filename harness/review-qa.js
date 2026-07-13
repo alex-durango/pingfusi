@@ -144,7 +144,17 @@ function buildSpec(name, draftUrl, region, changelog, context) {
     const cov = readJson(path.join(targetDir(name), "coverage.json"));
     leaves = (Array.isArray(cov) ? cov : cov.leaves || []).map(slugToWords);
   } catch (e) {}
-  const R = region || "the cloned region";
+  // THE ROUND MUST NAME THE REGION THE TARGET DECLARED. `region` is persisted in target.json before
+  // the first capture precisely so every downstream consumer reads the same scope — and the review
+  // round is the one consumer that was still re-deciding it. Left to the generic default, a
+  // region:page round told the reviewer to compare "the cloned region" and offered the verdict
+  // "Cloned region identical"; the reviewer, looking at an entire homepage, typed "cloned page
+  // identical" instead. That is a paraphrase, so the free-text exception below (which demands an
+  // EXACT match, and must) refused it — and three rounds burned on a wording mismatch the kit
+  // introduced itself. Read the scope the target already declared.
+  const REGION_LABEL = { page: "the entire page", header: "the header" };
+  const declared = (() => { try { return REGION_LABEL[target.region] || null; } catch (e) { return null; } })();
+  const R = region || declared || "the cloned region";
   const stripped = R.replace(/^the\s+/i, "");
   const cap = stripped.charAt(0).toUpperCase() + stripped.slice(1);
   const verdicts = [`${cap} identical`, `${cap} slightly off`, `${cap} clearly different`];
@@ -202,7 +212,9 @@ function buildSpec(name, draftUrl, region, changelog, context) {
   // reviewer as "not part of this clone", which is exactly the unverified-territory failure the
   // region rule exists to prevent.
   const FIXED_AFTER = 4; // squint + informational + describe + verdict (pushed below)
-  const slots = Math.max(1, 20 - steps.length - FIXED_AFTER);
+  // The changelog step is SPLICED IN below on a refile — it is a step too, and it must be
+  // budgeted here or the refile blows the cap that the first filing squeaked under.
+  const CHANGE_STEP = changelog && changelog.trim() ? 1 : 0;
   const LEAD = "Compare these elements between clone and original — position, size, color, font, spacing: ";
   const packed = [];
   let cur = [];
@@ -212,6 +224,14 @@ function buildSpec(name, draftUrl, region, changelog, context) {
     else cur = next;
   }
   if (cur.length) packed.push(cur);
+  // THE OVERFLOW NOTICE IS ITSELF A STEP, and forgetting to budget for it is how the whole
+  // filing gets rejected. Measured on chrono24 (396 painted leaves at region:page): dense packing
+  // produced more groups than slots, so the "Also scan the REST" step was pushed ON TOP of a
+  // already-full budget → 21 steps → the service refused the ENTIRE round with a Zod `too_big`,
+  // exactly the not-a-graceful-degrade failure the dense packing was introduced to fix. The
+  // reserve has to be made BEFORE we decide how many groups fit, not after.
+  let slots = Math.max(1, 20 - steps.length - FIXED_AFTER - CHANGE_STEP);
+  if (packed.length > slots) slots = Math.max(1, slots - 1); // one slot back for the notice itself
   const shown = packed.slice(0, slots);
   const dropped = packed.slice(slots).flat();
   for (const group of shown) {
@@ -231,10 +251,20 @@ function buildSpec(name, draftUrl, region, changelog, context) {
     { text: `Squint test: at a glance, could you tell which is the clone? Compare overall font weight/sharpness in ${R}.`, options: ["Could not tell apart", "Subtle difference", "Obvious difference"] },
     { text: "INFORMATIONAL (does not affect your verdict): the clone is a static snapshot — hover menus and animations may not run. Note any such difference; do not fail the review for it.", options: ["Same on both", "Different", "Didn't check"] },
     { text: `If anything in ${R} looked off, describe exactly what and where in your notes. Attach a screenshot showing both.`, check: null },
-    // Reviewers use the comment-pin flow and skip the verdict buttons unless told — the
-    // first 3 real responses were comment-only (choice:null), which the gate rightly refuses
-    // but which stalls the loop. The pick is therefore an explicit, REQUIRED final step.
-    { text: `FINAL REQUIRED STEP: pick one of the verdict buttons ("${verdicts[0]}" / "${verdicts[1]}" / "${verdicts[2]}"). A review without a verdict pick cannot be accepted — comments alone don't count.`, check: null }
+    // THE VERDICT STEP MUST NOT ASK FOR A BUTTON THAT DOES NOT EXIST. The reviewer-facing QA
+    // surface renders a picker only for steps carrying an `options` array; this final step is
+    // filed with `check: null` and the round-level `verdict_options` is not rendered at all — so
+    // the verdict question shows NOTHING to choose from (lelabo rounds 4-5, chrono24 rounds 2-4:
+    // six reviewers answered every option-bearing step and then typed something into the only
+    // field they had, and every response came back choice:null).
+    //
+    // While that UI defect stands, telling them to "pick one of the verdict buttons" is an
+    // instruction they cannot follow, and it produces exactly the failure we keep paying for: they
+    // improvise a paraphrase ("cloned page identical"), and the free-text exception in `verify`
+    // — which demands an EXACT match, and must, or it becomes the sentiment read the gate exists
+    // to prevent — refuses it. So SAY WHAT ACTUALLY WORKS: if no buttons appear, type the verdict
+    // VERBATIM. The wording is the only thing standing between a real approval and a wasted round.
+    { text: `FINAL REQUIRED STEP — verdict. Buttons? Pick one. NO buttons (known bug)? COPY ONE OF THESE LINES EXACTLY as your comment here: "${verdicts[0]}" / "${verdicts[1]}" / "${verdicts[2]}". A paraphrase does not count.`, check: null }
   );
   // What changed since the reviewer's last round, stated UP FRONT — one round's verdict was
   // literally "did you fix anything?": the round's substantive change was invisible without

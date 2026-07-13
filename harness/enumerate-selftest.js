@@ -8,7 +8,7 @@
 // so each class the catalog paid for is fixtured here in node — no browser.
 "use strict";
 
-const { classifyLeaf, slugName } = require("../tools/browser-capture.js");
+const { classifyLeaf, slugName, captureAllShouldAbort } = require("../tools/browser-capture.js");
 
 let failed = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed++; console.log(`  ✗ ${msg}`); } };
@@ -46,6 +46,11 @@ ok(classifyLeaf(F({})).leaf === false, "an unpainted pass-through container is n
   ok(slugName({ tag: "a", hint: "See all jobs" }, used) === "a_see_all_jobs_3", "…and the next one increments");
   ok(slugName({ tag: "div", hint: "◆◆◆" }, used) === "div", "non-alphanumeric hint falls back to the tag");
 }
+
+// pxCaptureAll honors the settle STOP contract — enforcement, not narration
+ok(captureAllShouldAbort({ stable: false }) === true, "stable:false settle ABORTS the one-call capture");
+ok(captureAllShouldAbort({ stable: true }) === false, "stable settle proceeds");
+ok(captureAllShouldAbort("skipped") === false, "explicit settle:false skip proceeds (caller took responsibility)");
 
 console.log(failed ? `\n❌ enumerate-selftest: ${failed} check(s) failed.` : "\n✓ enumerate-selftest: all checks pass.");
 process.exit(failed ? 1 : 0);

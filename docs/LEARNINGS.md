@@ -502,6 +502,156 @@ misses a defect.)
 
 ---
 
+## 26. THE INSTRUMENT'S OWN COPY STEP DELETED THE PAGE — cloneNode re-runs custom-element constructors
+Found on chrono24. The capture serialized the DOM from `document.documentElement.cloneNode(true)` —
+a clone, so that stripping the agent's overlay (#24) would never mutate the live page. But cloning
+an **upgraded custom element** *constructs a fresh one*: the browser runs its constructor, and a
+framework-defined element (Vue `defineCustomElement`, Lit, Stencil) re-initialises itself there and
+drops its hydrated subtree. chrono24 mounts its **main search bar** into one:
+
+    app.outerHTML                → 1928 chars of <form>   ← faithful
+    app.cloneNode(true).children → 0                      ← DESTROYED
+
+So `pxDomHtml()` wrote `<c24-main-search-app><!----></c24-main-search-app>`, the build shipped an
+empty mount point, and **no number of re-captures could fix it** — every capture destroyed it again.
+The kit could not clone the page's most prominent control at all.
+**Lesson:** #23's rule, turned on the capture itself: **a measurement must be invariant under the
+kit's own transforms** — and *copying a page is a transform*. `outerHTML` on the live element is
+faithful, so serialize FIRST and re-parse the string in a `DOMParser` document, which has **no
+custom-element registry**: nothing upgrades, no constructor runs, the subtree survives, and the live
+page is still never mutated. Note what this was *not*: the gate was never blind — `--visual` failed
+loudly (`present live=true clone=false`). The kit was **incapable**, not deceived, and a capability
+bug looks nothing like a detection bug.
+> 🔒 **Enforced now:** `pxDomHtml` serializes → re-parses inert; `harness/fixtures/31-custom-element-subtree.js`
+> fails without it (and proves #24's agent-strip and #18's doctype still hold on the new path).
+> Battery: defect `lost-island` (a painted live leaf with no clone counterpart), control
+> `adv-absent-both`.
+> 👁 **Still yours:** chrono24 ships TWO mounts marked identically (`data-v-app`) and one —
+> `<c24-toasts-app>` — is **faithfully empty on live too**. Only a live-vs-clone comparison can tell a
+> lost island from an empty one; a single-artifact lint structurally cannot, which is why this stayed
+> a capture fix and never became a `clone-lint` rule (#25's trap, avoided).
+
+---
+
+## 27. THE SWEEP NEVER MOVED — `scrollTo(0, y)` obeys the page's `scroll-behavior: smooth`
+Found on chrono24 (`html { scroll-behavior: smooth }`). `pxScrollSettle` walked the page with
+`scrollTo(0, y)`. That call **obeys the page's own CSS**: with smooth scrolling the browser turns
+each step into an rAF-driven *animation*, and when rAF is throttled — a background or hidden tab,
+which is the **normal** condition under browser automation — the animation never runs and the scroll
+**never lands**. Measured live: with `scrollY` at 7743, `scrollTo(0, 1000)` left it at **7743**;
+`scrollTo({top: 1000, behavior: "instant"})` landed at exactly 1000.
+
+So the sweep visited nothing. No IntersectionObserver fired, no lazy image was kicked, no below-fold
+section mounted. And the height watch (#19) then found the height perfectly stable — *of course it
+was stable: nothing scrolled* — and returned `stable: true` over a page it had never visited.
+**Lesson:** #22's rule, on a new mechanism: **a probe that cannot fire the thing it is probing must
+never report success.** The instrument's scroll is not a user gesture to be animated — it is a
+measurement, and a measurement must be exact. When your evidence of readiness is "nothing changed",
+first prove you were *able* to change it.
+> 🔒 **Enforced now:** the sweep scrolls with `behavior: "instant"` (fallback for hosts without the
+> options form). `harness/fixtures/34-settle-instant-scroll.js` fails without it; battery defect
+> `settle-smooth-scroll`, control `adv-settle-auto-scroll` (a page with no smooth CSS sweeps exactly
+> as before). Adopted at **+3 gained / 0 regressions**.
+
+---
+
+## 28. HEIGHT HOLDING STILL IS NOT THE PAGE BEING READY — a lazy `<img>` is a zero-width box
+Found on chrono24. The settle proves the document stopped **growing** (#19). It said nothing about
+whether the page had finished **loading** — and an unloaded lazy `<img>` moves no height at all: it
+is a **zero-width box** that reflows its row the moment its bytes land. chrono24's footer QR code
+(`<img loading="lazy" height="90">`, no width attr) was still `complete:false` when settle returned
+`stable:true`. So `live.json` recorded it at `w=0`, the two app-store badges beside it were measured
+**90px to the left** of where any real user sees them — and the gate then reported a 90px defect
+**against the clone**, which had loaded the image correctly. The reference was a page state that
+never existed (#20), and the clone was blamed for being right.
+**Lesson:** readiness has two halves — *nothing is still mounting* **and** *nothing is still
+loading*. `complete` is the predicate, not `naturalWidth`: a genuine 404 settles to `complete:true`
+with a zero box, and **that zero box IS the site's rendering** — the clone must reproduce it, not
+wait for it.
+> 🔒 **Enforced now:** settle waits for every **rendered** image and reports `imagesPending` /
+> `pendingImageSrcs`; a pending image makes `stable:false`, which the RUNBOOK already tells you to
+> stop on. `harness/fixtures/32-settle-image-readiness.js`; battery defect `settle-image-pending`,
+> controls `adv-settle-images-loaded`, `adv-settle-hidden-pixel`, `adv-settle-image-in-closed-flyout`.
+> 👁 **Still yours — and the sharpest part of this one:** "does it render" is answered by a **layout
+> box** (`getClientRects().length`), *never* by `getComputedStyle(img).display`. An element inside a
+> `display:none` **ancestor** still computes its own display as `"block"`. The first cut of this rule
+> used the computed display and chrono24 broke it on contact: the one image that never loaded was a
+> 32×32 badge inside `#js-header-security-flyout`, a closed flyout **eight levels up**. Hidden menus,
+> closed flyouts and offscreen templates hold pending images on most real sites — that rule would
+> have refused to capture nearly every page. The real site is the best false-positive hunter you have.
+
+---
+
+## 29. A 543px MENU OPENED AND THE INSTRUMENT SAW NOTHING — record every property a reveal can move
+Found on chrono24; this is **#22's rule hitting its second instance**, on a property nobody had added
+yet. #22 taught that a pre-mounted panel revealed by `visibility: hidden → visible` (aloyoga, lelabo)
+moves none of `opacity`/`transform`/`filter`, so `visibility` had to join the snapshot. chrono24
+reveals its three header flyouts a **third** way — by `display`:
+
+    .header-navigation .header-flyout        { display: none; }
+    .header-navigation .header-flyout.active { display: block; }
+
+The panel is pre-mounted (103 descendants, open or shut) and while it is **shut** its opacity is 1,
+transform `none`, filter `none`, visibility `visible` — *every property the snapshot recorded was
+already at its open value*. Measured on live by applying the site's own `.active` class: the panel
+went from `display:none` / **0px** to `display:block` / **543px of painted menu**, and the
+four-property snapshot recorded **byte-identical** before and after. The gate was safe but blind: it
+could file the row `inconclusive` forever (#22's guard) and never verify it, and a clone whose flyout
+stayed shut was a missing menu nothing in the kit could see.
+**Lesson:** the durable form of #22 — **the snapshot must record every property a reveal can move**:
+`opacity`, `transform`, `filter`, `visibility`, `display`. A reveal mechanism the instrument does not
+record is a reveal it cannot gate; and when a probe keeps coming back "inconclusive", suspect the
+snapshot before you blame the trigger.
+> 🔒 **Enforced now:** `styleSnap` records `display`; `compareMeasured` compares it **only when both
+> captures have it** (old captures skip, never retro-fail). `harness/fixtures/35-display-driven-reveal.js`;
+> behavior battery defect `display-reveal-stuck`, controls `adv-display-reveal-reproduced` +
+> `adv-display-old-schema`. Adopted at **+3 gained / 0 regressions**.
+> 👁 **Still yours:** a synthetic `MouseEvent` still cannot open a real hover menu (#22 stands). The
+> disposition that works: measure the mechanism **directly** — apply the site's own class and record
+> what moves — then reproduce *that* in `fixes.js` and put the open panel in front of a reviewer.
+
+---
+
+## 30. THE BOX IS NOT THE IMAGE — a reviewer saw grey holes the gate had certified
+Found on chrono24, **by the reviewer**, on a clone the kit had passed end to end: `--visual`
+0/5911, strict 0/18770, coverage 396/396, behavior PASS, `clone-lint` clean. Their first words were
+*"the images are not rendered."* Ten watch photos in the "our most popular models" grid had failed
+to load and were rendering as grey holes.
+
+The gate could not have caught it. An `<img>` that 404s but whose size comes from **CSS** is
+identical, in every property the snapshot recorded, to the real photo:
+
+    box (rect + glyph cx,cy,w,h)   272 x 332   ← same
+    bg, present, layout, font      same
+    naturalWidth                   0           ← NEVER MEASURED
+
+Re-run against the real captures, the numbers are exact: the **old gate passes the broken clone
+0/6002**; the new one **fails it 10/6091**, naming `img_80 … img_101 · glyph.painted live=true
+clone=false`. That pair is frozen in the corpus as `image-not-painted`.
+
+The *cause* of the breakage is worth its own line, because it will bite again: `capture-build` did
+`srcset.split(",")` — but **a srcset candidate URL may contain commas**. Every modern image CDN puts
+them in the path; Cloudflare's resizer ships
+`/cdn-cgi/image/f=auto,metadata=none,q=85/…`. Splitting on bare commas shattered one URL into three
+fragments, each then resolved against the page origin into 404 garbage
+(`https://www.chrono24.com/metadata=none`). Per spec a candidate's URL is a run of **non-whitespace**
+characters — parse it, don't split it.
+**Lesson:** the family of #11 (the underline) and #16 (the backdrop), and the last member nobody had
+added: **an image's PIXELS are a painted mark, and the box is not the image.** Whenever the tool
+measures a *container* for something that paints *inside* it, ask what would still match if the paint
+never arrived. `complete && naturalWidth > 0` is the whole test.
+> 🔒 **Enforced now:** `glyph.painted` is captured (schema-identical in `browser-capture.js` and
+> `pixel-diff.js`) and compared by `--visual`; `capture-build` parses `srcset` per spec.
+> `harness/fixtures/36-image-not-painted.js` fails without both halves. Battery defect
+> `image-not-painted` + controls `adv-image-painted-both`, `adv-image-broken-both`,
+> `adv-image-srcset-candidate`, `adv-image-old-schema`. Adopted at **+5 gained / 0 regressions**.
+> 👁 **Still yours:** an image broken on **both** sides is a MATCH, not a hole — the clone is
+> faithfully reproducing the site's own broken image (#25), and only *you* can decide whether the
+> live site is meant to look like that. And `naturalW/H` are recorded but deliberately **not** gated:
+> live and the clone may pick different `srcset` candidates (1x vs 2x) and still paint identically.
+
+---
+
 ## The gate vs your eyes — the one split that keeps this general
 Every lesson here is one of two kinds. Keep them apart, or you'll re-measure what the
 tool guarantees and eyeball what it can't:
@@ -509,17 +659,23 @@ tool guarantees and eyeball what it can't:
 - 🔒 **Gate-enforced — trust `--visual`, don't re-derive by hand.** Same-width capture;
   glyph box via `Range`; painted glyph + `background-position`; full box-model; font
   incl. `line-height` / `letter-spacing` / `color` / `decoration` / **`smoothing`**; the
-  **underline box**; the **painted backdrop** (`bg` — bar/button/badge colour); parent
+  **underline box**; the **painted backdrop** (`bg` — bar/button/badge colour); **whether an image
+  actually PAINTED** (`glyph.painted` — the box is not the image, **#30**); parent
   `gap`; presence & `text.present`. If the diff is green on
   these, they match — pushing further is fitting sub-pixel noise (#15). *When you find a
   new class of miss, add it to the tool (as underline/smoothing were added), not to a
   reviewer checklist — that's how it stops recurring.*
-  Before the diff ever runs, the **capture** is gated too: the settle refuses a page still
-  growing (`stable:false` — RUNBOOK "Build by capture", locked by `harness/fixtures/30-scroll-settle-stability.js`), and the automation's own overlay DOM is stripped from
-  every capture and REFUSED in a built clone (`agent-dom`, **#24**). And the **artifact** is
-  gated: `clone-lint` FAILs an empty mount point (incl. framework mounts — `data-vue`,
-  `data-react*`), a frozen reveal, and the agent's overlay — while a `display:none` container
-  live itself hides is correctly **not** a hole (**#25**).
+  Before the diff ever runs, the **capture** is gated too: the settle sweeps with an **instant**
+  scroll (a smooth-scrolling page would otherwise never move under it — **#27**), refuses a page
+  still growing (`stable:false` — RUNBOOK "Build by capture", locked by
+  `harness/fixtures/30-scroll-settle-stability.js`) **and one whose rendered images are still in
+  flight** (`imagesPending` — **#28**); the DOM is serialized without `cloneNode`, so an upgraded
+  custom element's subtree survives the capture (**#26**); and the automation's own overlay DOM is
+  stripped from every capture and REFUSED in a built clone (`agent-dom`, **#24**). The **behavior**
+  snapshot records every property a reveal can move — `opacity`/`transform`/`filter`/`visibility`/
+  **`display`** (**#29**). And the **artifact** is gated: `clone-lint` FAILs an empty mount point
+  (incl. framework mounts — `data-vue`, `data-react*`), a frozen reveal, and the agent's overlay —
+  while a `display:none` container live itself hides is correctly **not** a hole (**#25**).
 - 👁 **Judgment — the diff can't see these; they stay on you.** *Which* element paints a
   mark (may be an ancestor — the tool special-cases underlines, not every shadow/outline);
   **reproducing the technique** vs a magic offset; **coverage** (every painted leaf has a
@@ -590,13 +746,54 @@ tool guarantees and eyeball what it can't:
     is a page that never existed. A section that hydrates a beat after the walk passes it is
     missing from the capture, and therefore from the leaf enumeration, and therefore from every
     gate — green over half a page (gorjana: 4439 → 5877px; 88 leaves → 184).
-20. 🔒 **The instrument paints on the page** (#24) — the automation extension injects its own
-    overlay (`#claude-agent-*`, `#claude-phantom-*`); the capture strips it, discovery ignores
-    it, and `clone-lint` REFUSES a clone that ships it. 👁 Nothing in a green table says "this
-    row is *you*" — when a discovered behavior has no plausible owner in the design, suspect
-    your own instrument before you reproduce it.
+20. 🔒 **The instrument paints on the page** (#24, #31) — the automation extension injects its own
+    overlay (`#claude-agent-*`, `#claude-phantom-*`, `#claude-static-*` — the namespace is a
+    LIST, and #24 first enumerated only two of its three prefixes); the capture strips it,
+    discovery ignores it, and `clone-lint` REFUSES a clone that ships it. 👁 Nothing in a green
+    table says "this row is *you*" — when a discovered behavior has no plausible owner in the
+    design, suspect your own instrument before you reproduce it, and when you find one of its
+    nodes, go looking for its siblings.
 21. 🔒 **Hidden is not missing** (#25) — `clone-lint` FAILs empty mount points (incl. framework
     mounts: `data-vue`, `data-react*`) and frozen reveals, but a transition cannot fire on
     `display:none`, so a container live itself hides is faithful, not a hole. 👁 An empty mount
     looks identical whether your capture was too early or live renders nothing there either —
     **check live before you "fix" one.**
+
+## 31. THE GUARD LISTED TWO OF THREE PREFIXES, AND THE INSTRUMENT WALKED AROUND IT
+Found on dtf, and it is #24 recurring **through the gap in its own guard**. #24 taught the kit that
+the automation extension paints on the page it is measuring, and keyed the defence — correctly, and
+narrowly — on the extension's own ID *namespace*: `#claude-agent-*`, `#claude-phantom-*`. That list
+is incomplete. The same extension also ships a "Claude is active in this tab group" toast:
+
+    #claude-static-indicator-container
+      ├ #claude-static-chat-button   + #claude-static-chat-tooltip    ("Open chat")
+      └ #claude-static-close-button  + #claude-static-close-tooltip   ("Dismiss")
+
+Nothing in the kit knew that prefix, so all three halves of #24's fix failed at once, and each
+failed silently:
+
+    pxDomHtml            did not strip them → 5 nodes serialized into dom.html, and
+                         capture-build BAKED THEM INTO THE SHIPPED CLONE
+    clone-lint agent-dom exited 0 on the contaminated artifact — the backstop whose entire job
+                         is to catch a contaminated artifact CERTIFIED one
+    behavior discovery   inventoried `declared:claude-static-chat-tooltip` as a behavior OF
+                         DTF.COM, awaiting reproduction; its leaves entered coverage as the
+                         site's painted leaves (137 vs 132 clean)
+
+And the sharpest detail: while `agent-dom` walked past the extension's nodes, `clone-lint`'s
+*frozen-reveal* rule fired **on those same nodes** — reporting the instrument's own "Open chat" and
+"Dismiss" tooltips as a defect **of dtf.com**. The gate blamed the site for the instrument's DOM.
+
+Re-run against the frozen artifact the numbers are exact: the old lint passes the contaminated
+clone (**exit 0, "no FAIL rules"**); the new one fails it **5 nodes**, and the A/B is +1 defect
+gained, 0 regressions, 0 new false positives across 42 controls.
+**Lesson:** #24 was right that the defence must be an ID *namespace* and never a substring — but a
+namespace is a **list**, and **a guard that enumerates two of its three prefixes is a guard the
+instrument walks around.** Enumerate the vendor's namespace completely, and keep every call-site
+reading the same list: a prefix known to the capture but not to the lint is the same gap wearing a
+different hat. 🔒 `pxAgentDomSelector`, `AGENT_DOM_SELECTOR` and `clone-lint`'s `agent-dom` rule all
+carry all three prefixes; `37-agent-dom-static-namespace.js` fails without them, and its shim parses
+the selector the tool *declares* rather than restating it — a fixture that hard-codes the list would
+pass while the kit stayed broken. 👁 When a gate blames the site for something you cannot find in
+the design, suspect your own instrument before you reproduce it — and when you find one of its
+nodes, go looking for its siblings.

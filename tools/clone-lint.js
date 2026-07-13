@@ -146,7 +146,10 @@ function lintHtml(html) {
   //    to the reviewer. The capture now strips them (browser-capture.js pxDomHtml); this is the
   //    artifact-level backstop — the check that would have caught it. Found on gorjana.
   {
-    const hits = [...html.matchAll(/<([a-z][a-z0-9-]*)\b[^>]*\sid=["'](claude-(?:agent|phantom)-[a-z0-9-]*)["'][^>]*>/gi)]
+    //    THREE prefixes, not two: the extension also ships a claude-static-* "Claude is active"
+    //    toast. dtf's clone baked in 5 of them and this rule exited 0 on it — the backstop that
+    //    was supposed to catch exactly this. Enumerate the vendor's namespace completely.
+    const hits = [...html.matchAll(/<([a-z][a-z0-9-]*)\b[^>]*\sid=["'](claude-(?:agent|phantom|static)-[a-z0-9-]*)["'][^>]*>/gi)]
       .map((m) => `<${m[1]} id="${m[2]}">`);
     if (hits.length)
       add("agent-dom", "FAIL", hits,

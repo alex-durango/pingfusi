@@ -39,7 +39,11 @@
   // page where nothing is wrong (#23), sourced from the measuring apparatus itself.
   // Narrow by construction: keyed on the agent's own ID NAMESPACE (a site may legitimately use a
   // class named "claude-*"; only these ids belong to the extension).
-  const AGENT_DOM_SELECTOR = '[id^="claude-agent-"], [id^="claude-phantom-"]';
+  // Three prefixes, not two — the extension's "Claude is active" toast lives under
+  // claude-static-* and #24's guard did not list it. On dtf, discovery inventoried
+  // `declared:claude-static-chat-tooltip` and `declared:claude-static-close-tooltip` as
+  // behaviors OF THE SITE, awaiting reproduction. Keep in sync with browser-capture.js.
+  const AGENT_DOM_SELECTOR = '[id^="claude-agent-"], [id^="claude-phantom-"], [id^="claude-static-"]';
   const isAgentDom = (el) => !!(el && el.nodeType === 1 && el.closest && el.closest(AGENT_DOM_SELECTOR));
 
   root.pxRegion = root.pxRegion || { maxY: 200 };
@@ -112,11 +116,28 @@
   // `visibility: hidden → visible` (aloyoga) moves NONE of the other three — opacity stays 1
   // the whole time — so a snapshot without it reads an open menu and a closed one as the same
   // state. Same shape as the backdrop-colour miss (#16): a painted mark the tool never measured.
+  //
+  // `display` earns its place for exactly the same reason, and chrono24 is the proof. Its header
+  // flyouts are revealed by toggling ONE class:
+  //     .header-navigation .header-flyout        { display: none; }
+  //     .header-navigation .header-flyout.active { display: block; }
+  // The panel is PRE-MOUNTED (103 descendants, closed and open alike) and its opacity, transform,
+  // filter and visibility are ALL already at their open values while it is shut. Measured on live:
+  // toggling `.active` took the panel from display:none / 0px tall to display:block / 543px of
+  // painted menu — and the four-property snapshot recorded BYTE-IDENTICAL before and after. The
+  // instrument was blind to a 543px panel. A snapshot that cannot tell an open menu from a closed
+  // one cannot gate a reveal, and it makes every such probe look "inconclusive" forever.
+  //
+  // The durable rule this is the second instance of (#22 was the first): the snapshot must record
+  // EVERY property a reveal can move. opacity, transform, filter, visibility, display.
   function styleSnap(el) {
     const cs = getComputedStyle(el);
-    return { opacity: num(cs.opacity), transform: cs.transform === "none" ? "none" : cs.transform, filter: cs.filter === "none" ? "none" : cs.filter, visibility: cs.visibility };
+    return { opacity: num(cs.opacity), transform: cs.transform === "none" ? "none" : cs.transform, filter: cs.filter === "none" ? "none" : cs.filter, visibility: cs.visibility, display: cs.display };
   }
-  const styleSnapEq = (a, b) => a.opacity === b.opacity && a.transform === b.transform && a.filter === b.filter && a.visibility === b.visibility;
+  // `display` is compared only when BOTH sides recorded it — a snapshot captured before this field
+  // existed must not read as a mismatch (same old-schema rule as strut/mode).
+  const styleSnapEq = (a, b) => a.opacity === b.opacity && a.transform === b.transform && a.filter === b.filter && a.visibility === b.visibility &&
+    (a.display === undefined || b.display === undefined || a.display === b.display);
 
   // Sample an element's transform translation over a wall-clock window → px/sec on the
   // DOMINANT axis (a logo belt is usually horizontal, a ticker/credits roll is vertical —

@@ -73,12 +73,67 @@ ok(spec.steps.some((s) => /INFORMATIONAL/.test(s.text) && /does not affect your 
   ok(unlisted.length === 0 || disclosed, "no covered leaf is silently dropped — either listed, or the round says how many were not");
   fs.writeFileSync(path.join(dir, "coverage.json"), JSON.stringify(["logo", "nav_product", "nav_pricing", "download_btn", "signin_btn", "locale_caret"]));
 }
+
+// …and at a scale where the leaves CANNOT all be listed. 80 leaves happened to overflow by so
+// little that the budget bug hid: the "Also scan the REST" notice is ITSELF a step, and it was
+// pushed on top of an already-full 20 without being reserved for. chrono24 (396 painted leaves at
+// region:page) made it visible — 21 steps, and the service rejected the ENTIRE filing with a Zod
+// `too_big`, which is a hard stop on the review phase for any large full-page clone. The notice
+// must be budgeted BEFORE deciding how many leaf groups fit, and the same goes for the changelog
+// step spliced in on a refile.
+{
+  const huge = Array.from({ length: 396 }, (_, i) => `painted_leaf_number_${i}`);
+  fs.writeFileSync(path.join(dir, "coverage.json"), JSON.stringify(huge));
+
+  // the ⚠ overflow notice shares the stream — slice the JSON object precisely, not "from the first {"
+  const jsonOf = (out) => JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
+  const t3 = run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the entire page"]);
+  const spec3 = jsonOf(t3.out);
+  ok(spec3.steps.length <= 20, `region:page (396 leaves) FITS the 20-step cap including the overflow notice (got ${spec3.steps.length})`);
+  ok(spec3.steps.every((s) => s.text.length <= 300), "every step still honours the 300-char cap at 396 leaves");
+  ok(spec3.steps.some((s) => /Also scan the REST of the region/.test(s.text)),
+    "the round still DISCLOSES the leaves it could not list (never a silent drop)");
+  const last3 = spec3.steps[spec3.steps.length - 1];
+  ok(/FINAL REQUIRED STEP/.test(last3.text), "the verdict step survives the squeeze (it is never the one dropped)");
+
+  // a REFILE at the same scale: the changelog step is spliced in, so it must be budgeted too
+  const t4 = run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the entire page",
+    "--changelog", "rebuilt the capture so the search bar is no longer an empty mount point"]);
+  const spec4 = jsonOf(t4.out);
+  ok(spec4.steps.length <= 20, `a REFILE (changelog step spliced in) still fits the cap at 396 leaves (got ${spec4.steps.length})`);
+  ok(spec4.steps.some((s) => /Changed since the last review/.test(s.text)), "the refile still tells the reviewer what changed");
+
+  fs.writeFileSync(path.join(dir, "coverage.json"), JSON.stringify(["logo", "nav_product", "nav_pricing", "download_btn", "signin_btn", "locale_caret"]));
+}
 ok(spec.verdict_options.length === 3 && spec.approve_verdicts[0] === spec.verdict_options[0], "approve verdict = first verdict option");
 ok(spec.require_evidence === "screenshot" && spec.url === "https://example.com/", "screenshot required; original url from target.json");
 // 3 of the first 3 real reviewer responses were comment-only (choice:null) — the verdict pick
 // must be an explicit REQUIRED final step, or the review gate never passes (astryx round 3)
 const lastStep = spec.steps[spec.steps.length - 1];
 ok(/FINAL REQUIRED STEP/.test(lastStep.text) && lastStep.text.includes(spec.verdict_options[0]) && /pick a verdict|comment-only/i.test(spec.instructions), "verdict pick is a REQUIRED final step + demanded in instructions (reviewers default to comment-only)");
+// …and while the picker is BROKEN (no options render on the verdict step), the step must tell the
+// reviewer what actually works: type the verdict VERBATIM. Six reviewers across lelabo and chrono24
+// answered every option-bearing step, found no buttons on the verdict question, improvised a
+// paraphrase ("cloned page identical" for "Cloned region identical") — and `verify`'s exact-match
+// exception rightly refused it. An instruction the reviewer cannot follow costs a whole paid round.
+ok(/COPY ONE OF THESE LINES EXACTLY|EXACTLY into the comment/i.test(lastStep.text) && /paraphrase/i.test(lastStep.text),
+  "the verdict step tells the reviewer to TYPE the verdict verbatim when no buttons render (and that a paraphrase does not count)");
+
+// THE ROUND MUST NAME THE REGION THE TARGET DECLARED. target.json persists `region` before the
+// first capture so every consumer reads the same scope; the review round was the last one still
+// re-deciding it, and a region:page target was being shown a round about "the cloned region" whose
+// verdict read "Cloned region identical" — which is what pushed a reviewer into paraphrasing.
+{
+  const tj = path.join(dir, "target.json");
+  const saved = fs.readFileSync(tj, "utf8");
+  fs.writeFileSync(tj, JSON.stringify({ name: NAME, url: "https://example.com/", width: 1512, region: "page" }));
+  const tp = run(["template", NAME, "--draft", "https://x.trycloudflare.com"]);   // NO --region flag
+  const sp = JSON.parse(tp.out.slice(tp.out.indexOf("{"), tp.out.lastIndexOf("}") + 1));
+  ok(/entire page/i.test(sp.instructions), "region:page in target.json → the round says 'the entire page' (not the generic 'cloned region')");
+  ok(sp.verdict_options[0] === "Entire page identical",
+    `…and the verdict options follow the declared region (got "${sp.verdict_options[0]}")`);
+  fs.writeFileSync(tj, saved);
+}
 
 // documented deviations are surfaced TO THE REVIEWER (astryx round 3 re-flagged an excused cell)
 // — but only PRIMARY entries: "See <key> — same phenomenon" cross-references are gate

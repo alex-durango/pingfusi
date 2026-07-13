@@ -178,6 +178,16 @@ function compareMeasured(key, kind, liveM, cloneM) {
     else if (cloneEnd.visibility !== liveEnd.visibility)
       misses.push(`visibility: live="${liveEnd.visibility}" clone="${cloneEnd.visibility}"`);
   }
+  // display: exact match, for the same reason as visibility — and it is the ONLY property that
+  // moves on a display-driven reveal. chrono24's header flyouts are pre-mounted panels toggled by
+  // `.header-flyout.active { display: block }`: opacity/transform/filter/visibility sit at their
+  // open values the whole time, so a snapshot without `display` reads a shut 0px panel and an open
+  // 543px one as the SAME STATE (LEARNINGS #22's rule, second instance — record every property a
+  // reveal can move). Old-schema safe: a capture taken before `display` existed simply skips.
+  if (liveEnd && liveEnd.display && cloneEnd && cloneEnd.display) {
+    if (cloneEnd.display !== liveEnd.display)
+      misses.push(`display: live="${liveEnd.display}" clone="${cloneEnd.display}" — a display-driven reveal (a pre-mounted panel toggled none↔block) moves NOTHING else`);
+  }
   // An INCONCLUSIVE hover probe (see tools/behavior-capture.js): the operator named this trigger,
   // so something is claimed to open there, but a synthetic pointer can neither set `:hover` nor
   // satisfy trusted-event-gated JS — so "nothing moved" proves nothing. aloyoga's mega-menu is
@@ -421,6 +431,17 @@ const PHASES = [
       const clone = readJson(cp2);
       if (live.viewport && clone.viewport && live.viewport.width !== clone.viewport.width)
         return { ok: false, reason: `viewport widths differ (${live.viewport.width} vs ${clone.viewport.width}) — x-positions not comparable` };
+      // …and the same is true DOWN the page, which the gate used to ignore. getBoundingClientRect
+      // is viewport-relative: a position:fixed element (a chat bubble, a sticky footer bar) is
+      // anchored to the viewport's BOTTOM, so its y is `innerHeight - offset`. Measure live in a
+      // tab of one height and the clone in a tab of another and the gate reports a y delta for an
+      // element that did not move — a delta the KIT manufactured, on a page where nothing is wrong
+      // (LEARNINGS #23). Measured on chrono24: two tabs 997px vs 941px tall, and the support-chat
+      // button "moved" by exactly the 56px difference. Unequal heights also silently change any
+      // vh-based layout, so the honest answer is to refuse the comparison, not to patch one symptom.
+      if (live.viewport && clone.viewport && live.viewport.height && clone.viewport.height &&
+          live.viewport.height !== clone.viewport.height)
+        return { ok: false, reason: `viewport heights differ (${live.viewport.height} vs ${clone.viewport.height}) — y-positions of viewport-anchored (position:fixed) elements and any vh-based layout are not comparable. Capture live and the clone in the SAME tab (identical browser chrome ⇒ identical innerHeight), then re-capture both.` };
       const v = diffSnapshots(live, clone, { visual: true });
       if (!v.ok) return { ok: false, reason: `${v.summary.failures}/${v.summary.comparisons} --visual comparisons over ${v.summary.tol}px — run score.js for the fix list` };
       return { ok: true, reason: `--visual PASS — ${v.summary.comparisons} comparisons, 0 fails`, artifact: path.join(targetDir(name), "clone.json") };

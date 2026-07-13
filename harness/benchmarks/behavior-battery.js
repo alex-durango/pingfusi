@@ -30,6 +30,14 @@ const visLive = () => ({ before: { opacity: 1, transform: "none", filter: "none"
 const visCloneOk = () => visLive();
 const visCloneStuck = () => ({ before: { opacity: 1, transform: "none", filter: "none", visibility: "hidden" }, after: { opacity: 1, transform: "none", filter: "none", visibility: "hidden" } });
 
+// a DISPLAY-driven reveal (chrono24's header flyout): the panel is pre-mounted and every other
+// property is already at its open value — `display` is the only thing that moves.
+const dispOpen = { opacity: 1, transform: "none", filter: "none", visibility: "visible", display: "block" };
+const dispShut = { opacity: 1, transform: "none", filter: "none", visibility: "visible", display: "none" };
+const dispLive = () => ({ before: { ...dispShut }, after: { ...dispOpen } });
+const dispCloneOk = () => dispLive();
+const dispCloneStuck = () => ({ before: { ...dispShut }, after: { ...dispShut } });   // never opens
+
 // [name, kind, behaviorKind, liveMeasured, cloneMeasured, note]
 const behaviorBattery = [
   // ── DEFECTS ──
@@ -39,6 +47,14 @@ const behaviorBattery = [
     "reveal ends visible; clone stays hidden (#22)"],
   ["hover-mount-frozen", "defect", "hover-mount", mountLive(), mountCloneFrozen(),
     "live mounts menu DOM; clone never toggles"],
+  // THE DISPLAY-DRIVEN REVEAL (chrono24). A pre-mounted header flyout toggled by ONE class:
+  //   .header-flyout { display:none }  .header-flyout.active { display:block }
+  // Opacity, transform, filter AND visibility all sit at their open values while the panel is
+  // SHUT — only `display` moves. Measured on live: none/0px → block/543px of painted menu, and
+  // the old four-property snapshot recorded byte-identical before/after. A clone whose panel
+  // stays display:none is a missing 543px menu, and the gate must FAIL it.
+  ["display-reveal-stuck", "defect", "class-toggle-or-style-mutation", dispLive(), dispCloneStuck(),
+    "reveal ends display:block (543px panel); clone stays display:none — nothing else moves (#22, 2nd instance)"],
 
   // ── CONTROLS — a correct clone, and the scope limits of the rule ──
   ["adv-hover-mount-reproduced", "control", "hover-mount", mountLive(), mountCloneOk(),
@@ -57,6 +73,18 @@ const behaviorBattery = [
     { before: { opacity: 1, transform: "none", filter: "none" }, after: { opacity: 1, transform: "none", filter: "none" }, changed: false },
     { before: { opacity: 1, transform: "none", filter: "none" }, after: { opacity: 1, transform: "none", filter: "none" }, changed: false },
     "capture predates visibility/inconclusive → skipped, no flag"],
+  // scope: a display reveal the clone DOES reproduce must pass — the new property must not turn
+  // every pre-mounted panel into an unpassable row.
+  ["adv-display-reveal-reproduced", "control", "class-toggle-or-style-mutation", dispLive(), dispCloneOk(),
+    "display reveal reproduced (none→block on both) → pass"],
+  // scope: an older capture that predates the `display` field must not be flagged. Every target
+  // captured before today has no `display` in its snapshots; comparing it against a fresh capture
+  // that HAS one must skip, not invent a miss (same rule as adv-strut-old-schema / adv-mode-old-schema).
+  ["adv-display-old-schema", "control", "class-toggle-or-style-mutation",
+    { before: { opacity: 1, transform: "none", filter: "none", visibility: "visible" },
+      after:  { opacity: 1, transform: "none", filter: "none", visibility: "visible" } },
+    { before: { ...dispShut }, after: { ...dispShut } },
+    "live capture predates `display`, clone has it → skipped, no flag"],
   // scope: a marquee's numbers must keep passing untouched by any of this.
   ["adv-marquee-same-speed", "control", "marquee",
     { pxPerSec: 42.5, axis: "x", from: 0, to: 42.5, sampledMs: 1000 },

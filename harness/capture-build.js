@@ -64,6 +64,54 @@ function absolutize(ref, baseUrl) {
   try { return new URL(r, baseUrl).href; } catch (e) { return null; }
 }
 
+// SRCSET IS NOT COMMA-SEPARATED URLS — A CANDIDATE URL MAY CONTAIN COMMAS.
+// The old rewrite did `val.split(",")`, which is wrong: per the HTML spec a candidate's URL is a
+// run of NON-WHITESPACE characters, and modern image CDNs put commas inside the path. Cloudflare's
+// image resizer is the common one — chrono24 ships
+//   https://cdn2.chrono24.com/cdn-cgi/image/f=auto,metadata=none,q=85/images/topmodels/45-….png 1x, …
+// Splitting that on "," shattered ONE url into THREE fragments, and each fragment was then
+// resolved against the page origin, producing garbage candidates like
+// `https://www.chrono24.com/metadata=none`. The browser picked one of them, it 404'd, and the clone
+// shipped ten grey holes where the "most popular models" watch photos should be — which a green
+// --visual never saw (the box is CSS-sized, so a broken <img> measures identically) and a reviewer
+// spotted in seconds.
+//
+// Parse it properly: skip leading whitespace/commas, take the URL as a run of non-whitespace, let
+// trailing commas on the URL terminate the candidate, otherwise read the descriptor up to the next
+// comma. `(…)` is tracked so a future descriptor containing a comma cannot split a candidate either.
+function parseSrcset(input) {
+  const out = [];
+  const s = String(input || "");
+  let i = 0;
+  const isWS = (c) => /\s/.test(c);
+  while (i < s.length) {
+    while (i < s.length && (isWS(s[i]) || s[i] === ",")) i++;   // between candidates
+    if (i >= s.length) break;
+    const start = i;
+    while (i < s.length && !isWS(s[i])) i++;                    // URL = non-whitespace run
+    let url = s.slice(start, i);
+    let desc = "";
+    let trailing = 0;
+    while (url.endsWith(",")) { url = url.slice(0, -1); trailing++; }  // a trailing comma ends it
+    if (!trailing) {
+      while (i < s.length && isWS(s[i])) i++;
+      const dstart = i;
+      let parens = 0;
+      while (i < s.length) {
+        const c = s[i];
+        if (c === "(") parens++;
+        else if (c === ")") parens--;
+        else if (c === "," && parens <= 0) break;
+        i++;
+      }
+      desc = s.slice(dstart, i).trim();
+      if (s[i] === ",") i++;
+    }
+    if (url) out.push({ url, desc });
+  }
+  return out;
+}
+
 const sanitizeFile = (s) => (s.replace(/[^a-zA-Z0-9._-]/g, "") || "asset");
 const baseNameOfUrl = (u) => sanitizeFile(path.posix.basename(new URL(u).pathname.split("?")[0]) || "asset");
 
@@ -252,13 +300,9 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
   html = html.replace(/\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (m, dq, sq) => {
     const val = dq != null ? dq : sq;
     if (/^data:/i.test(val.trim())) return m;
-    const rewritten = val.split(",").map((entry) => {
-      const t = entry.trim();
-      if (!t) return t;
-      const [u, ...desc] = t.split(/\s+/);
-      const abs = absolutize(u, target.url);
-      return [abs || u, ...desc].join(" ");
-    }).join(", ");
+    const rewritten = parseSrcset(val)
+      .map(({ url, desc }) => [absolutize(url, target.url) || url, desc].filter(Boolean).join(" "))
+      .join(", ");
     return `srcset="${rewritten}"`;
   });
   // a lazy image inside a hidden/JS-toggled container never fires its viewport check
@@ -320,4 +364,4 @@ measure it on live with tools/behavior-capture.js, reproduce in clone/fixes.js, 
 }
 
 if (require.main === module) main().catch((e) => { console.error(`capture-build failed: ${e.message}`); process.exit(1); });
-module.exports = { absolutize, scanCssFontUrls, rewriteCss };
+module.exports = { absolutize, scanCssFontUrls, rewriteCss, parseSrcset };

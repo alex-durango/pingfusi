@@ -1,0 +1,5 @@
+{
+  "kind": "defect",
+  "note": "10 watch photos (the 'our most popular models' grid) fail to load in the clone and render as grey holes — capture-build split the srcset on bare commas, shattering Cloudflare's /cdn-cgi/image/f=auto,metadata=none,q=85/ URL into fragments resolved against the page origin. The box is CSS-sized (272x332), so the OLD gate passed 0/6002 --visual comparisons over the holes; a reviewer opened the draft and said 'the images are not rendered'.",
+  "from": "chrono24"
+}

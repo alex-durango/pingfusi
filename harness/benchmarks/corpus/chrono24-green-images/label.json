@@ -1,0 +1,5 @@
+{
+  "kind": "control",
+  "note": "went green WITH the image gate: --visual 0/6091 (incl. 89 glyph.painted comparisons — every image rendering), strict 0/19779, coverage 412/412, behavior pass",
+  "from": "chrono24"
+}

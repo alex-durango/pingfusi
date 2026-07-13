@@ -25,12 +25,19 @@ const s = diffSnapshots(live, clone, {});
 const targets = Object.keys(live.elements || {}).length;
 
 const widthMismatch = live.viewport && clone.viewport && live.viewport.width !== clone.viewport.width;
+// A viewport-anchored (position:fixed) element's y is `innerHeight - offset`, so two captures taken
+// in tabs of different heights disagree about where it is — a delta the kit invents on a page where
+// nothing moved (chrono24: 997 vs 941, the chat button "moved" 56px). Surfaced here for the same
+// reason as the width mismatch: the number below is not trustworthy until both are re-captured.
+const heightMismatch = live.viewport && clone.viewport && live.viewport.height && clone.viewport.height &&
+  live.viewport.height !== clone.viewport.height;
 const score = {
   ts: new Date().toISOString(),
   targets,
   visualComparisons: v.summary.comparisons, visualFails: v.summary.failures, visualOk: v.ok,
   strictComparisons: s.summary.comparisons, strictFails: s.summary.failures,
   widthMismatch: !!widthMismatch,
+  heightMismatch: !!heightMismatch,
 };
 
 // previous run (last non-empty line of scores.jsonl)
@@ -42,6 +49,7 @@ const arrow = (cur, was) => was == null ? "" : cur < was ? `  ↓ ${was}→${cur
 
 console.log(`\nscorecard — ${name}  (${targets} targets, width ${clone.viewport && clone.viewport.width})`);
 if (widthMismatch) console.log(`⚠  viewport widths differ (${live.viewport.width} vs ${clone.viewport.width}) — x-positions not comparable. Re-measure both at the same width.`);
+if (heightMismatch) console.log(`⚠  viewport heights differ (${live.viewport.height} vs ${clone.viewport.height}) — y-positions of viewport-anchored (position:fixed) elements are not comparable; the gate will report deltas nothing moved. Capture live and the clone in the SAME tab, then re-capture both.`);
 console.log(`  --visual   ${v.ok ? "PASS" : "FAIL"}   fails ${score.visualFails}/${score.visualComparisons}${arrow(score.visualFails, prev && prev.visualFails)}`);
 console.log(`  strict     fails ${score.strictFails}/${score.strictComparisons}${arrow(score.strictFails, prev && prev.strictFails)}   (structural → fix or document)`);
 

@@ -66,6 +66,11 @@
   // ===========================================================================
 
   const DEFAULT_TOL = 0.5; // px — anything over this is a real, visible miss
+  // Opacity is unitless (0..1), not pixels, so it CANNOT ride on DEFAULT_TOL or on `--tol`
+  // (harness/fixtures/38-opacity-painted-property.js). 0.01 is below the threshold of visible difference on any backdrop and far
+  // above float/compositor noise. It is deliberately NOT operator-tunable: `--tol` widens a
+  // PIXEL budget, and the one thing #15 forbids is widening a tolerance until a miss fits through.
+  const OPACITY_TOL = 0.01;
 
   // Flatten a nested measurement object to dotted leaf keys: {rect:{x:1}} -> {"rect.x":1}
   function flatten(obj, prefix, out) {
@@ -102,6 +107,25 @@
   // CSS techniques (flex+gap vs grid; a tall hit-area vs a tight box) can render
   // identical pixels, so those structural differences are not visual failures.
   // Strict mode (default) still compares every property so nothing is hidden.
+
+  // Is this pair comparable at all? Two snapshots measured in different viewports cannot be
+  // diffed — not "diffed with a caveat", not comparable. Returns a reason string, or null when
+  // the pair is usable (including when either snapshot predates the viewport field: a missing
+  // dimension is "unknown", not "mismatched", and refusing old captures would be invented
+  // friction, #23). Pure + exported so the gate and the CLI refuse on identical grounds.
+  function viewportMismatch(live, clone) {
+    if (!live || !clone || !live.viewport || !clone.viewport) return null;
+    const lv = live.viewport, cv = clone.viewport;
+    if (lv.width && cv.width && lv.width !== cv.width)
+      return `viewport widths differ: live ${lv.width} vs clone ${cv.width} — x-positions are not ` +
+        `comparable. Re-measure both at the same width.`;
+    if (lv.height && cv.height && lv.height !== cv.height)
+      return `viewport heights differ: live ${lv.height} vs clone ${cv.height} — y-positions of ` +
+        `viewport-anchored (position:fixed) elements and every vh/dvh-based box are not comparable; ` +
+        `the diff would report deltas nothing moved. Capture live and the clone in the SAME tab ` +
+        `(identical browser chrome ⇒ identical innerHeight), then re-capture both.`;
+    return null;
+  }
 
   function diffSnapshots(live, clone, opts) {
     opts = opts || {};
@@ -211,6 +235,17 @@
         } else if (L.glyph && C.glyph) {
           for (const k of ["cx", "cy", "w", "h"]) add(`glyph.${k}`, L.glyph[k], C.glyph[k]);
           if (L.glyph.bgPos !== undefined || C.glyph.bgPos !== undefined) add("glyph.bgPos", L.glyph.bgPos, C.glyph.bgPos);
+          // DID THE IMAGE ACTUALLY PAINT? The box is not the image: an <img> that 404s but is sized
+          // by CSS is byte-identical to the real photo in cx/cy/w/h/bg/present, so a clone full of
+          // grey holes passed a green sweep and the reviewer's first words were "the images are not
+          // rendered" (chrono24, 10 watch photos). Boolean only — naturalW/H are recorded for
+          // diagnosis but never gated (live and clone may pick different srcset candidates and
+          // still paint identically). Old-schema safe: compared only when BOTH captures have it, so
+          // a snapshot taken before this field simply skips instead of retro-failing. And an image
+          // broken on BOTH sides (live 404s too) is a MATCH — the clone is faithfully reproducing a
+          // broken image, which is the site's real rendering (#25's rule).
+          if (L.glyph.painted !== undefined && C.glyph.painted !== undefined)
+            add("glyph.painted", L.glyph.painted, C.glyph.painted);
         } else {
           add("rect.cx", L.rect.x + L.rect.w / 2, C.rect.x + C.rect.w / 2);
           add("rect.cy", L.rect.y + L.rect.h / 2, C.rect.y + C.rect.h / 2);
@@ -228,6 +263,27 @@
         const OPAQUE = (v) => typeof v === "string" && /^rgb\(|^#|^[a-z]+$/i.test(v) && !/rgba\(/.test(v);
         const norm = (v) => (typeof v === "string" ? v.replace(/\s+/g, "") : v);
         if (OPAQUE(L.bg) && OPAQUE(C.bg)) add("bg", norm(L.bg), norm(C.bg));
+
+        // THE EFFECTIVE OPACITY — the painted property the schema never had (harness/fixtures/38-opacity-painted-property.js).
+        // Without it, an element at opacity 0 is BYTE-IDENTICAL in the snapshot to the same
+        // element at opacity 1: rect, font, box, layout, bg and glyph are all unchanged by
+        // opacity. A whole section — dtf's footer — can render invisible in the clone and every
+        // gate stays green. Compared as a plain number, so a *matching* translucent mark (a hero
+        // scrim at 0.2 on BOTH sides) passes: this catches DIVERGENCE, never translucency itself.
+        // Old-schema safe: only compared when BOTH captures carry the field, so a snapshot taken
+        // before today skips it rather than retro-failing (#23 — no invented friction).
+        //
+        // ON ITS OWN TOLERANCE, AND THIS IS THE WHOLE POINT: every other number here is in PIXELS
+        // and `tol` is a PIXEL tolerance (0.5px). Opacity is unitless, 0..1. Judging it by the px
+        // tolerance is a category error that reads as working: at tol=0.5 an element at opacity
+        // 1.0 vs 0.5 — half transparent, unmistakable to the eye — has |Δ| = 0.5 and PASSES, and
+        // any operator passing `--tol 1` blinds the check completely. A visible opacity shift is
+        // far smaller than half a pixel is wide.
+        if (L.opacity !== undefined && C.opacity !== undefined) {
+          const { pass, delta } = cmp(L.opacity, C.opacity, OPACITY_TOL);
+          compared++;
+          if (!pass || opts.all) rows.push({ target: name, prop: "opacity", live: L.opacity, clone: C.opacity, delta, pass });
+        }
         continue;
       }
 
@@ -236,7 +292,10 @@
       const keys = new Set([...Object.keys(lf), ...Object.keys(cf)]);
       for (const key of keys) {
         if (key === "present" || key === "text") continue; // text is an object container
-        const { pass, delta } = cmp(lf[key], cf[key], tol);
+        // `opacity` is unitless (0..1) and must not ride the PIXEL tolerance here either — the
+        // same category error as in --visual above, and strict is the mode that claims to compare
+        // EVERYTHING (harness/fixtures/38-opacity-painted-property.js).
+        const { pass, delta } = cmp(lf[key], cf[key], key === "opacity" ? OPACITY_TOL : tol);
         compared++;
         if (!pass || opts.all) {
           rows.push({ target: name, prop: key, live: lf[key], clone: cf[key], delta, pass });
@@ -530,12 +589,26 @@
     };
 
     const depth = (e) => { let d = 0; while ((e = e.parentElement)) d++; return d; };
+    // An image's PIXELS are a painted mark, and the box is not the image — a 404'd <img> sized by
+    // CSS has exactly the box the real photo has. Schema-identical with browser-capture.js's
+    // glyphBox (chrono24: 10 unrendered watch photos passed 5911/5911 comparisons).
+    const imgOf = (el) => (el.tagName === "IMG" ? el : el.querySelector("img"));
+    const imgPaint = (el) => {
+      const im = imgOf(el);
+      if (!im) return null;
+      return { painted: !!(im.complete && im.naturalWidth > 0), naturalW: im.naturalWidth, naturalH: im.naturalHeight };
+    };
     const glyphBox = (el) => {
-      const wrap = (b, extra) => ({
-        cx: num(b.left + b.width / 2), cy: num(b.top + b.height / 2),
-        top: num(b.top), bottom: num(b.bottom), w: num(b.width), h: num(b.height),
-        ...extra,
-      });
+      const ip = imgPaint(el);
+      const wrap = (b, extra) => {
+        const o = {
+          cx: num(b.left + b.width / 2), cy: num(b.top + b.height / 2),
+          top: num(b.top), bottom: num(b.bottom), w: num(b.width), h: num(b.height),
+          ...extra,
+        };
+        if (ip) { o.painted = ip.painted; o.naturalW = ip.naturalW; o.naturalH = ip.naturalH; }
+        return o;
+      };
       const svg = el.tagName.toLowerCase() === "svg" ? el : el.querySelector("svg");
       if (svg) {
         const shapes = [...svg.querySelectorAll("path,circle,rect,polygon,polyline,line,ellipse,use")];
@@ -567,6 +640,19 @@
       let p = el.previousElementSibling;
       while (p && (NON_RENDERED.test(p.tagName) || getComputedStyle(p).display === "none")) p = p.previousElementSibling;
       return p;
+    };
+
+    // OPACITY IS A PAINTED MARK, AND IT IS INHERITED BY COMPOSITION (harness/fixtures/38-opacity-painted-property.js).
+    // Schema-identical to browser-capture.js's effectiveOpacity — the two capture paths must
+    // record the same fields or the diff compares a snapshot against a schema it never saw.
+    const effectiveOpacity = (el) => {
+      let o = 1;
+      for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+        const v = parseFloat(getComputedStyle(n).opacity);
+        if (!Number.isNaN(v)) o *= v;
+        if (o === 0) break;
+      }
+      return num(o);
     };
 
     // FULL measurement of one element — every property that can shift a pixel.
@@ -618,6 +704,7 @@
         // the colour actually painted behind this mark (self or nearest painted
         // ancestor) — so a wrong announcement-bar / button / badge colour is caught
         bg: paintedBg(el),
+        opacity: effectiveOpacity(el), // the EFFECTIVE (composited) opacity — compared by --visual
       };
       if (want && want.text) {
         out.text = textBox(el);
@@ -802,7 +889,7 @@
         "\n  edit pxTargets to add elements; pxRegion to scope the search"
     );
   } else if (typeof module !== "undefined" && module.exports) {
-    module.exports = { diffSnapshots, formatDiff, flatten, inspectDiff, formatInspect };
+    module.exports = { diffSnapshots, formatDiff, flatten, inspectDiff, formatInspect, viewportMismatch };
     if (require.main === module) {
       const fs = require("fs");
       // Parse args properly: --tol consumes the NEXT token as its value (the old
@@ -851,6 +938,20 @@
         const res = inspectDiff(a, b, opts);
         console.log(formatInspect(res));
         process.exit(res.ok ? 0 : 1); // "ok" = zero PAINT differences
+      }
+      // The pair must have been measured in the SAME viewport or the comparison is meaningless:
+      // getBoundingClientRect() is viewport-relative, so a position:fixed element's y is
+      // `innerHeight - offset` and every vh/dvh-based box is a different size. Diffing across
+      // viewports invents deltas on a page where nothing moved (#23 — a measurement must be
+      // invariant under the instrument's own accidents). The gate refuses this pair
+      // (workflow.js); so must the tool RUNBOOK Step 4 tells you to run by hand, or the same
+      // phantom failures arrive with no cause named. Exit 2 (bad input), NOT 1 (diff failure):
+      // nothing is wrong with the clone — the pair is unusable. A snapshot predating the field
+      // reads "unknown", not "mismatched", and is compared as before.
+      const vpRefusal = viewportMismatch(a, b);
+      if (vpRefusal) {
+        console.error("✗ " + vpRefusal);
+        process.exit(2);
       }
       const res = diffSnapshots(a, b, opts);
       console.log(formatDiff(res));

@@ -52,6 +52,18 @@ const battery = [
   ["compat-mode",        "defect", textEl(), textEl(), "quirks vs standards doc mode (#18)", { liveMode: "BackCompat", cloneMode: "CSS1Compat" }],
   ["letter-spacing",     "defect", textEl(), textEl({ font: { spacing: 2 } }), "0.7 vs 2 (#2)"],
   ["font-size",          "defect", textEl(), textEl({ font: { size: 16 } }), "14 vs 16 (#3)"],
+  // A LOST ISLAND — live paints the leaf, the clone has nothing there. On chrono24 the capture's
+  // own cloneNode(true) destroyed <c24-main-search-app>'s subtree (an upgraded custom element
+  // re-runs its constructor when cloned), so the main search bar was captured as an empty mount
+  // point. Whatever the cause (dropped subtree, unmounted island, stripped section), a painted
+  // live leaf with no clone counterpart is a hole and the gate must FAIL it
+  // (harness/fixtures/31-custom-element-subtree.js).
+  ["lost-island",        "defect", textEl(), { present: false }, "live paints it, clone has nothing (fixtures/31-custom-element-subtree.js)"],
+  // THE BOX IS NOT THE IMAGE. A 404'd <img> sized by CSS has EXACTLY the box the real photo has —
+  // same rect, same glyph cx/cy/w/h, same bg, still `present`. chrono24 shipped 10 grey holes where
+  // the "most popular models" watch photos belong and the sweep passed 0/6002; the reviewer's first
+  // words were "the images are not rendered". `complete && naturalWidth > 0` is the whole test.
+  ["image-not-painted",  "defect", gfxEl({ glyph: { painted: true } }), gfxEl({ glyph: { painted: false } }), "live's image paints, the clone's is a grey hole (fixtures/36-image-not-painted.js)"],
   // ── CONTROLS — a correct gate PASSES each (no false positive) ──
   ["identical-text",     "control", textEl(), textEl(), "same in every paint prop"],
   ["identical-gfx",      "control", gfxEl(), gfxEl(), "same glyph"],
@@ -64,6 +76,23 @@ const battery = [
   // adversarial controls — false-positive hunters for the strut gate (#17)
   ["adv-strut-same-normal","control", textEl({ font: { strut: "normal" } }), textEl({ font: { strut: "normal" } }), "same technique on both → pass"],
   ["adv-strut-old-schema","control", textEl(), textEl({ font: { strut: 16 } }), "one capture predates strut → skipped, no flag"],
+  // adversarial control — the false-positive hunter for the lost-island defect. chrono24
+  // ships TWO Vue mounts marked identically (`data-v-app`): <c24-main-search-app> (22 nodes) and
+  // <c24-toasts-app> — and the toasts app is FAITHFULLY EMPTY on live too (no toast to show). A
+  // gate that flags "declares a mount, paints nothing" would fail the clone for reproducing live
+  // exactly (#25). Absent on BOTH sides is a match, not a hole — only live-vs-clone can tell the
+  // two apart, which is why this stayed a capture fix and never became a single-artifact lint rule.
+  ["adv-absent-both",    "control", { present: false }, { present: false }, "faithfully-empty mount on both → pass (#25)"],
+  // adversarial controls — the false-positive hunters for the image-painted gate. A gate that
+  // flagged any of these would fail clones that are CORRECT.
+  ["adv-image-painted-both","control", gfxEl({ glyph: { painted: true } }), gfxEl({ glyph: { painted: true } }), "both images paint → pass"],
+  // live's own image is broken (a 404 on the SITE). The clone reproduces the broken image
+  // faithfully — that zero box IS the site's rendering, and calling it a hole is #25's mistake.
+  ["adv-image-broken-both","control", gfxEl({ glyph: { painted: false } }), gfxEl({ glyph: { painted: false } }), "broken on BOTH → faithful, not a hole (#25)"],
+  // live picks the 2x srcset candidate, the clone the 1x: both PAINT, natural sizes differ. Gating
+  // naturalW/H (instead of the boolean) would fail a clone that renders identically.
+  ["adv-image-srcset-candidate","control", gfxEl({ glyph: { painted: true, naturalW: 544, naturalH: 664 } }), gfxEl({ glyph: { painted: true, naturalW: 272, naturalH: 332 } }), "2x vs 1x candidate, both paint → pass"],
+  ["adv-image-old-schema","control", gfxEl(), gfxEl({ glyph: { painted: true } }), "one capture predates `painted` → skipped, no flag"],
   // adversarial controls — false-positive hunters for the compat-mode gate (#18)
   ["adv-mode-same",      "control", textEl(), textEl(), "both quirks → pass", { liveMode: "BackCompat", cloneMode: "BackCompat" }],
   ["adv-mode-old-schema","control", textEl(), textEl(), "one capture predates mode → skipped, no flag", { liveMode: "BackCompat" }],

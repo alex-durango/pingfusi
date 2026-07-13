@@ -43,19 +43,31 @@ authored line-heights, and drawing primitives by construction).
    measurement — never fetch+eval), then let the page **settle mechanically** — do not
    hand-scroll and hope:
    ```js
-   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0, stable, sweeps, heights}
+   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0, stable, sweeps, heights, imagesPending, pendingImageSrcs}
    ```
-   It walks the full page (firing IntersectionObservers + lazy loaders), then **waits for the
-   document height to HOLD STILL**, re-sweeping if it grew, and returns to top. Two fields in
-   the return value are load-bearing:
+   It walks the full page **scrolling instantly** (a plain `scrollTo(0, y)` obeys the page's own
+   `scroll-behavior: smooth` and becomes an rAF animation that never lands in a background tab —
+   the sweep then visits nothing while the height sits perfectly still; locked by
+   `harness/fixtures/34-settle-instant-scroll.js`), firing IntersectionObservers + lazy loaders;
+   then it **waits for the document height to HOLD STILL**, re-sweeping if it grew, waits for every
+   rendered image to finish loading, and returns to top. The load-bearing fields:
 
-   - **`stable: false` ⇒ STOP. Do not capture.** The page was still growing; the DOM you take
-     now is a page that never existed. Read `heights` and find out what is still mounting.
+   - **`stable: false` ⇒ STOP. Do not capture.** Either the page was still growing (read `heights`
+     and find out what is still mounting), or an image is still in flight (read `imagesPending` /
+     `pendingImageSrcs`). Either way the DOM you take now is a page that never existed.
+   - `imagesPending > 0` ⇒ a rendered `<img>` has not landed. An unloaded image is a **zero-width
+     box** that reflows its row when it arrives, so live.json would record a layout no user ever
+     sees — and the gate would then blame the *clone* for the difference (chrono24's footer QR
+     shifted two app-store badges 90px). Locked by `harness/fixtures/32-settle-image-readiness.js`.
+     A genuine 404 is `complete:true` and does **not** block: its zero box is the site's real
+     rendering, and the clone must reproduce it.
    - `frozenOpacity0 > 0` ⇒ some scroll-reveals still haven't fired — inspect them first.
 
    *Reaching the bottom is not the same as being settled* — a section that hydrates a beat after
    the walk passes it is missing from the capture, hence from the leaf enumeration, hence from
-   every gate (LEARNINGS #19; locked by `harness/fixtures/30-scroll-settle-stability.js`).
+   every gate (LEARNINGS #19; locked by `harness/fixtures/30-scroll-settle-stability.js`). And
+   *height holding still is not the same as the page being ready* — nothing is mounting, but the
+   images may still be arriving.
    **The tool checks this; your job is to believe it and not capture anyway.**
 2. **Or do steps 1–2 (and the measurement capture) as ONE call** — with a hosted
    session open (Step 0), on the live tab:
@@ -63,7 +75,10 @@ authored line-heights, and drawing primitives by construction).
    await pxCaptureAll('<sink_url>')                    // settle → enumerate → live.json + coverage.json + dom.html
    ```
    and later on the clone tab: `await pxCaptureAll('<sink_url>', {prefix:'clone'})`.
-   READ the returned report before advancing: `ok:false`/non-empty `failed` means a
+   READ the returned report before advancing: `aborted:"settle-not-stable"` means the
+   page never settled and NOTHING was captured (the one-call path enforces step 1's
+   STOP contract — drop to the granular steps and inspect settle.heights /
+   settle.imagesPending); `ok:false`/non-empty `failed` means a
    delivery didn't land; `settle.frozenOpacity0 > 0` means reveals never fired;
    `leaves`/`byKind` should be plausible for the page (a media-heavy page with
    byKind.media of 0 is under-enumeration). Then `pingfusi capture pull <name> --all`.

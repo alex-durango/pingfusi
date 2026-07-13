@@ -1,0 +1,5 @@
+{
+  "kind": "control",
+  "note": "dtf.com/en-us (Din Tai Fung, Next.js + GSAP + Lenis) at 1728px, region=page: 132 painted leaves, --visual 1905/1905, strict 6211/6211, coverage 132/132, clone-lint clean, behavior gate green. Captured build + fixes.js (video srcs restored, frozen chevron transform cleared). No future gate change may turn any of these rows red.",
+  "from": "dtf"
+}

@@ -1,0 +1,5 @@
+{
+  "kind": "defect",
+  "note": "pxDomHtml serializes via documentElement.cloneNode(true) (LEARNINGS #24); cloning an UPGRADED custom element re-runs its constructor and drops its subtree, so chrono24's main search bar (c24-main-search-app, 22 nodes) captured as an empty <!----> mount point and the clone shipped without it",
+  "from": "chrono24"
+}

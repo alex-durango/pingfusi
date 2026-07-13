@@ -45,6 +45,14 @@ const artifactBattery = [
   ["lint-agent-dom", "defect",
     `<header>real</header><div id="claude-agent-glow-border"><div id="claude-agent-glow-border-inner"></div></div><div id="claude-phantom-cursor"></div>`,
     "the automation's own overlay baked into the clone — the instrument painting on the page (LEARNINGS #24)"],
+  // The SAME extension, a THIRD prefix. #24 keyed the rule on claude-agent-* and claude-phantom-*
+  // and stopped there; the "Claude is active in this tab group" toast ships under claude-static-*.
+  // On dtf all five nodes were baked into the shipped clone and THIS rule exited 0 on it — the
+  // backstop walked past the very thing it exists to catch. A guard that enumerates two of three
+  // prefixes is a guard the instrument walks around.
+  ["lint-agent-static-dom", "defect",
+    `<header>real</header><div id="claude-static-indicator-container"><button id="claude-static-chat-button"></button><div id="claude-static-chat-tooltip">Open chat</div><button id="claude-static-close-button"></button><div id="claude-static-close-tooltip">Dismiss</div></div>`,
+    "the automation's 'Claude is active' toast baked into the clone — #24's namespace, enumerated incompletely"],
   ["lint-empty-mount-framework", "defect",
     `<h1>gorjana</h1><div class="recommendations" data-vue="recommendations"><layers-recommendations-slider></layers-recommendations-slider></div>`,
     "a framework mount (data-vue) that renders nothing — no config blob, so the old rule walked past it"],
@@ -65,6 +73,12 @@ const artifactBattery = [
   ["adv-lint-site-claude-name", "control",
     `<div id="claude-monet-collection">necklaces</div><p class="claude">x</p>`,
     "a site's OWN 'claude-*' id/class is not the automation's overlay — the rule is a namespace, not a substring"],
+  // The false-positive hunter for the widened namespace: widening to claude-static-* must not
+  // start eating a site's own markup. The rule is an ID NAMESPACE, never a substring — a site is
+  // free to ship a static-* id, or the word "claude", or both.
+  ["adv-lint-site-static-name", "control",
+    `<div id="static-header">menu</div><section id="claude-monet-static-gallery">Water Lilies</section><p class="claude-static">x</p>`,
+    "a site's own 'static-*' id, a 'claude…static' id of its own, and a claude-static CLASS → none are the extension's nodes"],
   ["adv-lint-mount-that-renders", "control",
     `<div data-vue="product-grid"><article>Lou Hoops</article><article>Wilder</article></div>`,
     "a framework mount that DOES render → never flagged (the rule needs BOTH: declares a mount, paints nothing)"],
@@ -91,11 +105,23 @@ const READINESS_KIND = {
   "settle-lazy-growth": "defect",
   "adv-settle-static-page": "control",
   "adv-settle-infinite-feed": "control",
+  "settle-image-pending": "defect",
+  "adv-settle-images-loaded": "control",
+  "adv-settle-hidden-pixel": "control",
+  "adv-settle-image-in-closed-flyout": "control",
+  "settle-smooth-scroll": "defect",
+  "adv-settle-auto-scroll": "control",
 };
 const READINESS_NOTE = {
   "settle-lazy-growth": "the page grew after the walk passed the section (4439 → 5877) — capturing now yields a page that never existed (fixtures/30-scroll-settle-stability.js)",
   "adv-settle-static-page": "a page that never grows → settle reports its true height, raises no alarm",
   "adv-settle-infinite-feed": "an endlessly-growing page must TERMINATE, not hang — a silent hang is not better than a silent miss",
+  "settle-image-pending": "the height held still while a lazy <img> was still in flight — a 0-width box that reflows its row when it lands (chrono24's footer QR shifted two badges 90px, and the gate blamed the CLONE). Height-stability is not readiness (fixtures/32-settle-image-readiness.js)",
+  "adv-settle-images-loaded": "every image has landed → the page IS ready; the settle must not invent an alarm",
+  "adv-settle-hidden-pixel": "a never-loading display:none tracking pixel cannot reflow anything — refusing a capture over one would block every page with analytics",
+  "adv-settle-image-in-closed-flyout": "a pending image inside a display:none ANCESTOR (chrono24's closed header flyout) has no layout box — its own computed display is still \"block\", so only the box test reveals it renders nothing. The naive display-only rule blocked the capture forever",
+  "settle-smooth-scroll": "the site sets `scroll-behavior: smooth`, so the sweep's scrollTo(0,y) became an rAF animation that never landed — the settle walked NOTHING and still said stable:true (chrono24). A measurement scroll must be instant (fixtures/34-settle-instant-scroll.js)",
+  "adv-settle-auto-scroll": "a page with no smooth CSS already scrolled fine — the instant scroll must not change that",
 };
 
 // Score BOTH layers with one (lintHtml, captureSrc) pair, so the A/B can run the BASELINE's own
