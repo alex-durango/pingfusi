@@ -264,7 +264,11 @@ function buildSpec(name, draftUrl, region, changelog, context) {
     // — which demands an EXACT match, and must, or it becomes the sentiment read the gate exists
     // to prevent — refuses it. So SAY WHAT ACTUALLY WORKS: if no buttons appear, type the verdict
     // VERBATIM. The wording is the only thing standing between a real approval and a wasted round.
-    { text: `FINAL REQUIRED STEP — verdict. Buttons? Pick one. NO buttons (known bug)? COPY ONE OF THESE LINES EXACTLY as your comment here: "${verdicts[0]}" / "${verdicts[1]}" / "${verdicts[2]}". A paraphrase does not count.`, check: null }
+    // The verdict strings ride on the STEP as `options`: option-bearing steps render as
+    // pickers in today's reviewer app even though the round-level verdict button does not
+    // (app update pending) — so the verdict is TAPPABLE now. The typed-copy fallback text
+    // stays for renders where even step options fail.
+    { text: `FINAL REQUIRED STEP — verdict. Buttons? Pick one. NO buttons (known bug)? COPY ONE OF THESE LINES EXACTLY as your comment here: "${verdicts[0]}" / "${verdicts[1]}" / "${verdicts[2]}". A paraphrase does not count.`, options: verdicts, check: null }
   );
   // What changed since the reviewer's last round, stated UP FRONT — one round's verdict was
   // literally "did you fix anything?": the round's substantive change was invisible without
@@ -297,7 +301,7 @@ const saveHq = (name, hq) => fs.writeFileSync(hqPath(name), JSON.stringify(hq, n
 
 function pushRound(name, ping_id, spec, approve) {
   const hq = loadHq(name);
-  hq.rounds.push({ ping_id, draft_url: (spec && spec.draft_url) || null, region: (spec && spec.title) || null, approve_verdicts: approve, filed_at: new Date().toISOString(), last: null, checked_at: null });
+  hq.rounds.push({ ping_id, draft_url: (spec && spec.draft_url) || null, region: (spec && spec.title) || null, approve_verdicts: approve, verdict_options: (spec && spec.verdict_options) || null, filed_at: new Date().toISOString(), last: null, checked_at: null });
   saveHq(name, hq);
   return hq.rounds.length;
 }
@@ -436,6 +440,29 @@ async function main() {
     // still fails — as it must.
     const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
     const verdictStepIndex = Math.max(0, ((sc.responses || [])[0]?.steps_result || []).length - 1);
+    // A verdict TAPPED on the verdict step: the step carries the verdict strings as
+    // `options` precisely because option-bearing STEPS render as pickers in today's app
+    // while the round-level button does not (update pending). A tapped option is the
+    // verdict through a working control — accepted for approval AND rejection (a tapped
+    // "clearly different" is a verdict, not a missing one), matched exactly against the
+    // round's own declared list, receipted as verdict_step_answer so it is never mistaken
+    // for a round-level pick. Remove with the free-text bridge below once the real button
+    // ships.
+    const allVerdicts = round.verdict_options || round.approve_verdicts || [];
+    let answerMatched = 0;
+    (sc.responses || []).forEach((raw, i) => {
+      const r = resp[i];
+      if (!r || r.verdict != null) return;
+      const ans = norm((((raw || {}).steps_result || [])[verdictStepIndex] || {}).answer);
+      if (!ans) return;
+      const hit = allVerdicts.find((v) => norm(v) === ans);
+      if (hit) { r.verdict = hit; r.verdict_source = "verdict_step_answer"; answerMatched++; }
+    });
+    if (answerMatched) {
+      round.verdict_source = "verdict_step_answer";
+      saveHq(name, hq);
+      console.log(`⚠ round ${n}: ${answerMatched} verdict(s) came from the verdict STEP's option pick — the round-level button still doesn't render (app update pending); receipted as verdict_step_answer, never as a real pick.`);
+    }
     const comments = Array.isArray(sc.comments) ? sc.comments : [];
     let freeTextMatched = 0;
     for (const r of resp) {

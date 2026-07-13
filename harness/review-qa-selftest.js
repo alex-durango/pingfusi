@@ -232,6 +232,29 @@ fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringi
 }));
 ok(run(["verify", NAME]).code === 1, "approving-sounding prose on the verdict step ('looks good to me') still fails — the exception is an exact match, not a sentiment read");
 
+// The verdict strings now RIDE ON THE STEP as `options` — option-bearing steps render as
+// pickers in today's reviewer app even while the round-level button is missing — so a
+// TAPPED option arrives as the verdict step's steps_result `answer` and must count as the
+// verdict, for approval AND rejection, receipted as verdict_step_answer. Paraphrases in
+// the same field still fail: this is the button's information through a working control,
+// never a sentiment read.
+ok(Array.isArray(lastStep.options) && lastStep.options.join("|") === spec.verdict_options.join("|"), "the verdict step carries the round's verdict strings as tappable options");
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: null, free_text: null, steps_result: [{}, {}, {}, { answer: "Header identical" }] }],
+}));
+{ const r = run(["verify", NAME]); ok(r.code === 0 && /verdict_step_answer/.test(r.out), "a TAPPED approve option on the verdict step passes and is receipted as verdict_step_answer"); }
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: null, free_text: null, steps_result: [{}, {}, {}, { answer: "Header clearly different" }] }],
+}));
+{ const r = run(["verify", NAME]); ok(r.code === 1 && /NOT approved/.test(r.out) && !/NO verdict pick/.test(r.out), "a TAPPED rejection is a REJECTION — the round fails as not-approved, never as verdict-less"); }
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: null, free_text: null, steps_result: [{}, {}, {}, { answer: "header looks identical" }] }],
+}));
+ok(run(["verify", NAME]).code === 1, "a paraphrase in the tapped-answer field still fails — exact match only");
+
 // and it must NOT fire when the exact verdict string appears on some OTHER step (the opendesign trap)
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
   status: "complete", n_received: 1, n_target: 1,
