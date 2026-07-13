@@ -22,7 +22,11 @@
 //   node harness/review-qa.js template <name> --draft <public-url> [--region "the header"]
 //       print the review spec JSON (to file manually via the review MCP)
 //   node harness/review-qa.js file     <name> --draft <public-url> [--region "…"]
-//       generate the spec AND file it; records the round in targets/<name>/review-qa.json
+//                                      [--context "one line: what site/page this is"]
+//       generate the spec AND file it; records the round in targets/<name>/review-qa.json.
+//       --context is the agent's slot for reviewer-facing color (what the page is, where
+//       to look) — capped at 200 chars; the site name, url and round number are filled
+//       in automatically from receipts.
 //   node harness/review-qa.js record   <name> <ping_id> [--approve "Verdict A,Verdict B"]
 //       adopt a round filed elsewhere (e.g. via the MCP) as the current round
 //   node harness/review-qa.js verify   <name>
@@ -123,8 +127,18 @@ async function rpc(name, args, timeoutMs) {
 // ── the scope-pinned review template ─────────────────────────────────────────
 const slugToWords = (s) => s.replace(/[_-]+/g, " ").trim();
 
-function buildSpec(name, draftUrl, region, changelog) {
+function buildSpec(name, draftUrl, region, changelog, context) {
   const target = readJson(path.join(targetDir(name), "target.json"));
+  // The reviewer is a person glancing at a queue: the title and description must say
+  // WHAT SITE this is and which round, in plain words — "Compare the cloned region:
+  // clone vs original" told them nothing. Site + round are derived from receipts the
+  // kit already holds; `--context` is the agent's one sanctioned slot for free-text
+  // color (capped + flattened — the CONTRACT parts below stay kit-authored).
+  let site = target.url;
+  try { site = new URL(target.url).hostname.replace(/^www\./, ""); } catch (e) {}
+  let roundNo = 1;
+  try { roundNo = (readJson(hqPath(name)).rounds || []).length + 1; } catch (e) {}
+  const ctx = context && context.trim() ? " " + context.trim().replace(/\s+/g, " ").slice(0, 200) : "";
   let leaves = [];
   try {
     const cov = readJson(path.join(targetDir(name), "coverage.json"));
@@ -135,7 +149,7 @@ function buildSpec(name, draftUrl, region, changelog) {
   const cap = stripped.charAt(0).toUpperCase() + stripped.slice(1);
   const verdicts = [`${cap} identical`, `${cap} slightly off`, `${cap} clearly different`];
   const steps = [
-    { text: `Open both pages at the same window size. This review is ONLY about ${R}. Everything outside it is out of scope — ignore it for your verdict.`, check: null },
+    { text: `Open the original and the clone side by side at the same window size. You are judging ${R} of ${site}. Everything outside it is out of scope — ignore it for your verdict.`, check: null },
   ];
   // Documented deviations are surfaced TO THE REVIEWER, or the gate's escape hatch and the
   // reviewer's expectations diverge forever: one round re-flagged bento cells that
@@ -236,8 +250,8 @@ function buildSpec(name, draftUrl, region, changelog) {
   return {
     url: target.url,
     draft_url: draftUrl,
-    title: `Compare ${R}: clone vs original`,
-    instructions: `Compare ONLY ${R} between the original site and the clone, side by side at the same width. Everything outside ${R} is out of scope.${changeNote}${deviationNote} When done, you MUST pick a verdict button — a comment-only review cannot be accepted.`,
+    title: `${site} — is the clone identical? (round ${roundNo})`,
+    instructions: `You are reviewing a clone of ${site} (${target.url}), round ${roundNo}.${ctx} Compare ONLY ${R}, side by side at the same width — everything outside it is out of scope.${changeNote}${deviationNote} When done, you MUST pick a verdict button — a comment-only review cannot be accepted.`,
     steps,
     verdict_options: verdicts,
     approve_verdicts: [verdicts[0]],
@@ -309,7 +323,7 @@ async function main() {
       console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.");
       process.exit(1);
     }
-    const spec = buildSpec(name, draft, opt("--region"), opt("--changelog"));
+    const spec = buildSpec(name, draft, opt("--region"), opt("--changelog"), opt("--context"));
     if (cmd === "template") { console.log(JSON.stringify(spec, null, 2)); return; }
     // A round filed against a dead/wrong draft url burns the whole review round. Re-verify
     // AT FILE TIME: reachable is required; byte-identical to clone/index.html is expected

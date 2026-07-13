@@ -40,7 +40,8 @@ not by the user, and never by you.
      then `pingfusi capture pull <NAME> --all` retrieves everything integrity-verified.
      Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
    - All reviewer contact through `pingfusi review <NAME> …` (file/poll/verify) — never through
-     any MCP directly. Refiles carry `--changelog "what changed"`.
+     any MCP directly. First filings carry `--context "one line: what this site/page is and
+     where to look"` (the reviewer sees it); refiles carry `--changelog "what changed"`.
    - No pingfusi login (doctor shows it missing)? STOP and tell the user to run
      `pingfusi setup` — review rounds require the login; there is no offline review path.
    - If anything blocks filing a round, STOP and tell the user exactly what failed —

@@ -42,7 +42,7 @@ console.log("review-qa-selftest — the review phase tooling");
 const t = run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the top navigation header"]);
 ok(t.code === 0, "template generates");
 const spec = JSON.parse(t.out);
-ok(/ONLY about the top navigation header/.test(spec.steps[0].text), "step 1 scope-pins the comparison region");
+ok(/judging the top navigation header of /.test(spec.steps[0].text) && /out of scope/.test(spec.steps[0].text), "step 1 scope-pins the comparison region (names it + rules everything else out of scope)");
 ok(spec.steps.some((s) => /logo, nav product/.test(s.text) && s.options), "per-leaf compare steps generated from coverage.json (slugs → words)");
 // Leaves are packed DENSELY (as many per step as the 300-char text cap allows), not at a fixed
 // 5-per-step: the fixed rule blew the service's 20-STEP cap the first time a target was gated at

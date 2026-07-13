@@ -20,7 +20,8 @@ own source, repeat until an approving verdict.
    reviewer-loop-only path — no pixel gates, the review verdict is the check.
 4. **Publish**: `pingfusi tunnel <name> --url http://localhost:<port>` (byte-verified public
    URL for the reviewer).
-5. **The loop**: `pingfusi review <name> file [--region "…"]` → tell the user the round is
+5. **The loop**: `pingfusi review <name> file [--region "…"] [--context "one line: what
+   this site/page is"]` → tell the user the round is
    filed with an independent reviewer on the pingfusi service (the reviewer pins what's
    wrong + picks a verdict — the user does not review). Immediately after filing,
    start `pingfusi wait <ping_id>` as a BACKGROUND task — a parked agent is not resumed
