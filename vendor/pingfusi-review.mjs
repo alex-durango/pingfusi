@@ -1194,7 +1194,7 @@ async function waitForResultsCli(rest) {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "get_test_results", arguments: { ping_id: pingId } },
+        params: { name: "cpyany_test_results", arguments: { ping_id: pingId } },
       }),
     });
     const raw = await res.text();
@@ -1222,7 +1222,7 @@ async function waitForResultsCli(rest) {
     if (Date.now() >= deadline) {
       console.log(
         `Timed out after ${timeoutSec}s — still pending (${received}/${sc.n_target ?? "?"} results). ` +
-          `Run \`pingfusi wait ${pingId}\` again or check later with get_test_results.`
+          `Run \`pingfusi wait ${pingId}\` again or check later with cpyany_test_results.`
       );
       process.exit(2);
     }
