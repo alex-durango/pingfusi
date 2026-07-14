@@ -4,7 +4,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { checkNode, checkReviewToken, report } = require("./doctor.js");
+const { checkNode, checkKitVersion, checkReviewToken, report } = require("./doctor.js");
 const { install } = require("./agent-setup.js");
 
 let failed = 0;
@@ -19,6 +19,12 @@ ok(checkReviewToken(() => "tok_abc").ok, "token resolver returning a token passe
 const noTok = checkReviewToken(() => null);
 ok(!noTok.ok && /pingfusi setup/.test(noTok.fix), "missing token fails, fix names `pingfusi setup`");
 ok(!checkReviewToken(() => { throw new Error("boom"); }).ok, "a throwing resolver counts as no token, never crashes doctor");
+// version skew: two developers on "the same kit", one stale — doctor must surface it, but
+// never block on the npm registry (offline is a place people work)
+ok(checkKitVersion("0.7.1", "0.7.1").ok, "installed == npm latest passes");
+const stale = checkKitVersion("0.7.0", "0.7.1");
+ok(!stale.ok && !stale.required && /0\.7\.1/.test(stale.detail) && /npm i -g pingfusi@latest/.test(stale.fix), "a stale install warns (never blocks) and the fix is the upgrade command");
+ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", null).detail), "unreachable registry skips the check instead of failing doctor");
 
 // report(): exit code reflects REQUIRED failures only; optional misses are warnings
 {

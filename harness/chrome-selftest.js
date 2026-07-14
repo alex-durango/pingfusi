@@ -38,6 +38,7 @@ const check = (label, ok, detail) => {
   for (const f of ["--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"])
     check(`throttle-defeating flag present: ${f}`, flags.includes(f));
   check("port 0 → Chrome picks and writes DevToolsActivePort", flags.includes("--remote-debugging-port=0"));
+  check("classic scrollbars hidden (layout width must equal the normalized viewport)", flags.includes("--hide-scrollbars"));
   check("user-data-dir + window-size carried", flags.includes("--user-data-dir=/tmp/prof") && flags.includes("--window-size=1512,1000"));
   check("no first-run noise", flags.includes("--no-first-run") && flags.includes("--no-default-browser-check"));
   check("flagsFor omits --headless unless asked (the runner's DEFAULT is headless — policy lives there)", !flags.some((f) => f.startsWith("--headless")));
@@ -48,6 +49,32 @@ const check = (label, ok, detail) => {
 check("port file parses", parseDevToolsActivePort("62444\n/devtools/browser/abc-def") === 62444);
 check("partial write → null (keep polling)", parseDevToolsActivePort("") === null && parseDevToolsActivePort("garbage\n/x") === null);
 check("zero/negative → null", parseDevToolsActivePort("0\n/x") === null && parseDevToolsActivePort("-5") === null);
+
+// ── resolveViewport + viewportMismatch: the "rendered size ≠ window size" fix ──
+// (measured on heyaristotle: headless dpr 1 vs the dev's real 2, innerHeight 963 from a
+// 1050 window, and a width-only conditional that never fired — scrollHeight changed
+// 6526→6554 under the corrected viewport, i.e. the RENDER differed, not just numbers)
+{
+  const { resolveViewport, viewportMismatch } = require("./chrome.js");
+  const d = resolveViewport({});
+  check("defaults are a real Mac: 1440×982 @2x, sources say so", d.width === 1440 && d.height === 982 && d.dpr === 2 && d.sources.dpr === "default");
+  const t = resolveViewport({ target: { width: 1512, height: 900, dpr: 1 } });
+  check("explicit target.json fields win (even dpr 1)", t.width === 1512 && t.height === 900 && t.dpr === 1 && t.sources.height === "target.json");
+  const l = resolveViewport({ target: { width: 1512 }, live: { viewport: { width: 1512, height: 862, dpr: 2 } } });
+  check("an existing live.json's viewport fills the gaps (mode-match: compare like with like)", l.width === 1512 && l.height === 862 && l.sources.height === "live.json" && l.sources.width === "target.json");
+  const asked = { width: 1512, height: 982, dpr: 2 };
+  check("matching read → no mismatch", viewportMismatch(asked, { iw: 1512, cw: 1512, ih: 982, dpr: 2 }) === null);
+  check("dpr drift named", /devicePixelRatio 1/.test(viewportMismatch(asked, { iw: 1512, cw: 1512, ih: 982, dpr: 1 })));
+  check("short viewport named", /innerHeight 963/.test(viewportMismatch(asked, { iw: 1512, cw: 1512, ih: 963, dpr: 2 })));
+  check("empty read refused", typeof viewportMismatch(asked, null) === "string");
+  // a clientWidth gap is a NOTE, never fatal: after --hide-scrollbars it can only mean the
+  // SITE styles a layout-consuming root scrollbar — which is how that page renders for real
+  // users too (measured: a ::-webkit-scrollbar-styled page reads cw 1497 under iw 1512 even
+  // on an overlay-scrollbar Mac; refusing it would hard-fail a legitimate page everywhere)
+  const { viewportScrollbarNote } = require("./chrome.js");
+  check("clientWidth gap is NOT a mismatch (site-authored scrollbars are the page)", viewportMismatch(asked, { iw: 1512, cw: 1497, ih: 982, dpr: 2 }) === null);
+  check("…but it IS a note, naming the gap", /15px under/.test(viewportScrollbarNote(asked, { iw: 1512, cw: 1497, ih: 982, dpr: 2 })) && viewportScrollbarNote(asked, { iw: 1512, cw: 1512, ih: 982, dpr: 2 }) === null);
+}
 
 // ── evaluateProbe: the admissibility verdict, refusals by name ─────────────────
 {

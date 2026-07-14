@@ -61,6 +61,7 @@ const GOOD_SNAP = {
 // script = { probe, snap } per tab-open order — lets one server serve clone-then-live runs.
 function fakeChrome(script) {
   let tabN = 0;
+  const metricsCalls = []; // every Emulation.setDeviceMetricsOverride — the viewport fix is asserted on these
   const server = http.createServer((req, res) => {
     if (req.url === "/json/version") { res.end(JSON.stringify({ Browser: "FakeChrome/1.0" })); return; }
     if (req.method === "PUT" && req.url.startsWith("/json/new")) {
@@ -89,11 +90,14 @@ function fakeChrome(script) {
         if (msg.method === "Page.navigate") {
           reply({ frameId: "F1" });
           socket.write(serverFrame(0x1, JSON.stringify({ method: "Page.loadEventFired", params: {} })));
+        } else if (msg.method === "Emulation.setDeviceMetricsOverride") {
+          metricsCalls.push(msg.params);
+          reply({});
         } else if (msg.method === "Runtime.evaluate") {
           const e = msg.params.expression;
           if (e.includes("__ppkProbe")) value((acts.probes && acts.probes[Math.min(probeCalls++, acts.probes.length - 1)]) || acts.probe || GOOD_PROBE);
           else if (e === "document.title") value(acts.title || "Fake Page");
-          else if (e === "innerWidth") value(1440);
+          else if (e.includes("iw: innerWidth")) value(acts.viewportRead || { iw: 1440, cw: 1440, ih: 982, dpr: 2 });
           else if (e === "typeof pxBehaviorCapture") value("function");
           else if (e.startsWith("pxBehaviorCapture(")) value(JSON.stringify(acts.snap || GOOD_SNAP, null, 2));
           else reply({ result: { type: "undefined" } }); // injection, pxRegion, etc.
@@ -102,7 +106,7 @@ function fakeChrome(script) {
     });
     socket.on("error", () => {});
   });
-  return new Promise((r) => server.listen(0, "127.0.0.1", () => r(server)));
+  return new Promise((r) => server.listen(0, "127.0.0.1", () => { server.metricsCalls = metricsCalls; r(server); }));
 }
 
 const runnerPath = path.join(__dirname, "behavior-runner.js");
@@ -151,6 +155,20 @@ function makeTarget(work, name, extra = {}) {
     check("attestation spliced: mode + version + probe receipts", live.discovery.runner && live.discovery.runner.mode === "cdp-attached" && live.discovery.runner.chromeVersion === "FakeChrome/1.0" && live.discovery.runner.rafProbe.hz > 60 && live.discovery.runner.animProbe.measuredPxPerSec === 99.1);
     check("documentHidden recorded as measured (false)", live.discovery.documentHidden === false);
     check("next step printed", /gate t1 behavior/.test(r.out));
+    check("kit version printed at startup and recorded in the attestation", new RegExp(`pingfusi ${require("../package.json").version.replace(/\./g, "\\.")} behavior-capture`).test(r.out) && live.discovery.runner.kitVersion === require("../package.json").version);
+    // the viewport bug (measured on heyaristotle): headless renders dpr 1 + short viewport
+    // unless normalized UNCONDITIONALLY — every tab must get the full override, exact dpr
+    check("viewport normalized unconditionally on BOTH tabs (width+height+dsf, never dsf:0)", server.metricsCalls.length >= 2 && server.metricsCalls.every((m) => m.width === 1440 && m.height === 982 && m.deviceScaleFactor === 2 && m.mobile === false));
+    check("attestation records the viewport + sources", live.discovery.runner.viewport && live.discovery.runner.viewport.dpr === 2 && live.discovery.runner.viewport.sources.width === "target.json");
+    server.close();
+  }
+
+  // ── a viewport that refuses to normalize is a refusal, not a shrug ───────────
+  {
+    makeTarget(work, "t6");
+    const server = await fakeChrome([{ viewportRead: { iw: 1425, cw: 1425, ih: 982, dpr: 2 } }]);
+    const r = await run(["t6", "--side", "live", "--attach", `127.0.0.1:${server.address().port}`], work);
+    check("viewport mismatch after normalize → refused by name", r.code === 1 && /viewport did not normalize/.test(r.out) && /innerWidth 1425/.test(r.out));
     server.close();
   }
 
@@ -183,13 +201,14 @@ function makeTarget(work, name, extra = {}) {
     server.close();
   }
 
-  // ── bot-wall heuristic prints the ladder, still writes evidence ──────────────
+  // ── bot wall is an ERROR — the snapshot stays as evidence, the exit code is the
+  //    verdict (a challenge page's "behaviors" are junk the gate would compare in earnest) ──
   {
     makeTarget(work, "t5");
     const server = await fakeChrome([{ title: "Just a moment...", snap: { ...GOOD_SNAP, discovery: { ...GOOD_SNAP.discovery, elementsScanned: 19 } } }]);
     const r = await run(["t5", "--side", "live", "--attach", `127.0.0.1:${server.address().port}`], work);
-    check("challenge title → ladder printed (profile → attach → worksheet)", /bot-challenge wall/.test(r.out) && /--profile/.test(r.out) && /behavior-worksheet/.test(r.out));
-    check("wall capture still written as evidence", fs.existsSync(path.join(work, "targets", "t5", "behaviors-live.json")) && r.code === 0);
+    check("challenge title → exit 1, ladder in the ERROR (profile → attach → worksheet)", r.code === 1 && /bot-challenge wall/.test(r.out) && /--profile/.test(r.out) && /behavior-worksheet/.test(r.out));
+    check("wall snapshot still written, marked as EVIDENCE", fs.existsSync(path.join(work, "targets", "t5", "behaviors-live.json")) && /EVIDENCE of the wall/.test(r.out));
     server.close();
   }
 

@@ -253,8 +253,24 @@ async function navigate(session, url, { timeoutMs = 30000, warn = () => {} } = {
 
 // Runtime.evaluate with the runner's defaults: await promises, return by value, surface
 // page-side exceptions as Node errors (never a silent undefined).
+//
+// timeoutMs is enforced with a NODE-SIDE watchdog, not just CDP's `timeout` param: Chromium
+// implements that param as a TerminateExecution guard over the SYNCHRONOUS phase only, so an
+// awaited in-page promise sails right past it (measured: a 5s page setTimeout returned fine
+// under timeout:1000, while a synchronous busy-loop was correctly killed). A page that
+// neuters setTimeout would otherwise pend the promise forever and hang the runner with
+// Chrome still up. The param is still passed — it kills synchronous runaways cheaply.
 async function evaluate(session, expression, { awaitPromise = true, timeoutMs } = {}) {
-  const r = await session.send("Runtime.evaluate", { expression, awaitPromise, returnByValue: true, ...(timeoutMs ? { timeout: timeoutMs } : {}) });
+  const send = session.send("Runtime.evaluate", { expression, awaitPromise, returnByValue: true, ...(timeoutMs ? { timeout: timeoutMs } : {}) });
+  let r;
+  if (timeoutMs) {
+    send.catch(() => {}); // the abandoned branch must not become an unhandled rejection when the watchdog wins
+    let timer;
+    const watchdog = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`CDP: evaluate exceeded ${timeoutMs}ms (Node-side watchdog) — the page's promise never settled; is the page stalling its own timers?`)), timeoutMs); });
+    try { r = await Promise.race([send, watchdog]); } finally { clearTimeout(timer); }
+  } else {
+    r = await send;
+  }
   if (r.exceptionDetails) {
     const d = r.exceptionDetails;
     const desc = (d.exception && (d.exception.description || d.exception.value)) || d.text || "unknown page exception";
@@ -262,5 +278,6 @@ async function evaluate(session, expression, { awaitPromise = true, timeoutMs } 
   }
   return r.result ? r.result.value : undefined;
 }
+
 
 module.exports = { MAX_MESSAGE_BYTES, acceptKeyFor, encodeFrame, FrameParser, wsConnect, httpJson, version, newTab, closeTab, CdpSession, openPage, navigate, evaluate };

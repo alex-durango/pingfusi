@@ -41,6 +41,10 @@ const { serve } = require("./serve.js");
 const VIA_PPK = process.env.PPK_ENTRY === "1";
 const CMD = VIA_PPK ? "pingfusi" : "node harness/workflow.js";
 const WORK = process.cwd();
+// Printed at startup and recorded in the attestation — "which version popped this window"
+// must be answerable from the run output alone (two developers, one on a stale global,
+// spent a round of confusion on exactly that).
+const KIT_VERSION = require(path.join(__dirname, "..", "package.json")).version;
 const die = (msg) => { console.error(`✗ ${msg}`); process.exit(1); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -100,6 +104,11 @@ async function captureSide(side, url, ctx) {
     let probe = await chrome.probeEnvironment(session);
     if (!probe.verdict.ok) throw new Error(`environment refused before any capture (${side}, about:blank): ${probe.verdict.reason}`);
 
+    // Normalize the viewport UNCONDITIONALLY, before navigation — headless renders at dpr 1
+    // with a short innerHeight otherwise, which is a genuinely DIFFERENT page (wrong srcset
+    // images, wrong fold). Setting it first means the initial render is already right.
+    await chrome.normalizeViewport(session, ctx.viewport);
+
     console.log(`· ${side}: ${url}`);
     await cdp.navigate(session, url, { timeoutMs: ctx.args.navTimeout, warn: (m) => console.log(`  ⚠ ${m}`) });
     await sleep(ctx.opts.settleMs != null ? ctx.opts.settleMs : 1500); // let load-time choreography arm before probing/sweeping
@@ -107,18 +116,15 @@ async function captureSide(side, url, ctx) {
     probe = await chrome.probeEnvironment(session);
     if (!probe.verdict.ok) throw new Error(`environment refused on the loaded page (${side}): ${probe.verdict.reason}`);
 
-    // The window is part of the instrument: headful Chrome clamps --window-size to the
-    // display (phase 0: asked 1920, got 1512) — the emulation override restores the
-    // target width and the compositor keeps advancing under it.
-    if (ctx.width && probe.sample.innerWidth !== ctx.width) {
-      await session.send("Emulation.setDeviceMetricsOverride", { width: ctx.width, height: 1050, deviceScaleFactor: 0, mobile: false });
-      const iw = await cdp.evaluate(session, "innerWidth", { awaitPromise: false });
-      if (iw !== ctx.width) console.log(`  ⚠ viewport is ${iw}px, target.json says ${ctx.width}px — even setDeviceMetricsOverride couldn't fix it; captures may disagree with earlier phases`);
-      else console.log(`  · viewport ${probe.sample.innerWidth}px → ${iw}px (metrics override; window clamped by the display)`);
-    }
+    // Verified, not trusted: read back what the page actually renders at.
+    const got = await cdp.evaluate(session, chrome.VIEWPORT_READ, { awaitPromise: false });
+    const vpMiss = chrome.viewportMismatch(ctx.viewport, got);
+    if (vpMiss) throw new Error(`viewport did not normalize on the ${side} page — ${vpMiss}. Measuring at the wrong size is the exact bug this override exists to prevent (an --attach Chrome's real window can fight emulation — prefer the launched mode).`);
+    const sbNote = chrome.viewportScrollbarNote(ctx.viewport, got);
+    if (sbNote) console.log(`  ⚠ ${sbNote}`);
 
     const title = String(await cdp.evaluate(session, "document.title", { awaitPromise: false }) || "");
-    if (side === "live" && /just a moment|attention required|access denied|challenge/i.test(title)) console.log(`  ⚠ title is ${JSON.stringify(title)} — ${LADDER}`);
+    const wallTitle = side === "live" && /just a moment|attention required|access denied/i.test(title) ? title : null;
 
     await cdp.evaluate(session, ctx.captureSource, { awaitPromise: false });
     const shape = await cdp.evaluate(session, "typeof pxBehaviorCapture", { awaitPromise: false });
@@ -136,7 +142,9 @@ async function captureSide(side, url, ctx) {
     // the gate ignores unknown discovery fields; when present the pass reason can cite it.
     snap.discovery = snap.discovery || {};
     snap.discovery.runner = {
+      kitVersion: KIT_VERSION,
       mode: ctx.acq.mode, chromeVersion: ctx.acq.chromeVersion, headless: ctx.acq.headless, profile: ctx.acq.profile,
+      viewport: { width: ctx.viewport.width, height: ctx.viewport.height, dpr: ctx.viewport.dpr, sources: ctx.viewport.sources },
       rafProbe: { ...probe.sample.raf, hz: probe.verdict.rafHz },
       animProbe: probe.sample.anim,
     };
@@ -154,8 +162,13 @@ async function captureSide(side, url, ctx) {
 
     const nBehaviors = Object.keys(snap.behaviors || {}).length, nDeclared = Object.keys(snap.declared || {}).length;
     console.log(`  ✓ ${path.relative(WORK, outPath)} — ${nBehaviors} behavior(s), ${nDeclared} declared, ${snap.discovery.elementsScanned} elements scanned, documentHidden=${snap.discovery.documentHidden}`);
-    if (side === "live" && ctx.cloneScanned && snap.discovery.elementsScanned < ctx.cloneScanned / 10)
-      console.log(`  ⚠ live scanned ${snap.discovery.elementsScanned} elements vs the clone's ${ctx.cloneScanned} — ${LADDER}`);
+
+    // A wall is an ERROR, not a warning — a challenge page's "behaviors" are junk the gate
+    // would then compare in earnest. The snapshot stays on disk as evidence; the exit code
+    // is the verdict, and the error is the ladder.
+    const leafCollapse = side === "live" && ctx.cloneScanned && snap.discovery.elementsScanned < ctx.cloneScanned / 10;
+    if (wallTitle || leafCollapse)
+      throw new Error(`the live page looks like a bot-challenge wall (${wallTitle ? `title ${JSON.stringify(wallTitle)}` : `scanned only ${snap.discovery.elementsScanned} elements vs the clone's ${ctx.cloneScanned}`}) — ${path.relative(WORK, outPath)} was written as EVIDENCE of the wall, not the site. ${LADDER}`);
     return snap;
   } finally {
     session.close();
@@ -173,7 +186,12 @@ async function main() {
   if (fs.existsSync(targetPath)) target = JSON.parse(fs.readFileSync(targetPath, "utf8"));
   else if (!args.liveUrl && args.side !== "clone") die(`targets/${args.name}/target.json missing and no --live-url given — run: pingfusi new ${args.name} <url>`);
   const liveUrl = args.liveUrl || target.url;
-  const width = target.width || 1440;
+  // The full viewport (width AND height AND dpr), matched to what the pipeline already
+  // measured against when a live.json exists — never just width (see chrome.js: a
+  // width-only override leaves headless at dpr 1 with a short viewport, a different page).
+  let liveSnap = null;
+  try { liveSnap = JSON.parse(fs.readFileSync(path.join(WORK, "targets", args.name, "live.json"), "utf8")); } catch (e) {}
+  const viewport = chrome.resolveViewport({ target, live: liveSnap });
   const { path: optsPath, opts } = loadOpts(args.name, args.optsFile);
 
   const wantClone = args.side !== "live";
@@ -187,7 +205,7 @@ async function main() {
     console.log(`  sides: ${args.side}${args.side !== "clone" ? `   live: ${liveUrl}` : ""}${wantClone ? `   clone: ${args.cloneUrl || `self-served from targets/${args.name}/clone${cloneMissing ? " (MISSING — build it first)" : ""}`}` : ""}`);
     console.log(`  acquisition: ${args.attach || process.env.PPK_CDP_URL ? `attach to ${args.attach || process.env.PPK_CDP_URL}` : bin.error ? "LAUNCH — but " + bin.error : `launch ${bin.path}${args.headful ? " (headful — a window WILL appear)" : " (headless=new — invisible, probe-gated)"}${args.profile ? " with the persistent kit profile" : " with a temp profile"}`}`);
     console.log(`  opts: ${optsPath ? optsPath : "none (defaults; discovery still runs — marquee/hover rows just need behavior-opts.json)"}`);
-    console.log(`  viewport: ${width}px (target.json${target.width ? "" : " absent — default"})`);
+    console.log(`  viewport: ${viewport.width}×${viewport.height} @${viewport.dpr}x (width: ${viewport.sources.width}, height: ${viewport.sources.height}, dpr: ${viewport.sources.dpr})`);
     process.exit(!args.attach && bin.error ? 1 : 0);
   }
 
@@ -197,9 +215,9 @@ async function main() {
   const acq = await chrome.acquire({
     attach: args.attach, chromePath: args.chrome, headless: !args.headful,
     profileDir: args.profile ? path.join(require("os").homedir(), ".pingfusi", "chrome-profile") : null,
-    width, height: 1050,
+    width: viewport.width, height: 1050,
   }).catch((e) => die(e.message));
-  console.log(`· ${acq.mode} ${acq.chromeVersion}${acq.headless ? " (headless=new)" : ""}${acq.profile === "persistent" ? " (persistent profile)" : ""} on :${acq.port}`);
+  console.log(`· pingfusi ${KIT_VERSION} behavior-capture — ${acq.mode} ${acq.chromeVersion}${acq.headless ? " (headless=new)" : ""}${acq.profile === "persistent" ? " (persistent profile)" : ""} on :${acq.port}, viewport ${viewport.width}×${viewport.height} @${viewport.dpr}x`);
 
   let cloneServer = null, cloneUrl = args.cloneUrl;
   if (wantClone && !cloneUrl) {
@@ -209,7 +227,7 @@ async function main() {
   }
 
   const captureSource = fs.readFileSync(path.join(__dirname, "..", "tools", "behavior-capture.js"), "utf8");
-  const ctx = { args, acq, opts, width, captureSource };
+  const ctx = { args, acq, opts, viewport, captureSource };
   const teardown = async () => {
     if (cloneServer) cloneServer.close();
     if (!args.keepOpen) await acq.cleanup();

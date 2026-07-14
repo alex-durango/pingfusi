@@ -62,6 +62,11 @@ function flagsFor({ userDataDir, width = 1440, height = 1050, headless = false }
     "--no-first-run",
     "--no-default-browser-check",
     `--window-size=${width},${height}`,
+    // Classic (layout-consuming) scrollbars are an ENVIRONMENT property — Linux Chrome and
+    // macOS "Show scroll bars: Always" eat ~15px of clientWidth on every tall page, which is
+    // a page the dev's overlay-scrollbar Mac never renders. Hide them (same call puppeteer
+    // ships by default), so layout width equals the normalized viewport width.
+    "--hide-scrollbars",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
@@ -133,6 +138,53 @@ async function acquire({ attach = null, chromePath = null, headless = false, pro
   return { mode: "cdp-launched", host: "127.0.0.1", port: launched.port, chromeVersion: v.Browser, headless: !!headless, profile: profileDir ? "persistent" : "temp", cleanup: launched.cleanup };
 }
 
+// ── viewport fidelity ────────────────────────────────────────────────────────
+// A launched Chrome's viewport is NOT the site the user sees, three ways (measured on
+// heyaristotle, 2026-07-14): headless devicePixelRatio is 1 while every dev Mac renders at
+// 2 (different srcset images, resolution media queries off), innerHeight loses ~87px of
+// phantom browser UI from the asked --window-size, and a width-only conditional override
+// never fires when width happens to match — leaving both wrong. The page's own scrollHeight
+// changed 6526→6554 under the corrected viewport: the RENDER differs, not just the numbers.
+// So the viewport is normalized UNCONDITIONALLY, then verified after load.
+
+// Pure: pick the viewport a capture must render at. Explicit target.json fields win, then
+// the viewport an existing live.json was measured at (mode-match: compare like with like),
+// then the kit's canonical defaults (1440 wide, 982 viewport-height, dpr 2 — a real Mac).
+function resolveViewport({ target = {}, live = null } = {}) {
+  const lv = (live && live.viewport) || {};
+  const pick = (t, l, d) => (t ? { v: t, from: "target.json" } : l ? { v: l, from: "live.json" } : { v: d, from: "default" });
+  const w = pick(target.width, lv.width, 1440), h = pick(target.height, lv.height, 982), d = pick(target.dpr, lv.dpr, 2);
+  return { width: w.v, height: h.v, dpr: d.v, sources: { width: w.from, height: h.from, dpr: d.from } };
+}
+
+// Apply the viewport as a CDP emulation override — exact width, height, AND deviceScaleFactor
+// (never 0: "keep current" keeps headless's wrong dpr=1). Set BEFORE navigation so the first
+// render already sees the right media queries and picks the right srcset assets.
+function normalizeViewport(session, { width, height, dpr }) {
+  return session.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: false });
+}
+
+// Read back what the page actually renders at — the override is verified, not trusted.
+// innerWidth/innerHeight/dpr mismatches are ENVIRONMENT failures (the override didn't take)
+// and fatal; a clientWidth gap is NOT — after --hide-scrollbars it can only mean the SITE
+// styles a layout-consuming scrollbar on its root scroller, which is how that site renders
+// for real users too. Refusing it would hard-fail legitimate pages on every platform
+// (measured: a ::-webkit-scrollbar-styled tall page reads cw 1425 under iw 1440 even on an
+// overlay-scrollbar Mac). So: mismatch = refuse, scrollbar note = warn and record.
+const VIEWPORT_READ = `({ iw: innerWidth, cw: document.documentElement.clientWidth, ih: innerHeight, dpr: devicePixelRatio })`;
+function viewportMismatch(asked, got) {
+  if (!got) return "viewport read returned nothing";
+  const misses = [];
+  if (got.iw !== asked.width) misses.push(`innerWidth ${got.iw} ≠ ${asked.width}`);
+  if (got.ih !== asked.height) misses.push(`innerHeight ${got.ih} ≠ ${asked.height}`);
+  if (got.dpr !== asked.dpr) misses.push(`devicePixelRatio ${got.dpr} ≠ ${asked.dpr}`);
+  return misses.length ? misses.join(", ") : null;
+}
+function viewportScrollbarNote(asked, got) {
+  if (!got || got.cw == null || got.cw === asked.width) return null;
+  return `layout clientWidth is ${got.cw} (${asked.width - got.cw}px under the viewport) — the page renders a layout-consuming scrollbar; content lays out at ${got.cw}px for real users of this page too`;
+}
+
 // The in-tab environment probe. Self-cleaning (style + element removed before resolving —
 // the instrument must not remain on the page it is about to measure). ~1.7s of wall clock.
 const PROBE_JS = `(async () => {
@@ -177,4 +229,4 @@ async function probeEnvironment(session) {
   return { sample, verdict: evaluateProbe(sample) };
 }
 
-module.exports = { DARWIN_APPS, candidatePaths, resolveChrome, flagsFor, parseDevToolsActivePort, launchChrome, acquire, PROBE_JS, evaluateProbe, probeEnvironment };
+module.exports = { DARWIN_APPS, candidatePaths, resolveChrome, flagsFor, parseDevToolsActivePort, launchChrome, acquire, PROBE_JS, evaluateProbe, probeEnvironment, resolveViewport, normalizeViewport, VIEWPORT_READ, viewportMismatch, viewportScrollbarNote };

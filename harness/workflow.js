@@ -959,8 +959,15 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
   pingfusi tunnel  <name> --url <http://localhost:3000>   tunnel an adopted build's own dev server
                                                      (reachability-verified; ditto/next/vite etc. — live
                                                      dev servers can't be pushed as static drafts)
-  pingfusi capture open <name>                       hosted capture session (remote sink, 24h): pages
-                                                     deliver with pxSend/pxSendDom to the printed sink_url
+  pingfusi capture-run <name> [--side auto|both|live|clone]   the DEFAULT capture: settle + measure +
+                                                     DOM + coverage in a kit-owned INVISIBLE Chrome
+                                                     (headless, probe-gated, viewport-normalized) —
+                                                     no tabs in anyone's browser, no sink, artifacts
+                                                     written directly; falls back by name to the
+                                                     interactive path on bot walls
+  pingfusi capture open <name>                       hosted capture session (remote sink, 24h) for the
+                                                     INTERACTIVE fallback path: pages deliver with
+                                                     pxSend/pxSendDom to the printed sink_url
   pingfusi capture pull <name> --all                 pull delivered captures back, integrity-verified
   pingfusi tunnel  --sink [port]                     tunnel the snapshot SINK: live pages deliver captures
                                                      with one pxSend call even when the environment blocks
@@ -1007,6 +1014,7 @@ function main() {
     case "new": { if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); } return delegate("harness/new-target.js", [name, ...rest]); }
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
     case "behavior-capture": { if (!name) { console.error("usage: pingfusi behavior-capture <name> [--side both|live|clone] [--attach <port>] [--headful] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/behavior-runner.js", [name, ...rest]); }
+    case "capture-run": { if (!name) { console.error("usage: pingfusi capture-run <name> [--side auto|both|live|clone] [--attach <port>] [--headful] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/capture-runner.js", [name, ...rest]); }
     case "capture": { if (!name || !rest[0]) { console.error("usage: pingfusi capture open <name> | pingfusi capture pull <name> <file>|--all"); process.exit(2); } return delegate("harness/capture-remote.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
     case "assist": { if (!name) { console.error('usage: pingfusi assist <name> [--phase <key>] [--ask "…"] [--compare]'); process.exit(2); } return delegate("harness/review-qa.js", ["assist", name, ...rest]); }

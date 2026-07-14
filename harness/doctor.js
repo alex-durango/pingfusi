@@ -44,12 +44,36 @@ function checkChrome(resolveChrome) {
   let r = { error: "resolver unavailable" };
   try { r = resolveChrome({}); } catch (e) {}
   return {
-    name: "Chrome (behavior-capture runner)",
+    name: "Chrome (capture runners)",
     ok: !r.error,
     detail: r.path || "none of the known install paths",
-    fix: "install Google Chrome, or point at one with PPK_CHROME=<path> — needed for `pingfusi behavior-capture`, the required path when your agent's browser tabs are permanently hidden",
+    fix: "install Google Chrome, or point at one with PPK_CHROME=<path> — needed for `pingfusi capture-run` and `pingfusi behavior-capture` (the invisible capture paths; also required when your agent's browser tabs are permanently hidden)",
     required: false,
   };
+}
+
+// Version skew is invisible until it bites: two developers ran "the same kit", one on a
+// stale global whose runner still popped a window, and nothing in any output said which
+// version was acting. Best-effort npm check — the registry being unreachable must never
+// fail doctor (offline is a place people work).
+function checkKitVersion(installed, latest) {
+  if (!latest) return { name: `pingfusi ${installed}`, ok: true, detail: "npm registry unreachable — up-to-date check skipped", required: false };
+  const ok = installed === latest;
+  return {
+    name: `pingfusi ${installed}`,
+    ok,
+    detail: ok ? "latest" : `npm has ${latest} — a stale install keeps OLD behavior (a fixed bug stays unfixed on this machine)`,
+    fix: "npm i -g pingfusi@latest",
+    required: false,
+  };
+}
+
+function npmLatestVersion() {
+  try {
+    const r = spawnSync("npm", ["view", "pingfusi", "version"], { stdio: "pipe", timeout: 5_000 });
+    const v = String(r.stdout || "").trim();
+    return /^\d+\.\d+\.\d+/.test(v) ? v : null;
+  } catch (e) { return null; }
 }
 
 function checkReviewToken(resolveToken) {
@@ -89,6 +113,7 @@ function main() {
   const { resolveToken } = require("./review-qa.js");
   const checks = [
     checkNode(process.versions.node),
+    checkKitVersion(require(require("path").join(__dirname, "..", "package.json")).version, npmLatestVersion()),
     checkBinary("cloudflared", ["--version"], "OPTIONAL — only `pingfusi tunnel --url` (live dev-server drafts) needs it; the default clone flow is tunnel-free", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
     checkReviewToken(resolveToken),
     checkChrome(require("./chrome.js").resolveChrome),
@@ -98,4 +123,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { checkNode, checkBinary, checkChrome, checkReviewToken, report };
+module.exports = { checkNode, checkBinary, checkChrome, checkKitVersion, checkReviewToken, report };

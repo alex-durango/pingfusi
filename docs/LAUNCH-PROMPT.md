@@ -25,10 +25,17 @@ filed and verified through the kit's tooling). The reviewer answers within minut
 keep the loop tight and act on every verdict immediately.
 
 Environment notes (operational, not workflow):
-- Use your browser-automation tooling (e.g. the claude-in-chrome MCP — load the core
-  set in ONE ToolSearch call). Fresh tabs; verify innerWidth/devicePixelRatio before
-  every capture; if the requested width is unreachable, record the actual width in
-  target.json and measure everything at that width.
+- Capture INVISIBLY by default: `pingfusi capture-run {{NAME}}` does settle + measure +
+  DOM + coverage in a kit-owned headless Chrome (probe-gated, viewport-normalized to
+  width+height+dpr) and writes artifacts directly — the user is working while you clone,
+  and this path never opens a tab they can see, never throttles, and needs none of your
+  browser round-trips. Only fall back to your own browser-automation tooling when
+  capture-run's error tells you to (bot wall, no Chrome, probe refusal).
+- Interactive fallback only: use your browser-automation tooling (e.g. the
+  claude-in-chrome MCP — load the core set in ONE ToolSearch call). Fresh tabs; verify
+  innerWidth/devicePixelRatio before every capture; if the requested width is
+  unreachable, record the actual width in target.json and measure everything at that
+  width.
 - Behavior discovery needs a tab where `document.hidden === false`. If your automation
   reports tabs hidden PERMANENTLY (some stacks do — verify once, not per tab), do not
   fight the environment and do not retry: run `pingfusi behavior-capture {{NAME}}`

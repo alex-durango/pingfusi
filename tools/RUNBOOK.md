@@ -39,6 +39,17 @@ Don't hand-rebuild the markup: capture it (LEARNINGS #19 — a reconstruction ma
 exactly the technique mismatches the gate is blind to; a capture inherits live's doctype,
 authored line-heights, and drawing primitives by construction).
 
+> **Capture invisibly first: `pingfusi capture-run <name>`.** It runs THIS ENTIRE section
+> (settle → enumerate → measure → DOM → coverage) in a kit-owned headless Chrome —
+> probe-gated, viewport-normalized (width AND height AND dpr; a headless tab otherwise
+> renders dpr 1 with a short viewport, a genuinely different page), artifacts written
+> directly to `targets/<name>/`, zero tabs in anyone's browser, zero settle-polling
+> round-trips (the loop runs in-page on unthrottled timers). `--side auto` captures live
+> until a clone exists, then both. The steps below are the INTERACTIVE FALLBACK — reach
+> for them only when capture-run's error names them (bot wall, no Chrome, probe refusal):
+> your agent-driven tab rides a real logged-in session, which is the one thing a launched
+> profile cannot fake.
+
 1. Inject `tools/browser-capture.js` as plain source on the live tab (same rules as
    measurement — never fetch+eval), then let the page **settle mechanically** — do not
    hand-scroll and hope:

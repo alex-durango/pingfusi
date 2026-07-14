@@ -24,9 +24,14 @@ assumption you have.
 
 **Work the FAST loop (RUNBOOK "The fast fix loop") — the reviewer answers in
 minutes, so the agent is the bottleneck, not the reviewer:**
-- Open the delivery path: `pingfusi capture open {{NAME}}` (hosted session — default)
-  FIRST — every capture (pxSend/pxSendDom/pxBehaviorSend) then delivers in one call
-  to its sink_url, and `pingfusi capture pull {{NAME}} --all` retrieves them verified.
+- Capture INVISIBLY by default: `pingfusi capture-run {{NAME}}` (settle + measure + DOM +
+  coverage in a kit-owned headless Chrome, artifacts written directly — no tabs the user
+  can see, no delivery hop, no settle-polling round-trips). Its errors name the fallback
+  when the invisible path can't see the real page (bot wall, no Chrome, probe refusal).
+- Interactive fallback only: open the delivery path with `pingfusi capture open {{NAME}}`
+  (hosted session) — every in-tab capture (pxSend/pxSendDom/pxBehaviorSend) then delivers
+  in one call to its sink_url, and `pingfusi capture pull {{NAME}} --all` retrieves them
+  verified.
 - After a scoped fix, re-capture only the affected targets and fold them in with
   `node tools/merge-snapshot.js` — full N-target re-captures are for the final
   pass only (the done gate enforces one clean full capture at the end).
@@ -66,20 +71,24 @@ always tells you what's next):**
    width in `target.json` and measure everything at that width.
 
 2. **Build by capture — never hand-rebuild** (LEARNINGS #19; PLAYBOOK Phase 4).
-   Settle the live page (load, scroll bottom-and-back, confirm stable
-   scrollHeight + node count twice), capture the doctype-exact DOM
-   (`pxSendDom('http://localhost:7799/dom.html')`, sink running in
-   `targets/{{NAME}}/`), then `pingfusi capture-build {{NAME}}`.
-   Delivery blocked? Fall back per RUNBOOK (stash/chunked `pxRead`; or curl the
+   `pingfusi capture-run {{NAME}}` captures the settled live page invisibly (the settle
+   STOP contract is enforced in-runner: a page still growing writes NOTHING) and lands
+   `dom.html` + `live.json` + `coverage.json` directly; then
+   `pingfusi capture-build {{NAME}}`. INTERACTIVE FALLBACK (only when capture-run's
+   error names it): settle the live tab yourself, capture the doctype-exact DOM
+   (`pxSendDom` to the hosted sink_url or `http://localhost:7799/dom.html`), and if
+   delivery is blocked fall back per RUNBOOK (stash/chunked `pxRead`; or curl the
    SSR HTML **only after verifying** its structure matches the hydrated DOM —
    element-count comparison minimum). Attest `assets` with real evidence.
 
-3. **Measure BOTH pages at the same width** (RUNBOOK). Full-page `pxTargets`:
-   every distinct painted element; for long repeats (cards, rows) sample
-   first + last + a spread (the 37signals precedent) and say so in NOTES.md.
-   Enumerate coverage with `element.checkVisibility({checkVisibilityCSS:true,
-   checkOpacity:true})` — per-node `getComputedStyle` lies inside closed
-   `<details>` (opendesign lesson).
+3. **Measure BOTH pages at the same viewport.** `pingfusi capture-run {{NAME}}` does this
+   for you once the clone exists (`--side auto` → both sides, identical normalized
+   viewport — width AND height AND dpr — cited in capture-run.json). INTERACTIVE
+   FALLBACK (RUNBOOK): full-page `pxTargets`: every distinct painted element; for long
+   repeats (cards, rows) sample first + last + a spread (the 37signals precedent) and
+   say so in NOTES.md. Enumerate coverage with
+   `element.checkVisibility({checkVisibilityCSS:true, checkOpacity:true})` —
+   per-node `getComputedStyle` lies inside closed `<details>` (opendesign lesson).
 
 4. **Gate loop:** `--visual` until 0 fails → close `coverage` → `strict` (fix or
    document every structural delta — a colour/underline row is NEVER structural).

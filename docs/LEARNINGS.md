@@ -834,3 +834,36 @@ snapshot carries a `discovery.runner` attestation the gate cites in its pass rea
 > `--profile` → `--attach` to a Chrome you launched → worksheet rows answered by the reviewer)
 > instead of climbing it for you, because logging in and clearing challenges is judgment, not
 > plumbing.
+
+## 33. THE INVISIBLE CHROME RENDERED A DIFFERENT PAGE — normalize the viewport, don't inherit it
+Found on heyaristotle (2026-07-14), reported as "the window size was different from the rendered
+site size" — and the report undersold it. A launched headless Chrome inherits THREE wrong
+viewport properties at once: `devicePixelRatio` is **1** where every dev Mac renders at 2 (the
+site serves 1x srcset images and `min-resolution` media queries never match), `innerHeight` comes
+up **87px short** of the asked `--window-size` (phantom browser UI in a browser with no UI — the
+fold moves, scroll-reveal triggers shift), and the width-only conditional override that was
+supposed to help never fired, because width happened to be the one property that matched. The
+page's own `scrollHeight` changed **6526 → 6554** under a corrected viewport: the RENDER differed,
+not just the numbers a capture would report.
+
+**Lesson:** an invisible measurement environment must be normalized, never inherited — and
+"normalized" means every render-determining viewport property (width AND height AND
+deviceScaleFactor — never `deviceScaleFactor: 0`, which means "keep the wrong one"), set BEFORE
+first navigation so the initial render already sees the right media queries and picks the right
+assets, then read back and refused by name on mismatch. A conditional fix keyed on one property is
+a fix that skips the day the other two are wrong. The viewport resolves like any other comparison
+contract: explicit `target.json` fields, else the viewport an existing `live.json` was measured at
+(compare like with like), else the kit's canonical defaults (1440×982 @2x).
+> 🔒 **Enforced now:** `chrome.js` `normalizeViewport` runs unconditionally on every runner tab
+> (`behavior-capture` and `capture-run` both), `viewportMismatch` refuses a page that didn't take
+> the override (naming the property), launched Chromes get `--hide-scrollbars` (classic scrollbars
+> are an ENVIRONMENT property that eats ~15px of layout width the dev's overlay-scrollbar Mac
+> never loses), and a remaining `clientWidth` gap is a recorded NOTE, not a refusal — after the
+> flag it can only be site-authored root-scrollbar styling, which is how that page renders for
+> real users too. The attestation/receipt records the viewport with per-field sources. Locked by
+> `chrome-selftest` (resolution + mismatch naming + the note split) and both runner selftests (the
+> integration half asserts the snapshot's viewport is EXACTLY 1440×982 @2x in a real launched
+> Chrome).
+> 👁 **Still yours:** picking a nonstandard viewport on purpose (a mobile-width clone, a 1x
+> screenshot target) — set it in `target.json` (`width`/`height`/`dpr`) and the runners obey;
+> the default only exists so that not-choosing isn't silently choosing dpr 1.

@@ -611,6 +611,12 @@
   // The report is data about what happened — read it before advancing: ok:false or a
   // non-empty `failed` list means a delivery did not land; settle.frozenOpacity0 > 0
   // means reveals never fired (inspect before trusting the capture).
+  //
+  // VALUE MODE: a falsy sinkUrl collects every artifact into report.payloads instead of
+  // POSTing — for callers that read the report BY VALUE (the CDP capture runner via
+  // Runtime.evaluate returnByValue). Same orchestration, same settle STOP contract, no
+  // delivery hop to fail — which is the point: the sink/CSP/localhost dance exists only
+  // because a page can't hand a value back to an agent; over CDP it can.
   root.pxCaptureAll = async function (sinkUrl, opts) {
     const o = opts || {};
     const prefix = o.prefix || "live";
@@ -634,17 +640,25 @@
     for (const l of leaves) report.byKind[l.kind] = (report.byKind[l.kind] || 0) + 1;
     const targets = leaves.map((l) => [l.name, () => l.el, l.text]);
     const base = String(sinkUrl || "").replace(/\/+$/, "");
-    const send = async (file, body) => {
-      try {
-        const bytes = utf8(body);
-        const h = await sha256Hex(bytes);
-        const r = await fetch(base + "/" + file + "?bytes=" + bytes.length + (h ? "&sha256=" + h : ""), { method: "POST", body });
-        const text = await r.text();
-        (r.ok ? report.delivered : report.failed).push({ file, status: r.status, bytes: bytes.length, server: text.slice(0, 90) });
-      } catch (e) {
-        report.failed.push({ file, error: String((e && e.message) || e).slice(0, 120) });
-      }
-    };
+    const send = sinkUrl
+      ? async (file, body) => {
+          try {
+            const bytes = utf8(body);
+            const h = await sha256Hex(bytes);
+            const r = await fetch(base + "/" + file + "?bytes=" + bytes.length + (h ? "&sha256=" + h : ""), { method: "POST", body });
+            const text = await r.text();
+            (r.ok ? report.delivered : report.failed).push({ file, status: r.status, bytes: bytes.length, server: text.slice(0, 90) });
+          } catch (e) {
+            report.failed.push({ file, error: String((e && e.message) || e).slice(0, 120) });
+          }
+        }
+      : async (file, body) => {
+          // value mode: no wire, no integrity dance — the caller receives these bytes in the
+          // same protocol message as the report itself, so truncation would fail its JSON parse
+          report.payloads = report.payloads || {};
+          report.payloads[file] = body;
+          report.delivered.push({ file, bytes: utf8(body).length, returned: true });
+        };
     await send(prefix + ".json", capture(targets, { compact: true }));
     if (prefix === "live") {
       await send("coverage.json", JSON.stringify(leaves.map((l) => l.name)));

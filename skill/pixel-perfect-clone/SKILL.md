@@ -34,10 +34,14 @@ not by the user, and never by you.
      point, a frozen reveal, and the automation extension's own overlay DOM if it was captured.
    - Every phase advances only through its gate: `pingfusi advance <NAME> <phase>`. Never
      use --force. `pingfusi status <NAME>` always tells you what's next.
-   - Capture delivery: `pingfusi capture open <NAME>` (hosted session), then ONE call
-     per tab — `await pxCaptureAll('<sink_url>')` on live (settle+enumerate+measure+
-     deliver; read its report before advancing), `{prefix:'clone'}` on the clone —
-     then `pingfusi capture pull <NAME> --all` retrieves everything integrity-verified.
+   - Capture: `pingfusi capture-run <NAME>` FIRST (the default) — settle + measure + DOM
+     + coverage in a kit-owned INVISIBLE Chrome; artifacts land in targets/<NAME>/ directly,
+     no sink, no tabs in anyone's browser, and the settle polling happens in-page instead of
+     through your round-trips. `--side auto` does live until the clone exists, then both.
+     FALL BACK to the interactive path only when capture-run says so (bot wall, no Chrome,
+     probe refusal — its errors name the fallback): `pingfusi capture open <NAME>` (hosted
+     session), ONE call per tab — `await pxCaptureAll('<sink_url>')` on live,
+     `{prefix:'clone'}` on the clone — then `pingfusi capture pull <NAME> --all`.
      Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
    - Behavior discovery needs `document.hidden === false`. If your browser tooling reports
      tabs hidden PERMANENTLY (some automation stacks do), skip in-tab discovery — it can

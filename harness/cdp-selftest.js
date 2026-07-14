@@ -173,6 +173,7 @@ async function withFakeChrome(fn) {
             socket.write(serverFrame(0x1, whole.slice(0, cut), { fin: false }));
             socket.write(serverFrame(0x0, whole.slice(cut), { fin: true }));
           } else if (/CDPERR/.test(msg.params.expression)) reply({ id: msg.id, error: { message: "Some domain error", data: "details" } });
+          else if (/SLOWPOKE/.test(msg.params.expression)) setTimeout(() => reply({ id: msg.id, result: { result: { type: "string", value: "late" } } }), 400);
           else reply({ id: msg.id, result: { result: { type: "string", value: `echo:${msg.params.awaitPromise ? "awaited" : "sync"}` } } });
         } else reply({ id: msg.id, result: {} });
       }
@@ -207,6 +208,12 @@ async function withFakeChrome(fn) {
     check("page exception surfaces as a Node error, first line only", /page threw during evaluate: Error: page says no$/.test(threw));
     const cdpErr = await session.send("Runtime.evaluate", { expression: "CDPERR" }).then(() => null, (e) => e.message);
     check("CDP-level error rejects with method + message + data", /Runtime\.evaluate: Some domain error — details/.test(cdpErr));
+    // CDP's own `timeout` param only bounds SYNCHRONOUS execution (measured: an awaited
+    // in-page setTimeout sails past it) — evaluate's timeoutMs must be a Node-side watchdog
+    const slow = await evaluate(session, "SLOWPOKE", { timeoutMs: 60 }).then(() => null, (e) => e.message);
+    check("Node-side watchdog fires when the page's promise outlives timeoutMs", /watchdog/.test(slow) && /60ms/.test(slow));
+    await new Promise((r) => setTimeout(r, 450)); // the late reply lands — must not crash as an unhandled rejection
+    check("the abandoned late reply is swallowed, not an unhandled rejection", true);
 
     await new Promise((r) => setTimeout(r, 50)); // let the ping/pong land
     check("server ping answered with matching pong payload", seen.pongs.length === 1 && seen.pongs[0] === "u-there");
