@@ -54,6 +54,7 @@ run(["init", NAME]); // seed workflow.json (harmless if it errors on a fresh dir
 ok(run(["gate", NAME, "behavior"]).code === 1, "blocks with no behaviors-live.json");
 const missLive = run(["gate", NAME, "behavior"]);
 ok(/behaviors-live\.json missing/.test(missLive.out), "reason names the missing live inventory file");
+ok(/behavior-capture/.test(missLive.out), "the missing-live reason offers the kit-owned Chrome runner as a path");
 
 // ── a paint-over of "no discovery ran" fails: empty behaviors, NO discovery metadata ──
 writeJson("behaviors-live.json", { url: "https://example.com/", behaviors: {} });
@@ -190,6 +191,30 @@ ok(withDeviation.code === 0 && /documented deviation/.test(withDeviation.out) &&
 writeJson("behavior-deviations.json", { "generative:webgl_bg": { reason: "" } });
 ok(run(["gate", NAME, "behavior"]).code === 1, "an empty-reason deviation entry does NOT count as documented — still blocks");
 fs.rmSync(path.join(dir, "behavior-deviations.json"));
+
+// ── HIDDEN captures: refused by name, and the refusal carries the way OUT ────
+// Some automation stacks report document.hidden=true permanently — a refusal that only
+// says "foreground the tab" is a dead end there; it must point at the kit-owned Chrome
+// runner (behavior-capture) that measures both sides regardless.
+writeJson("behaviors-live.json", { url: "https://example.com/", discovery: discoveryMeta({ documentHidden: true }), behaviors: {} });
+const hiddenLive = run(["gate", NAME, "behavior"]);
+ok(hiddenLive.code === 1 && /HIDDEN/.test(hiddenLive.out), "a hidden-tab live capture is refused even with discovery metadata present");
+ok(/behavior-capture/.test(hiddenLive.out), "the hidden-live refusal points at the kit-owned Chrome runner");
+writeJson("behaviors-live.json", { url: "https://example.com/", discovery: discoveryMeta({ documentHidden: false }), behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 46 } } } });
+writeJson("behaviors-clone.json", { url: "http://localhost:8080/", discovery: discoveryMeta({ documentHidden: true }), behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 46 } } } });
+const hiddenClone = run(["gate", NAME, "behavior"]);
+ok(hiddenClone.code === 1 && /behaviors-clone\.json was captured while the tab was HIDDEN/.test(hiddenClone.out) && /behavior-capture/.test(hiddenClone.out), "a hidden-tab clone capture is refused with the same way out");
+
+// ── runner attestation: accepted and CITED when present, never required ──────
+writeJson("behaviors-live.json", {
+  url: "https://example.com/",
+  discovery: discoveryMeta({ documentHidden: false, runner: { mode: "cdp-launched", chromeVersion: "Chrome/150.0", headless: true, profile: "temp", rafProbe: { frames: 33, ms: 702, hz: 66 }, animProbe: { expectedPxPerSec: 100, measuredPxPerSec: 99.7 } } }),
+  behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 46 } } },
+});
+writeJson("behaviors-clone.json", { url: "http://localhost:8080/", discovery: discoveryMeta({ documentHidden: false }), behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 47 } } } });
+const cited = run(["gate", NAME, "behavior"]);
+ok(cited.code === 0 && /captured via cdp-launched Chrome\/150\.0, rAF 66Hz/.test(cited.out), "a pass cites the runner attestation (mode, version, rAF) when present");
+fs.rmSync(path.join(dir, "behaviors-clone.json"), { force: true });
 
 // ── DECLARED rows (environment-inverted runs): every supposed-to-move element needs a
 //    disposition — reproduced (descriptor observed firing on the clone) or excused.

@@ -113,6 +113,21 @@ Same injection + delivery rules as everything else here (plain source, probe the
 stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(opts)` /
 `pxBehaviorSend(url, opts)` / `pxBehaviorStash(opts)` + `pxBehaviorRead(i)`.
 
+> **If your tabs are PERMANENTLY hidden, do not run discovery in them.** Some
+> browser-automation stacks report `document.hidden === true` for every tab, always —
+> fresh tabs, reconnects, foreground attempts — and the gate refuses every capture such a
+> tab can produce (rightly: the compositor there is frozen; a moving marquee samples as
+> 0 px/s). The way out is the kit-owned Chrome runner:
+> ```sh
+> pingfusi behavior-capture <name>     # both sides, probe-gated, writes behaviors-*.json directly
+> ```
+> It injects THIS SAME `behavior-capture.js` into a Chrome it launches with throttling
+> disabled (or attaches to with `--attach <port>`), PROVES the compositor is advancing
+> with a measured probe before any capture, and returns snapshots by value over CDP — no
+> sink, no CSP dance. Name marquees/hovers once in `targets/<name>/behavior-opts.json`
+> (string selectors — the same opts go to both sides mechanically). Steps 1/3 below stay
+> the interactive path for a tab you can genuinely foreground.
+
 1. **On the LIVE tab:** inject `tools/behavior-capture.js`, set `pxRegion`, name what you
    can see moving — `opts = { marqueeSelectors: [["logo_belt", ".belt-wrapper"]],
    hoverTriggers: [["nav_product", "nav a[href*=product]"]] }` — then
@@ -211,7 +226,11 @@ default.
   either never finishes or returns frame-noise. The behavior gate REFUSES such a capture
   (`discovery.documentHidden`) and is right to — but you can waste an hour before noticing.
   **Check `document.hidden === false` before any behavior capture**, and never trust a number
-  measured in a hidden tab.
+  measured in a hidden tab. And know the terminal form: some automation stacks report hidden
+  PERMANENTLY (verified 2026-07-12/13 — every tab, after real clicks, after screenshots, with
+  the compositor genuinely suspended). That is not a window to fix; it is an environment to
+  replace — `pingfusi behavior-capture <name>` (above) measures both sides in a kit-owned
+  Chrome and refuses ITS OWN tab too unless a probe shows the compositor advancing.
 - **Trusted clicks and ⌘C stop landing when Chrome is not the frontmost app.** The popup relay,
   the download-behind-a-click path, and the clipboard path all die silently that way.
 - **`resize_window` is a no-op on a macOS-fullscreen window** — `innerWidth` stays at the screen
@@ -300,6 +319,13 @@ Two tools that keep iteration at seconds/minutes instead of full-round scale:
   --choices "Yes,No"` (draft+original urls auto-appended; blocks up to ~5 min; answers
   recorded in review-qa.json). Polls are ADVISORY — the review gate still requires an
   approving verdict on a full scope-pinned round. Use them to decide, not to certify.
+- **Stalled? The kit composes the poll for you.** When `score`/`status` print STALLED
+  (3 iterations with no progress on one gate), run `pingfusi assist <name>` — it picks the
+  worst failing mark from the gate's own artifacts and files the one-sided question a
+  reviewer can answer in one look. `--compare` files a scoped side-by-side diagnostic
+  round instead (full credit — poll first; never satisfies the review gate). One open
+  assist per target; re-check answers free with the printed poll-result/assist-result
+  command between iterations.
 
 ## A flagged element → exhaustive drill-down (`--inspect`)
 When a reviewer says "*this* looks wrong" (not a full sweep), don't guess the property —

@@ -27,12 +27,17 @@
  *   node harness/workflow.js init    <name> [url] [width]   # seed state (new-target.js calls this)
  *   node harness/workflow.js status  <name>                 # phase table + the next required action
  *   node harness/workflow.js gate    <name> <phase>         # run ONE gate read-only (exit 0/1) — no state change
- *   node harness/workflow.js advance <name> <phase> [--evidence "..."] [--force]
+ *   node harness/workflow.js advance <name> <phase> [--evidence "..."] [--force] [--blocked "..."]
+ *   node harness/workflow.js assist  <name> [--compare]     # STALLED? reviewer ask composed from the failing gate (delegates to review-qa.js)
  *   node harness/workflow.js ledger  <name>                 # print the audit trail
  *
  * `advance` refuses if (a) an earlier phase isn't done, or (b) the gate fails — unless
  * --force is passed, which records forced:true in the receipt (an escape hatch that is
- * itself auditable, like gjc's force override).
+ * itself auditable, like gjc's force override). `--blocked "reason"` is the OTHER receipted
+ * escape: an environment constraint the gate's own named remedy couldn't fix (recorded as
+ * blocked:true; review can then be filed with the gap documented; done refuses it until the
+ * phase is re-advanced with a passing gate). Three consecutive gate-failure refusals on one
+ * phase print a STALLED hint pointing at `assist` — derived from the ledger, never stored.
  */
 "use strict";
 
@@ -80,6 +85,43 @@ function sha256OfFile(p) {
   return h.digest("hex").slice(0, 16);
 }
 const runId = () => crypto.randomBytes(5).toString("hex");
+
+// ── stall detection ──────────────────────────────────────────────────────────
+// STALL_AFTER: consecutive failed advances on the SAME phase before the kit says
+// "stop iterating blind, ask a reviewer". Rationale: the run history shows the misses that
+// burn rounds (an underline wrong three ways in a row, four rounds on one camera intro, 93
+// visual fails chasing a font) are mechanisms a reviewer names in ONE look (~$0.05 poll) —
+// while two failures are still normal fix-loop turnaround. Three failures with no reviewer
+// input in between is the earliest point where the poll is cheaper than the next blind try.
+const STALL_AFTER = 3;
+// The streak is DERIVED from the append-only ledger — no new mutable state to corrupt or
+// migrate. Walk workflow.jsonl from the tail: gate-failure refusals for this phase count;
+// a recorded advance (earned or forced), a reset, or reviewer input (an `assist` receipt,
+// review-qa.js appends it when an assist is FILED) terminates the streak; everything else
+// (other phases, out-of-order refusals) is neutral — re-advancing `measure` mid-flail must
+// not launder a `visual` streak.
+function stallInfo(name, phaseKey) {
+  const p = ledgerPath(name);
+  if (!exists(p)) return { fails: 0 };
+  let lines;
+  try { lines = fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean); } catch (e) { return { fails: 0 }; }
+  let fails = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let r; try { r = JSON.parse(lines[i]); } catch (e) { continue; }
+    if (r.event === "reset" || r.event === "assist") break;
+    if (r.phase !== phaseKey) continue;
+    if (r.gate === "refused") {
+      if (/^gate failed for /.test(r.reason || "")) fails++;
+      continue; // ordering/evidence refusals are neutral — they aren't fix-loop iterations
+    }
+    if (r.gate === "pass" || r.gate === "failed") break; // a recorded advance ends the streak
+  }
+  return { fails };
+}
+// One line, printed by status/gate/advance wherever a stalled phase surfaces — the hint is
+// advisory (nothing blocks), so it must be loud and RUNNABLE everywhere the agent looks.
+const stallHint = (name, fails) =>
+  `⚠ STALLED — ${fails} consecutive failed advances with no reviewer input. A reviewer often names the mechanism in one look (~$0.05): ${CMD} assist ${name}   (side-by-side: ${CMD} assist ${name} --compare)`;
 
 // A gate returns { ok, reason, artifact? }. `ok:true` means the phase may be marked done.
 // `artifact` (a file path) is hashed into the receipt as evidence of WHAT was verified.
@@ -210,7 +252,7 @@ function behaviorGate(name) {
   const livePath = path.join(dir, "behaviors-live.json");
   const clonePath = path.join(dir, "behaviors-clone.json");
   if (!exists(livePath))
-    return { ok: false, reason: `targets/${name}/behaviors-live.json missing — run the discovery pass on the LIVE site with tools/behavior-capture.js (pxBehaviorSend or pxBehaviorStash), see tools/RUNBOOK.md "Behavior discovery"` };
+    return { ok: false, reason: `targets/${name}/behaviors-live.json missing — run the discovery pass on the LIVE site with tools/behavior-capture.js (pxBehaviorSend or pxBehaviorStash), see tools/RUNBOOK.md "Behavior discovery" — or capture both sides in a kit-owned Chrome: ${CMD} behavior-capture ${name}` };
   let live; try { live = readJson(livePath); } catch (e) { return { ok: false, reason: `behaviors-live.json is not valid JSON: ${e.message}` }; }
   // "discovery ran" must be EVIDENCED, not inferred from an empty behaviors object (docs/WORKFLOW.md:
   // an absent/empty inventory must be an explicit gate result, never a free pass). The evidence
@@ -227,7 +269,14 @@ function behaviorGate(name) {
   // of the capture environment. Refuse it rather than compare it — a live-foregrounded vs
   // clone-hidden diff invents misses that do not exist on the page.
   if (live.discovery && live.discovery.documentHidden === true)
-    return { ok: false, reason: `behaviors-live.json was captured while the tab was HIDDEN (background) — Chrome throttles timers and freezes CSS transitions there, so its durations/opacities are artifacts of the capture, not the page. Re-capture with the tab visible and in the foreground.` };
+    return { ok: false, reason: `behaviors-live.json was captured while the tab was HIDDEN (background) — Chrome throttles timers and freezes CSS transitions there, so its durations/opacities are artifacts of the capture, not the page. Re-capture with the tab visible and in the foreground — or, if this environment can NEVER foreground a tab (some automation stacks report document.hidden=true permanently), run ${CMD} behavior-capture ${name}: it measures both sides in a kit-owned Chrome and refuses its own environment unless a probe proves the compositor is advancing.` };
+  // Runner attestation (behavior-runner.js splices discovery.runner into snapshots it
+  // captured over CDP): accepted and CITED when present — receipts culture — but never
+  // required, because a genuinely-foregrounded interactive tab is still a valid instrument.
+  const cite = (snap) => {
+    const r = snap && snap.discovery && snap.discovery.runner;
+    return r ? `; captured via ${r.mode} ${r.chromeVersion}${r.rafProbe && r.rafProbe.hz ? `, rAF ${r.rafProbe.hz}Hz` : ""}` : "";
+  };
   const liveKeys = Object.keys(live.behaviors);
   // Declared-but-unfired rows (schema-gated: absent on pre-worksheet inventories). In an
   // environment-inverted run (no-js / bot-gated choreography) NOTHING fires live, yet the
@@ -238,7 +287,7 @@ function behaviorGate(name) {
     // discovery metadata IN the pass reason so the receipt itself is the evidence trail.
     return {
       ok: true,
-      reason: `no dynamic behaviors discovered — discovery ran: ${d.elementsScanned} elements scanned, scroll swept ${d.scrollSweep.from}→${d.scrollSweep.to}px in ${d.scrollSweep.steps} steps, observed ${d.observeMs}ms` + (d.hoverTriggersProbed && d.hoverTriggersProbed.length ? `, hover-probed [${d.hoverTriggersProbed.join(", ")}]` : ""),
+      reason: `no dynamic behaviors discovered — discovery ran: ${d.elementsScanned} elements scanned, scroll swept ${d.scrollSweep.from}→${d.scrollSweep.to}px in ${d.scrollSweep.steps} steps, observed ${d.observeMs}ms` + (d.hoverTriggersProbed && d.hoverTriggersProbed.length ? `, hover-probed [${d.hoverTriggersProbed.join(", ")}]` : "") + cite(live),
       artifact: livePath,
     };
   }
@@ -247,7 +296,7 @@ function behaviorGate(name) {
     return { ok: false, reason: `targets/${name}/behaviors-clone.json missing — capture the clone (with clone/fixes.js loaded) the SAME way: ${liveKeys.length} observed live behavior(s) [${liveKeys.join(", ")}]${declaredKeys.length ? ` + ${declaredKeys.length} declared` : ""} have nothing to compare against` };
   let clone; try { clone = readJson(clonePath); } catch (e) { return { ok: false, reason: `behaviors-clone.json is not valid JSON: ${e.message}` }; }
   if (clone.discovery && clone.discovery.documentHidden === true)
-    return { ok: false, reason: `behaviors-clone.json was captured while the tab was HIDDEN (background) — throttled timers and frozen CSS transitions make its durations/opacities meaningless. Re-capture with the clone tab visible and in the foreground.` };
+    return { ok: false, reason: `behaviors-clone.json was captured while the tab was HIDDEN (background) — throttled timers and frozen CSS transitions make its durations/opacities meaningless. Re-capture with the clone tab visible and in the foreground — or run ${CMD} behavior-capture ${name} (kit-owned Chrome, both sides).` };
   const cloneBehaviors = (clone && clone.behaviors) || {};
 
   const devPath = path.join(dir, "behavior-deviations.json");
@@ -288,7 +337,7 @@ function behaviorGate(name) {
       return { ok: false, reason: `${undisposed.length} DECLARED behavior(s) with NO disposition — markers say these are supposed to move; nothing reproduces or excuses them: ${undisposed.slice(0, 6).join(", ")}${undisposed.length > 6 ? ` … +${undisposed.length - 6} more` : ""} — run: node tools/behavior-worksheet.js ${name} (it prints ready-to-send poll questions for the reviewer)` };
   }
 
-  const summary = `${liveKeys.length} live behavior(s) verified — ${liveKeys.length - documented.length} reproduced within tolerance` + (documented.length ? `, ${documented.length} documented deviation(s) [${documented.join(", ")}]` : "") + (declaredKeys.length ? `; ${declaredKeys.length} declared row(s) disposed (${declaredKeys.length - declaredExcused} reproduced, ${declaredExcused} excused)` : "");
+  const summary = `${liveKeys.length} live behavior(s) verified — ${liveKeys.length - documented.length} reproduced within tolerance` + (documented.length ? `, ${documented.length} documented deviation(s) [${documented.join(", ")}]` : "") + (declaredKeys.length ? `; ${declaredKeys.length} declared row(s) disposed (${declaredKeys.length - declaredExcused} reproduced, ${declaredExcused} excused)` : "") + cite(live);
   return { ok: true, reason: summary, artifact: clonePath };
 }
 
@@ -549,10 +598,14 @@ const PHASES = [
         }
       }
       const st = loadState(name);
-      const missing = [], stale = [], forcedPhases = [];
+      const missing = [], stale = [], forcedPhases = [], blockedPhases = [];
       for (const p of PHASES.slice(0, -1)) {
         const ph = st.phases[p.key];
         if (ph.status !== "pass") { missing.push(p.key); continue; }
+        // A blocked phase's gate is EXPECTED to fail (that is what blocked means) — re-running
+        // it here would report it as "stale", which misnames the problem. The dedicated
+        // refusal below says precisely what it is: receipted, never verified.
+        if (ph.blocked) { blockedPhases.push(p.key); continue; }
         if (ph.forced) forcedPhases.push(p.key);
         const g = safeGate(p, name);
         if (!g.ok) stale.push(`${p.key} — ${g.reason}`);
@@ -560,6 +613,9 @@ const PHASES = [
       if (missing.length) return { ok: false, reason: `earlier phases not done: ${missing.join(", ")}` };
       if (stale.length) return { ok: false, reason: `recorded pass(es) are STALE against current artifacts — fix and re-advance: ${stale.join("; ")}` };
       if (forcedPhases.length) return { ok: false, reason: `phase(s) were forced past enforcement: ${forcedPhases.join(", ")} — re-advance each with a passing gate before claiming done` };
+      // A blocked phase let the run reach a reviewer despite the environment — that was the
+      // point — but it is an override, not a verification: done stays red until it is earned.
+      if (blockedPhases.length) return { ok: false, reason: `phase(s) were receipted as environment-BLOCKED, not verified: ${blockedPhases.join(", ")} — re-advance each with a passing gate (in an environment that can run it) before claiming done` };
       return { ok: true, reason: "every phase gate re-verified green against current artifacts, in order, none forced" };
     },
   },
@@ -646,12 +702,13 @@ function cmdStatus(name, opts = {}) {
   let nextRequired = null;
   for (const p of PHASES) {
     const ph = st.phases[p.key];
-    const mark = ph.status === "pass" ? (ph.forced ? "⚠ forced" : (p.kind === "attested" ? "✓ attested" : "✓ pass")) : "· pending";
+    const mark = ph.status === "pass" ? (ph.blocked ? "⚠ blocked" : ph.forced ? "⚠ forced" : (p.kind === "attested" ? "✓ attested" : "✓ pass")) : "· pending";
     console.log(`  ${mark.padEnd(11)} ${p.key.padEnd(9)} ${p.title}`);
     if (!nextRequired && ph.status !== "pass") nextRequired = p;
   }
   const pending = PHASES.filter((p) => st.phases[p.key].status !== "pass");
-  const forced = PHASES.filter((p) => st.phases[p.key].status === "pass" && st.phases[p.key].forced);
+  const blocked = PHASES.filter((p) => st.phases[p.key].status === "pass" && st.phases[p.key].blocked);
+  const forced = PHASES.filter((p) => st.phases[p.key].status === "pass" && st.phases[p.key].forced && !st.phases[p.key].blocked);
 
   if (nextRequired) {
     const g = safeGate(nextRequired, name);
@@ -666,22 +723,45 @@ function cmdStatus(name, opts = {}) {
       } else {
         console.log(`  run:  ${CMD} draft ${name} push   →   ${CMD} review ${name} file   →   pingfusi wait <ping_id> (background)`);
         console.log(`        (green machine gates are NOT done — a reviewer's approving verdict is the gate)`);
+        if (blocked.length) console.log(`        file it NOW despite the blocked gate(s) — the round documents the gap to the reviewer automatically; a reviewer look at a partial clone beats no look.`);
       }
     } else {
       console.log(`  run:  ${CMD} advance ${name} ${nextRequired.key}` + (nextRequired.kind === "attested" ? ' --evidence "…"' : ""));
+      const s = stallInfo(name, nextRequired.key);
+      if (!g.ok && s.fails >= STALL_AFTER) console.log(`  ${stallHint(name, s.fails)}`);
     }
-  } else if (forced.length) {
-    // every phase "passed", but some were forced — that is NOT a verified clone.
-    console.log(`\n  ⚠ all phases passed, but ${forced.length} was/were FORCED: ${forced.map((p) => p.key).join(", ")}`);
-    console.log(`    a forced gate is an override, not a verification — do not report this as pixel-perfect.`);
+  } else if (forced.length || blocked.length) {
+    // every phase "passed", but some were forced/blocked — that is NOT a verified clone.
+    if (forced.length) console.log(`\n  ⚠ all phases passed, but ${forced.length} was/were FORCED: ${forced.map((p) => p.key).join(", ")}`);
+    if (blocked.length) console.log(`\n  ⚠ all phases passed, but ${blocked.length} was/were environment-BLOCKED: ${blocked.map((p) => p.key).join(", ")}`);
+    console.log(`    an overridden gate is not a verification — do not report this as pixel-perfect.`);
   } else {
     console.log(`\n  ✓ all phases passed — this clone is verified pixel-perfect end to end.`);
   }
+
+  // Surface the latest assist (review-qa.js records them) so the answer is never missed
+  // between iterations — checking is free, and a pending ask means DON'T open a second one.
+  try {
+    const hq = readJson(path.join(targetDir(name), "review-qa.json"));
+    const asks = [...(hq.polls || []), ...(hq.diagnostics || [])].filter((e) => e && e.assist);
+    const a = asks[asks.length - 1];
+    if (a) {
+      const answers = (a.last && a.last.responses) || [];
+      if (answers.length) {
+        const first = answers[0].text || (answers[0].choice != null ? `[${answers[0].choice}]` : "") || "(see full result)";
+        console.log(`\n  assist answered (phase ${a.assist.phase}): ${String(first).split("\n")[0]}`);
+      } else {
+        const check = a.kind === "diagnostic" ? `${CMD} review ${name} assist-result ${a.ping_id}` : `${CMD} review ${name} poll-result ${a.ping_id}`;
+        console.log(`\n  assist pending (phase ${a.assist.phase}, ping ${a.ping_id}) — keep iterating; re-check free: ${check}`);
+      }
+    }
+  } catch (e) { /* no review-qa.json yet — nothing to surface */ }
 
   if (opts.assertDone) {
     const reasons = [];
     if (pending.length) reasons.push(`${pending.length} phase(s) never ran: ${pending.map((p) => p.key).join(", ")}`);
     if (forced.length && !opts.allowForced) reasons.push(`${forced.length} phase(s) were --force'd: ${forced.map((p) => p.key).join(", ")}`);
+    if (blocked.length && !opts.allowForced) reasons.push(`${blocked.length} phase(s) were receipted as environment-blocked, never verified: ${blocked.map((p) => p.key).join(", ")}`);
     if (reasons.length) {
       console.error(`\n❌ assert-done FAILED — "${name}" is NOT a finished iteration:`);
       for (const r of reasons) console.error(`   • ${r}`);
@@ -702,6 +782,12 @@ function cmdGate(name, phaseKey) {
   loadState(name); // ensure workflow exists
   const g = safeGate(phase, name);
   console.log(`${g.ok ? "✓ PASS" : "❌ FAIL"}  ${phaseKey} — ${g.reason}`);
+  if (!g.ok) {
+    // Probes stay read-only (they never count toward the streak) — but when failed ADVANCES
+    // already crossed the threshold, the probe is where the agent is looking, so say it here too.
+    const s = stallInfo(name, phaseKey);
+    if (s.fails >= STALL_AFTER) console.log(`   ${stallHint(name, s.fails)}`);
+  }
   process.exit(g.ok ? 0 : 1);
 }
 
@@ -731,14 +817,27 @@ function cmdAdvance(name, phaseKey, opts) {
     overrode.push("order");
   }
 
-  if (phase.kind === "attested" && !opts.evidence) {
+  if (phase.kind === "attested" && !opts.evidence && !opts.blocked) {
     if (!opts.force) refuse(`"${phaseKey}" is an attestation phase — pass --evidence "what you verified" (its gate can't fully prove it).`);
     overrode.push("evidence");
   }
 
   const g = safeGate(phase, name);
-  if (!g.ok) {
-    if (!opts.force) refuse(`gate failed for "${phaseKey}": ${g.reason}`, `fix it, or override with --force (recorded as forced in the audit log).`);
+  if (opts.blocked) {
+    // --blocked is the receipted LAST RUNG for an environment the agent cannot fix (auth wall,
+    // geo-block, tooling limit with no kit runner yet) — never a shortcut past a satisfiable
+    // gate. Its reason must say which provided remedy was tried and how it failed; the gate's
+    // own refusal names that remedy (LEARNINGS #32: a gate that refuses an environment must
+    // come with a way to PROVIDE one).
+    if (g.ok) refuse(`--blocked refused for "${phaseKey}" — the gate PASSES (${g.reason}); advance it normally.`);
+    overrode.push("blocked-env");
+  } else if (!g.ok) {
+    if (!opts.force) {
+      const streak = stallInfo(name, phaseKey).fails + 1; // + this refusal, receipted below
+      const hint = `fix it, or override with --force (recorded as forced in the audit log).` +
+        (streak >= STALL_AFTER ? `\n   ${stallHint(name, streak)}` : "");
+      refuse(`gate failed for "${phaseKey}": ${g.reason}`, hint);
+    }
     overrode.push("gate");
   }
 
@@ -748,19 +847,24 @@ function cmdAdvance(name, phaseKey, opts) {
     runId: runId(),
     gate: g.ok ? "pass" : "failed",
     forced: overrode.length > 0,
+    blocked: !!opts.blocked,
     overrode,
     sha256: g.artifact ? sha256OfFile(g.artifact) : null,
     artifact: g.artifact ? path.relative(WORK, g.artifact) : null,
-    evidence: opts.evidence || null,
+    evidence: opts.evidence || opts.blocked || null,
     reason: g.reason,
   };
-  st.phases[phaseKey] = { status: "pass", kind: phase.kind, runId: rec.runId, sha256: rec.sha256, evidence: rec.evidence, ts: rec.ts, forced: rec.forced, overrode };
+  st.phases[phaseKey] = { status: "pass", kind: phase.kind, runId: rec.runId, sha256: rec.sha256, evidence: rec.evidence, ts: rec.ts, forced: rec.forced, blocked: rec.blocked, overrode };
   saveState(name, st);
   appendLedger(name, rec);
 
-  console.log(`${rec.forced ? "⚠ FORCED" : "✓"} ${phaseKey} recorded  (runId ${rec.runId}${rec.sha256 ? ", sha256 " + rec.sha256 : ""})`);
+  console.log(`${rec.blocked ? "⚠ BLOCKED" : rec.forced ? "⚠ FORCED" : "✓"} ${phaseKey} recorded  (runId ${rec.runId}${rec.sha256 ? ", sha256 " + rec.sha256 : ""})`);
   console.log(`  ${g.reason}`);
-  if (rec.forced) console.log(`  ⚠ enforcement bypassed (${overrode.join(", ")}) — flagged in workflow.jsonl; the done gate refuses forced phases.`);
+  if (rec.blocked) {
+    console.log(`  ⚠ environment constraint receipted (${opts.blocked}) — NOT a verification; the done gate refuses blocked phases until each is re-advanced with a passing gate.`);
+    console.log(`  → push to review with what you have — the round documents the gap to the reviewer automatically:`);
+    console.log(`    1. ${CMD} draft ${name} push       2. ${CMD} review ${name} file       3. pingfusi wait <ping_id> (background)`);
+  } else if (rec.forced) console.log(`  ⚠ enforcement bypassed (${overrode.join(", ")}) — flagged in workflow.jsonl; the done gate refuses forced phases.`);
   const next = PHASES.find((p) => st.phases[p.key].status !== "pass");
   // The most dangerous moment in the pipeline is the LAST machine gate going green:
   // "0 fails" reads like completion, the agent declares victory, and no round is ever
@@ -782,25 +886,34 @@ function cmdLedger(name) {
   console.log(`\naudit trail — ${name}  (${lines.length} events)`);
   for (const l of lines) {
     const r = JSON.parse(l);
-    const kind = r.event === "reset" ? "RESET" : r.gate === "refused" ? "refused" : r.forced ? "FORCED" : r.gate;
+    const kind = r.event === "reset" ? "RESET" : r.event === "assist" ? "assist" : r.gate === "refused" ? "refused" : r.blocked ? "BLOCKED" : r.forced ? "FORCED" : r.gate;
     const what = r.event === "reset" ? "(state)" : r.phase;
-    const extra = (r.overrode && r.overrode.length ? `  overrode: ${r.overrode.join(",")}` : "") + (r.sha256 ? ` sha=${r.sha256}` : "") + (r.evidence ? `  ev: ${r.evidence}` : "");
+    const extra = (r.overrode && r.overrode.length ? `  overrode: ${r.overrode.join(",")}` : "") + (r.sha256 ? ` sha=${r.sha256}` : "") + (r.evidence ? `  ev: ${r.evidence}` : "") + (r.event === "assist" && r.reason ? `  ${r.reason}` : "");
     console.log(`  ${r.ts}  ${String(kind).padEnd(7)} ${String(what).padEnd(9)} runId=${r.runId}${extra}`);
   }
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 function parseOpts(args) {
-  const opts = { force: args.includes("--force"), evidence: null };
-  const ei = args.indexOf("--evidence");
-  if (ei >= 0) {
-    const v = args[ei + 1];
-    // never let a flag or nothing become permanent attestation text in the append-only ledger
+  const opts = { force: args.includes("--force"), evidence: null, blocked: null };
+  // never let a flag or nothing become permanent text in the append-only ledger
+  const takeValue = (flag, hint) => {
+    const i = args.indexOf(flag);
+    if (i < 0) return null;
+    const v = args[i + 1];
     if (v == null || v.startsWith("--")) {
-      console.error(`--evidence needs a value (got ${v == null ? "nothing" : `"${v}"`}) — quote it: --evidence "what you verified"`);
+      console.error(`${flag} needs a value (got ${v == null ? "nothing" : `"${v}"`}) — quote it: ${flag} "${hint}"`);
       process.exit(2);
     }
-    opts.evidence = v;
+    return v;
+  };
+  opts.evidence = takeValue("--evidence", "what you verified");
+  opts.blocked = takeValue("--blocked", "which provided remedy you tried and how the environment refused it");
+  if (opts.blocked && opts.force) {
+    // Two different claims: blocked receipts a constraint you cannot fix; force bypasses a
+    // gate you could satisfy. Conflating them would launder one into the other in the ledger.
+    console.error(`--blocked and --force are mutually exclusive — pick the one that is true.`);
+    process.exit(2);
   }
   return opts;
 }
@@ -853,6 +966,12 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      with one pxSend call even when the environment blocks
                                                      page→localhost (replaces the stash/chunk fallback)
   pingfusi sink                                      run the snapshot receiver (:7799)
+  pingfusi behavior-capture <name> [--side both|live|clone] [--dry-run]   behavior discovery in a
+                                                     kit-owned Chrome over CDP — REQUIRED when your
+                                                     automation's tabs are permanently hidden (the
+                                                     behavior gate refuses hidden captures); probe-gated,
+                                                     injects the same tools/behavior-capture.js and
+                                                     writes behaviors-*.json directly (no sink)
   pingfusi score   <name>                            score live-vs-clone vs the last run
   pingfusi diff    <live.json> <clone.json> [--visual|--inspect|--all|--tol N]   raw numeric diff
 
@@ -861,9 +980,17 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      --draft defaults to the hosted draft, then the tunnel)
   pingfusi review  <name> poll "question" [--choices "A,B"]   ~$0.05 mid-round micro-check with a
                                                      reviewer (advisory — never satisfies the review gate)
+  pingfusi assist  <name> [--compare]                STALLED on a gate? file a reviewer ask AUTO-COMPOSED
+                                                     from the failing gate's own artifacts (~$0.05 poll;
+                                                     --compare files a scoped side-by-side diagnostic
+                                                     round instead — advisory, never the review gate)
   pingfusi status  <name>                            phase table + the next required action
   pingfusi gate    <name> <phase>                    run ONE gate read-only (exit 0/1)
   pingfusi advance <name> <phase> [--evidence "…"] [--force]   record a phase (gate must pass)
+  pingfusi advance <name> <phase> --blocked "…"      receipt an ENVIRONMENT constraint the gate's own
+                                                     remedy couldn't fix, so review can still be filed
+                                                     (the round documents the gap; done refuses blocked
+                                                     phases until each is re-advanced with a passing gate)
   pingfusi ledger  <name>                            the audit trail (receipts)
 
 phases (in order): ${PHASES.map((p) => p.key).join(" → ")}
@@ -877,8 +1004,10 @@ function main() {
   switch (cmd) {
     case "new": { if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); } return delegate("harness/new-target.js", [name, ...rest]); }
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
+    case "behavior-capture": { if (!name) { console.error("usage: pingfusi behavior-capture <name> [--side both|live|clone] [--attach <port>] [--headless] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/behavior-runner.js", [name, ...rest]); }
     case "capture": { if (!name || !rest[0]) { console.error("usage: pingfusi capture open <name> | pingfusi capture pull <name> <file>|--all"); process.exit(2); } return delegate("harness/capture-remote.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
+    case "assist": { if (!name) { console.error('usage: pingfusi assist <name> [--phase <key>] [--ask "…"] [--compare]'); process.exit(2); } return delegate("harness/review-qa.js", ["assist", name, ...rest]); }
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
     case "draft": { if (!name || !rest[0]) { console.error("usage: pingfusi draft <name> push|status|delete"); process.exit(2); } return delegate("harness/draft.js", [rest[0], name]); }
     case "tunnel": { if (!name) { console.error("usage: pingfusi tunnel <name> [port] [--check]"); process.exit(2); } return delegate("harness/tunnel.js", [name, ...rest]); }
@@ -907,4 +1036,7 @@ if (require.main === module) main();
 // compareMeasured is exported so the behavior gate can be SCORED like the visual one
 // (harness/benchmarks/behavior-battery.js + detection-power's A/B). Without this the
 // behavior gate had no instrument at all, so no behavior-class miss could ever be promoted.
-module.exports = { PHASES, initWorkflow, loadState, targetDir, main, sha256OfFile, compareMeasured };
+// stallInfo/STALL_AFTER/appendLedger/runId/safeGate are exported for review-qa.js's `assist`
+// (streak at ask time, the assist receipt that resets it, the failing gate's reason) — one
+// authority for the ledger record shape and the stall arithmetic.
+module.exports = { PHASES, initWorkflow, loadState, targetDir, main, sha256OfFile, compareMeasured, STALL_AFTER, stallInfo, appendLedger, runId, safeGate };

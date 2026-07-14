@@ -28,13 +28,15 @@ function resolvePath(urlPath, { cloneDir, toolsDir }) {
 // (Local review mode — the /__review page — was removed 2026-07-10: the independent
 // reviewer on the review service is the only review path.)
 
+// Returns the http.Server so a caller can bind port 0 and read the real address —
+// the behavior runner self-serves the clone on an ephemeral port this way.
 function serve(name, port) {
   const PKG = path.resolve(__dirname, "..");   // the installed kit: /tools/* served from here
   const WORK = process.cwd();                  // the user's dir: targets/<name>/clone lives here
   const cloneDir = path.join(WORK, "targets", name, "clone");
   const toolsDir = path.join(PKG, "tools");
   if (!fs.existsSync(cloneDir)) { console.error(`no targets/${name}/clone — run: pingfusi new ${name} <url>`); process.exit(1); }
-  http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     const fp = resolvePath(req.url, { cloneDir, toolsDir });
     if (!fp) { res.writeHead(403); res.end("403 forbidden"); return; }
     fs.readFile(fp, (e, buf) => {
@@ -60,7 +62,9 @@ function serve(name, port) {
     if (e.code === "EADDRINUSE") { console.error(`port ${port} is already in use — pass another: pingfusi serve ${name} <port>  (e.g. ${port + 1})`); process.exit(1); }
     console.error(`serve failed: ${e.message}`);
     process.exit(1);
-  }).listen(port, () => console.log(`serving targets/${name}/clone → http://localhost:${port}   (/tools/* → kit tools)`));
+  });
+  server.listen(port, () => console.log(`serving targets/${name}/clone → http://localhost:${server.address().port}   (/tools/* → kit tools)`));
+  return server;
 }
 
 if (require.main === module) {

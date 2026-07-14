@@ -29,6 +29,12 @@ Environment notes (operational, not workflow):
   set in ONE ToolSearch call). Fresh tabs; verify innerWidth/devicePixelRatio before
   every capture; if the requested width is unreachable, record the actual width in
   target.json and measure everything at that width.
+- Behavior discovery needs a tab where `document.hidden === false`. If your automation
+  reports tabs hidden PERMANENTLY (some stacks do — verify once, not per tab), do not
+  fight the environment and do not retry: run `pingfusi behavior-capture {{NAME}}`
+  instead — a kit-owned Chrome measures BOTH sides (probe-gated, attestation recorded)
+  and writes behaviors-*.json directly. Name marquees/hover triggers in
+  targets/{{NAME}}/behavior-opts.json first.
 - Long-running processes (sink, serve, tunnels, `pingfusi wait`) run as background
   Bash tasks. Sandboxed Bash may need the sandbox disabled for network commands.
 - NEVER end your turn at a review-wait without a live waiter: a parked agent is not

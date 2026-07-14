@@ -62,5 +62,29 @@ if (vFails.length) {
 
 fs.appendFileSync(logPath, JSON.stringify(score) + "\n");
 console.log(`\nrecorded to targets/${name}/scores.jsonl  (${prevLines.length + 1} runs)`);
+
+// Stall detection (advisory): 3 consecutive runs where visualFails didn't drop is the
+// documented shape of a blind loop — an underline wrong three rounds in a row, 93 fails
+// chasing a font — mechanisms a reviewer names in ONE look for ~$0.05. Derived from the
+// trailing runs of scores.jsonl (no new state); runs with a width/height mismatch don't
+// count in either direction — their numbers are not trustworthy. Advisory only: the
+// banner is loud, nothing blocks.
+const STALL_RUNS = 3;
+if (!v.ok && score.visualFails > 0 && !widthMismatch && !heightMismatch) {
+  const runs = [...prevLines.map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }), score]
+    .filter((r) => r && !r.widthMismatch && !r.heightMismatch);
+  let streak = 1; // the run just recorded
+  for (let i = runs.length - 2; i >= 0 && streak < 99; i--) {
+    const cur = runs[i + 1], was = runs[i];
+    if (typeof was.visualFails !== "number" || cur.visualFails < was.visualFails) break; // an improving step ends the streak
+    streak++;
+  }
+  if (streak >= STALL_RUNS) {
+    console.log(`\n⚠ STALLED — visual fails stuck at ${score.visualFails} for ${streak} runs. A reviewer often names the mechanism in one look (~$0.05):`);
+    console.log(`    pingfusi assist ${name}              (question auto-composed from the worst failing mark)`);
+    console.log(`    pingfusi assist ${name} --compare    (scoped side-by-side diagnostic round instead)`);
+  }
+}
+
 if (v.ok) console.log(`✓ --visual green. Next: close coverage (every painted leaf has a target), then read the strict table for colour/underline rows.`);
 process.exit(v.ok ? 0 : 1);

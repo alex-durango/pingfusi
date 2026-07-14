@@ -797,3 +797,40 @@ the selector the tool *declares* rather than restating it — a fixture that har
 pass while the kit stayed broken. 👁 When a gate blames the site for something you cannot find in
 the design, suspect your own instrument before you reproduce it — and when you find one of its
 nodes, go looking for its siblings.
+
+## 32. THE TAB WAS HIDDEN FOREVER — a gate may refuse an environment only if the kit can provide one
+Found on pingfusi-landing (2026-07-12), then terminally on a mindmarket run the next day. Under one
+browser-automation stack, `document.hidden` is `true` for EVERY tab, permanently — fresh tabs,
+reconnects, explicit foreground attempts, even as the only open tab after a real click — and the
+CSS-animation compositor is genuinely suspended: the marquee sampler read **0 px/s on a belt that
+moves**, on live and clone alike. The pingfusi-landing run escaped analytically (track `scrollWidth`
+÷ `animation-duration` → 45.986 px/s, matching exactly on both sides) and passed the gate — hours
+before the same evening's hardening taught the gate to refuse `discovery.documentHidden` captures
+outright. That refusal is correct about the physics (#22, #27: numbers sampled where the clock does
+not advance are artifacts of the instrument, not the page) — and it turned this environment into a
+**deadlock**: behavior can never pass, review/done are order-gated behind it, and `--force`
+correctly poisons `done`. An agent in that environment cannot finish a clone at all, and retrying
+is not a fix, because the environment is the defect.
+
+**Lesson:** a gate that refuses an environment must come with a way to PROVIDE one, or it converts
+an honest refusal into an unfinishable pipeline. The fix is not to relax the gate (a hidden tab
+still measures nothing) and not to borrow the agent's browser harder — it is to stop depending on
+the agent's browser for measurement: `pingfusi behavior-capture <name>` runs the SAME
+`tools/behavior-capture.js`, byte-identical, in a Chrome the kit launches with throttling disabled
+(or attaches to), and writes both `behaviors-*.json` directly over CDP — no sink, and no CSP dance,
+because `Runtime.evaluate` is not subject to the page's `script-src`. And the runner does not get
+trusted either: "we launched it ourselves" is a claim, so a measured probe (rAF cadence + a known
+100 px/s test animation) must show the compositor advancing before a single capture, and the
+snapshot carries a `discovery.runner` attestation the gate cites in its pass reason.
+> 🔒 **Enforced now:** both hidden-tab refusals name the runner as the way out (a refusal that
+> only says "foreground the tab" is a dead end in this environment); the runner refuses its own
+> tab on a failed probe, records `documentHidden` as measured, and dumps a capture that went
+> hidden mid-run to `.rejected.json` rather than overwriting the artifact. Locked by
+> `cdp-selftest` / `chrome-selftest` / `behavior-runner-selftest` (the integration half measured
+> a known 100 px/s fixture marquee at 101 px/s in a launched headless Chrome, `documentHidden:
+> false`) and the new behavior-selftest assertions.
+> 👁 **Still yours:** the bot-wall ladder. A fresh automated profile loses to a challenge wall in
+> BOTH headful and headless (measured on chrono24) — the runner prints the ladder (persistent
+> `--profile` → `--attach` to a Chrome you launched → worksheet rows answered by the reviewer)
+> instead of climbing it for you, because logging in and clearing challenges is judgment, not
+> plumbing.

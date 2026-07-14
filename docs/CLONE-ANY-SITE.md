@@ -34,6 +34,12 @@ minutes, so the agent is the bottleneck, not the reviewer:**
   "is this what they meant?"), spend a ~$0.05 micro-poll —
   `pingfusi review {{NAME}} poll "…" --choices "Yes,No"` — BEFORE burning a full test
   round on it. Polls advise; only full rounds satisfy the review gate.
+- Stalled on a gate (score/status print STALLED after 3 no-progress iterations)?
+  `pingfusi assist {{NAME}}` composes the poll question FOR you from the failing gate's
+  own artifacts — a reviewer names in one look what costs you three blind iterations.
+  `--compare` files a scoped side-by-side diagnostic round instead when a one-sided
+  description won't do (full credit, slower — poll first). Keep iterating while the
+  ask is pending; never open a second one.
 - **On every REFILE, pass `--changelog "what changed since the last review"`** —
   a reviewer who isn't told what changed reviews blind ("did you fix
   anything?" is a wasted round). And **never escalate a reviewer's comment
@@ -101,6 +107,16 @@ always tells you what's next):**
    `pingfusi review {{NAME}} file` again — the refile loop is the product working,
    not a failure. The gate passes only on an explicit approving verdict pick;
    comments alone never pass, however positive.
+
+   **A pre-review gate blocked by the ENVIRONMENT never ends the run unfiled.** The
+   ladder, in order: (1) the remedy the gate's refusal names (e.g. hidden tabs →
+   `pingfusi behavior-capture {{NAME}}`); (2) `pingfusi assist {{NAME}}` when a reviewer
+   observation could unstick you; (3) receipt the constraint —
+   `pingfusi advance {{NAME}} <phase> --blocked "what you tried and why it failed"` —
+   and file the round anyway: the spec documents the gap to the reviewer automatically,
+   and a reviewer look at a partial clone catches what the gates structurally can't.
+   `done` still refuses the blocked phase until it is genuinely earned — a filed round
+   with a named gap is progress; a stopped session ships nothing.
 
 7. **Finish.** `pingfusi advance {{NAME}} reviewer`, then `pingfusi advance {{NAME}} done` —
    done re-runs every gate against the artifacts on disk. Paste the final

@@ -41,6 +41,20 @@
 //       urls are appended automatically when tunnel.json/target.json exist.
 //   node harness/review-qa.js poll-result <name> <ping_id>
 //       free re-fetch of a pending poll's answers
+//   node harness/review-qa.js assist   <name> [--phase <key>] [--ask "…"] [--compare]
+//       the STALL escalation (`pingfusi assist`): composes a reviewer question FROM the
+//       failing phase's own artifacts (worst failing diff row, uncovered leaf, behavior
+//       row) and files it — a ~$0.05 one-sided micro-poll by default, or with --compare a
+//       SCOPED DIAGNOSTIC ROUND (side-by-side compare UI; full credit; recorded in
+//       hq.diagnostics so it can never satisfy the review gate). At most ONE open assist
+//       per target; filing appends an `assist` receipt to workflow.jsonl, which is what
+//       resets the stall streak. Refuses phases a reviewer can't help with (mechanical
+//       artifacts, environment-shaped behavior failures → pingfusi behavior-capture).
+//   node harness/review-qa.js assist-result <name> <ping_id>
+//       free re-fetch of a diagnostic round's answers (poll assists use poll-result)
+//   node harness/review-qa.js file <name> --diagnostic --region "the …" [--ask "…"]
+//       file a diagnostic round directly (what assist --compare does) — exempt from the
+//       gates-green guard because its purpose is the UNKNOWN flag, but must be scoped
 //
 // AUTH: the designer's existing pingfusi login — ~/.config/pingfusi/credentials.json (or
 // the legacy ~/.config/pinghumans / ~/.config/cpyany path), else the Bearer header in
@@ -201,6 +215,20 @@ function buildSpec(name, draftUrl, region, changelog, context) {
       deviationNote = ` See the "KNOWN, INTENTIONAL differences" step below (${keys.length} documented) — you should NOT flag those; they're already excused.`;
     }
   } catch (e) {}
+  // Environment-BLOCKED phases (advance --blocked) are surfaced to the reviewer the same
+  // way as documented deviations: the round is filed WITH the gap named, so the reviewer
+  // judges the rest of the page on its merits instead of the round bouncing on a gap the
+  // builder already receipted. (The mindmarket lesson: a filed round with a named gap
+  // ships a fix list; a session that stops at the blocked gate ships nothing.)
+  try {
+    const st = readJson(path.join(targetDir(name), "workflow.json"));
+    const blockedPhases = Object.entries(st.phases || {}).filter(([, v]) => v && v.status === "pass" && v.blocked);
+    if (blockedPhases.length) {
+      const GAP_PREFIX = "KNOWN GAP — could not be verified in this build environment: ";
+      const parts = blockedPhases.map(([k, v]) => `${k} (${String(v.evidence || "environment constraint").replace(/\s+/g, " ").slice(0, 80)})`);
+      steps.push({ text: (GAP_PREFIX + parts.join(" | ") + ". Related dynamics may be missing — note what you see missing so the fix list is complete, but judge the rest on its own merits.").slice(0, 300), check: null });
+    }
+  } catch (e) {}
   // Compare steps naming the certified marks. TWO service caps bind here and they fight each
   // other: a step's `text` caps at 300 chars, and the whole round caps at 20 STEPS. The old
   // fixed "5 leaves per step" satisfied the first and blew the second the moment a target was
@@ -306,6 +334,192 @@ function pushRound(name, ping_id, spec, approve) {
   return hq.rounds.length;
 }
 
+// ── diagnostic rounds — a scoped "what differs here?" compare, mid-pipeline ────
+// A diagnostic round exists to surface the UNKNOWN flag while gates are still red — the
+// opposite of a premature approval round (whose filing the gates-green guard refuses
+// because it burns a credit on flags the builder already knows). It NEVER satisfies the
+// review gate: recorded in hq.diagnostics, and verify() reads hq.rounds only; none of its
+// verdict options is an approval of anything.
+function buildDiagnosticSpec(name, draftUrl, region, ask) {
+  const target = readJson(path.join(targetDir(name), "target.json"));
+  let site = target.url;
+  try { site = new URL(target.url).hostname.replace(/^www\./, ""); } catch (e) {}
+  const R = region;
+  const verdicts = ["Described the differences", "Looks identical here", "Could not compare"];
+  const steps = [
+    { text: `DIAGNOSTIC — not an approval. Open both pages side by side at the same width and look ONLY at ${R} of ${site}. The builder is stuck on it and needs your eyes, not a pass/fail.`.slice(0, 300), check: null },
+  ];
+  if (ask && ask.trim()) steps.push({ text: ask.trim().replace(/\s+/g, " ").slice(0, 300), check: null });
+  steps.push(
+    { text: `Describe exactly what differs in ${R} — and if you can see it, the MECHANISM: does it move on scroll, load late, use a different font or color, sit somewhere else? Attach a zoomed screenshot of both.`.slice(0, 300), check: null },
+    // Same tappable-verdict contract as buildSpec: option-bearing steps render as pickers
+    // today; the typed-copy fallback covers renders where even step options fail.
+    { text: `FINAL REQUIRED STEP — verdict. Buttons? Pick one. NO buttons (known bug)? COPY ONE OF THESE LINES EXACTLY as your comment: "${verdicts[0]}" / "${verdicts[1]}" / "${verdicts[2]}".`, options: verdicts, check: null }
+  );
+  return {
+    url: target.url,
+    draft_url: draftUrl,
+    title: `${site} — what differs in ${R}? (diagnostic)`,
+    instructions: `Diagnostic help request on a clone of ${site} (${target.url}), scoped to ${R}. This is NOT an approval round: describe what differs and how — the builder acts on your description. Everything outside ${R} is out of scope.`,
+    steps,
+    verdict_options: verdicts,
+    approve_verdicts: [], // none — a diagnostic can never approve anything
+    n_target: 1,
+    deadline_seconds: 86400,
+    require_evidence: "screenshot",
+  };
+}
+
+function pushDiagnostic(name, ping_id, spec, region, assistMeta) {
+  const hq = loadHq(name);
+  hq.diagnostics = hq.diagnostics || [];
+  hq.diagnostics.push({ ping_id, kind: "diagnostic", region, draft_url: (spec && spec.draft_url) || null, filed_at: new Date().toISOString(), deadline_seconds: (spec && spec.deadline_seconds) || 86400, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) });
+  saveHq(name, hq);
+  return hq.diagnostics.length;
+}
+
+// ── assist — compose the reviewer question FROM the failing phase's artifacts ──
+// The stall detector (workflow.js) says WHEN to ask; this says WHAT. Every composed
+// question is ONE-SIDED by construction (the reviewer looks at the live page only) —
+// a side-by-side "what's different?" needs the compare UI of a filed round, which is
+// what `assist --compare` files. Returns { ok, question, subject } or { ok:false, reason }.
+function composeAssist(name, phaseKey) {
+  const dir = targetDir(name);
+  const width = (() => { try { return readJson(path.join(dir, "target.json")).width; } catch (e) { return null; } })();
+  const at = width ? ` at ${width}px` : "";
+
+  if (["target", "assets", "measure", "build"].includes(phaseKey)) {
+    return { ok: false, reason: `the "${phaseKey}" phase fails mechanically (a missing or invalid artifact) — a reviewer cannot supply it. The gate names the fix: node harness/workflow.js gate ${name} ${phaseKey}` };
+  }
+  if (phaseKey === "review" || phaseKey === "done") {
+    return { ok: false, reason: `"${phaseKey}" is the review loop itself — wait on the filed round (pingfusi wait <ping_id>) or refile with --changelog after fixes; an assist adds nothing a round doesn't already carry.` };
+  }
+
+  if (phaseKey === "visual" || phaseKey === "strict") {
+    let live, clone;
+    try { live = readJson(path.join(dir, "live.json")); clone = readJson(path.join(dir, "clone.json")); }
+    catch (e) { return { ok: false, reason: `live.json/clone.json unreadable (${e.message}) — capture them first; a reviewer cannot supply a snapshot.` }; }
+    const { diffSnapshots } = require("../tools/pixel-diff.js");
+    const d = diffSnapshots(live, clone, phaseKey === "visual" ? { visual: true } : {});
+    const fails = d.rows.filter((r) => !r.pass);
+    if (!fails.length) return { ok: false, reason: `the ${phaseKey} diff has no failing rows right now — re-run the gate; there is nothing to ask about.` };
+    // String-prop rows (color and friends) first — numbers describe them worst; then the
+    // largest numeric delta. The worst mark is the one the agent has been circling.
+    const worst = fails.find((r) => isNaN(parseFloat(r.delta))) ||
+      fails.slice().sort((a, b) => (Math.abs(parseFloat(b.delta)) || 0) - (Math.abs(parseFloat(a.delta)) || 0))[0];
+    const prop = String(worst.prop || "");
+    // color before the generic font.* branch — font.color is a COLOR question, not a weight one
+    const hint = /color|background/i.test(prop) ? "what exact color is it? attach a zoomed screenshot."
+      : /^font/.test(prop) ? "how does the text read — bold, condensed or regular, and what size does it look?"
+      : /underline|decoration|border|outline/i.test(prop) ? "how thick is the line and how far from the text does it sit?"
+      : /^(x|y|w|h)$|width|height|gap|pad|margin|top|left|right|bottom/i.test(prop) ? "where exactly does it sit — flush against what, with how much space around it?"
+      : "describe exactly what it looks like — size, weight, color, position.";
+    return { ok: true, subject: slugToWords(worst.target), question: `On the live page${at}, look at the ${slugToWords(worst.target)} (its ${prop}): ${hint}` };
+  }
+
+  if (phaseKey === "coverage") {
+    let leaves = [], liveEls = {}, cloneEls = {};
+    try {
+      const cov = readJson(path.join(dir, "coverage.json"));
+      leaves = Array.isArray(cov) ? cov : cov.leaves || [];
+      liveEls = readJson(path.join(dir, "live.json")).elements || {};
+      cloneEls = readJson(path.join(dir, "clone.json")).elements || {};
+    } catch (e) { return { ok: false, reason: `coverage artifacts unreadable (${e.message}) — enumerate the painted leaves first; a reviewer cannot do that for you.` }; }
+    const uncovered = leaves.filter((n) => !(liveEls[n] && liveEls[n].present && cloneEls[n] && cloneEls[n].present));
+    if (!uncovered.length) return { ok: false, reason: "coverage has no uncovered leaves right now — re-run the gate; there is nothing to ask about." };
+    return { ok: true, subject: slugToWords(uncovered[0]), question: `On the live page${at}, find the ${slugToWords(uncovered[0])} — is it actually visible there, and what does it look like (size, color, position)?` };
+  }
+
+  if (phaseKey === "behavior") {
+    // Environment-shaped failures first: a reviewer cannot fix the capture environment,
+    // and the gate's own refusal already names the remedy (LEARNINGS #32) — steering an
+    // assist there would spend $0.05 on a question no reviewer can answer.
+    const wf = require("./workflow.js");
+    const g = wf.safeGate(wf.PHASES.find((p) => p.key === "behavior"), name);
+    if (!g.ok && /HIDDEN|behaviors-live\.json missing/.test(g.reason)) {
+      return { ok: false, reason: `the behavior failure is environmental, not a judgment call — a reviewer cannot fix it. Do what the gate says: pingfusi behavior-capture ${name} (kit-owned Chrome, both sides).\n   gate said: ${g.reason.replace(/\s+/g, " ").slice(0, 200)}` };
+    }
+    let live = {}, clone = {};
+    try { live = readJson(path.join(dir, "behaviors-live.json")); } catch (e) {}
+    try { clone = readJson(path.join(dir, "behaviors-clone.json")); } catch (e) {}
+    const descriptorOf = (k) => k.replace(/^[a-z-]+:/i, "");
+    const cloneDescs = new Set(Object.keys((clone && clone.behaviors) || {}).map(descriptorOf));
+    const rows = [...Object.entries(live.behaviors || {}), ...Object.entries(live.declared || {})];
+    const pick = rows.find(([k]) => !cloneDescs.has(descriptorOf(k))) || rows[0];
+    if (!pick) return { ok: false, reason: `no behavior rows to ask about — ${g.ok ? "the gate passes; advance it" : g.reason.replace(/\s+/g, " ").slice(0, 160)}` };
+    const [key, b] = pick;
+    // The proven one-sided worksheet format (tools/behavior-worksheet.js): when the machine
+    // can't observe the truth, the reviewer is the measurement instrument.
+    const where = b && b.text ? `the element reading "${b.text}"` : descriptorOf(key);
+    const evidence = ((b && (b.hints || [b.trigger])) || ["animation"]).filter(Boolean).slice(0, 2).join(", ") || "animation";
+    return { ok: true, subject: descriptorOf(key), question: `On the real page, near ${where}: something is supposed to animate there (${evidence}). What happens as you scroll/interact — how fast, which direction, when does it start, does it loop?` };
+  }
+
+  return { ok: false, reason: `unknown phase "${phaseKey}"` };
+}
+
+// A question naming BOTH the clone and the live page is a comparison — it needs the
+// side-by-side compare UI of a filed round, not a text poll (flagged by a reviewer TWICE
+// on one run; refusal, not advice — prose rules kept being skipped).
+function comparisonShaped(question) {
+  const namesTheClone = /\b(clone|draft|replica|copy|ours?|our (page|site|version))\b/i.test(question);
+  const namesTheLive = /\b(original|real|live|reference|actual)\b[^.]{0,40}\b(page|site|version|one)\b|\bthe (original|real thing)\b/i.test(question);
+  return namesTheClone && namesTheLive;
+}
+
+// Context the reviewer needs to answer a visual question: the draft + original urls.
+// Draft resolution mirrors `file`'s: the hosted draft first, then the verified tunnel.
+function pollContext(name) {
+  let ctx = "";
+  let draftUrl = null;
+  try { draftUrl = readJson(path.join(targetDir(name), "draft.json")).url; } catch (e) {}
+  if (!draftUrl) { try { draftUrl = readJson(path.join(targetDir(name), "tunnel.json")).url; } catch (e) {} }
+  if (draftUrl) ctx += `\nDraft: ${draftUrl}`;
+  try { ctx += `\nOriginal: ${readJson(path.join(targetDir(name), "target.json")).url}`; } catch (e) {}
+  return ctx;
+}
+
+// Shared printer for poll-style answers: 0 once ≥1 answer exists, 1 while pending/expired.
+function pollReport(name, hq, sc, entry) {
+  entry.last = { status: sc.status, n_received: sc.n_received, responses: (sc.responses || []).map((r) => ({ choice: r.choice != null ? r.choice : null, text: r.free_text || r.text || null })) };
+  entry.checked_at = new Date().toISOString();
+  saveHq(name, hq);
+  const resp = entry.last.responses;
+  if (resp.length) {
+    console.log(`poll answered (${resp.length}):` + resp.map((r) => `\n  ${r.choice != null ? `[${r.choice}] ` : ""}${r.text || ""}`).join(""));
+    return 0;
+  }
+  console.error(`poll ${entry.ping_id} ${sc.status || "pending"} — 0 answers yet; re-check (free): node harness/review-qa.js poll-result ${name} ${entry.ping_id}`);
+  return 1;
+}
+
+// File one micro-poll (shared by `poll` and `assist`): ~$0.05, the server blocks up to
+// ~300s while a reviewer answers, so an answer often arrives inside the call.
+async function fileMicroPoll(name, hq, question, choices, assistMeta) {
+  const args_ = { question: question + pollContext(name), n_target: 1, deadline_seconds: 3600 };
+  if (choices && choices.length) args_.choices = choices;
+  const sc = await rpc("quick_poll", args_, 320_000);
+  const entry = { ping_id: sc.ping_id || null, question, asked_at: new Date().toISOString(), deadline_seconds: 3600, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) };
+  hq.polls = hq.polls || [];
+  hq.polls.push(entry);
+  return { sc, entry };
+}
+
+// The latest assist that is still WAITING — filed, unanswered, unexpired. The one-open-ask
+// cap reads this: a second unanswered ask multiplies credits without resolving the first
+// (astryx superseded its own unpicked round and re-entered the same stalled queue).
+function openAssist(hq) {
+  const entries = [...(hq.polls || []), ...(hq.diagnostics || [])].filter((e) => e && e.assist && e.ping_id);
+  for (const e of entries.reverse()) {
+    const answered = e.last && e.last.responses && e.last.responses.length;
+    const expired = e.last && e.last.status === "expired";
+    const askedAt = e.asked_at || e.filed_at;
+    const aged = askedAt ? Date.now() - Date.parse(askedAt) > ((e.deadline_seconds || 3600) * 1000) : false;
+    if (!answered && !expired && !aged) return e;
+  }
+  return null;
+}
+
 // ── commands ──────────────────────────────────────────────────────────────────
 async function main() {
   const args = process.argv.slice(2);
@@ -315,14 +529,27 @@ async function main() {
   if (!fs.existsSync(path.join(targetDir(name), "target.json"))) { console.error(`targets/${name}/target.json missing`); process.exit(1); }
 
   if (cmd === "template" || cmd === "file") {
+    // --diagnostic files a SCOPED "what differs here?" round mid-pipeline. It is exempt
+    // from the gates-green guard below because that guard exists to stop premature
+    // APPROVAL rounds (which return flags the builder already knows); a diagnostic's
+    // whole purpose is the unknown flag. It must be scoped (--region) — an unscoped
+    // diagnostic of a half-built page IS a premature review — and it can never satisfy
+    // the review gate (recorded in hq.diagnostics; verify reads hq.rounds only).
+    const diagnostic = args.includes("--diagnostic");
+    if (diagnostic && !(opt("--region") || "").trim()) {
+      console.error(`❌ a diagnostic round must be scoped — pass --region "the <section>" so the reviewer describes ONE thing, not a half-built page.`);
+      process.exit(2);
+    }
     // A round filed while earlier gates are still red reviews an UNFINISHED clone — the
     // reviewer returns flags you already knew about and a credit is burned (paid for once:
     // filed before the behavior phase ran, racing the reviewer's claim). Filing isn't a
     // phase advance, so the state machine can't refuse it — this check is that refusal.
     // Canonical phase list comes from workflow.js (a workflow.json seeded before a phase
     // existed simply lacks its key — that phase is PENDING, not exempt); no workflow.json
-    // at all = standalone usage, guard skipped.
-    if (cmd === "file" && !args.includes("--anyway")) {
+    // at all = standalone usage, guard skipped. Blocked phases record status "pass"
+    // (receipted overrides), so a --blocked receipt is exactly what lets this guard
+    // let the round through — the spec carries the KNOWN GAP step for it.
+    if (cmd === "file" && !args.includes("--anyway") && !diagnostic) {
       const wfPath = path.join(targetDir(name), "workflow.json");
       if (fs.existsSync(wfPath)) {
         const { PHASES } = require("./workflow.js");
@@ -336,6 +563,8 @@ async function main() {
       }
     } else if (cmd === "file" && args.includes("--anyway")) {
       console.error("⚠ --anyway: filing without the pre-review gates all green — deliberate out-of-band round");
+    } else if (cmd === "file" && diagnostic) {
+      console.error("⚠ --diagnostic: scoped diagnostic round — advisory; it buys a description, never the review gate");
     }
     // Local review mode is GONE (removed 2026-07-10): the independent reviewer on the
     // review service is the only path — an operator-trusted local verdict was a forgeable
@@ -357,7 +586,9 @@ async function main() {
       console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.");
       process.exit(1);
     }
-    const spec = buildSpec(name, draft, opt("--region"), opt("--changelog"), opt("--context"));
+    const spec = diagnostic
+      ? buildDiagnosticSpec(name, draft, opt("--region"), opt("--ask"))
+      : buildSpec(name, draft, opt("--region"), opt("--changelog"), opt("--context"));
     if (cmd === "template") { console.log(JSON.stringify(spec, null, 2)); return; }
     // A round filed against a dead/wrong draft url burns the whole review round. Re-verify
     // AT FILE TIME: reachable is required; byte-identical to clone/index.html is expected
@@ -376,6 +607,11 @@ async function main() {
     const { approve_verdicts, ...toolArgs } = spec;
     const r = await rpc("request_review", toolArgs);
     if (!r.ping_id) throw new Error("filing returned no ping_id");
+    if (diagnostic) {
+      pushDiagnostic(name, r.ping_id, spec, opt("--region"), null);
+      console.log(`✓ filed diagnostic round — ping ${r.ping_id} (scoped to ${opt("--region")})\n  advisory: it buys a description, never the review gate.\n  check (free): node harness/review-qa.js assist-result ${name} ${r.ping_id}`);
+      return;
+    }
     const round = pushRound(name, r.ping_id, spec, approve_verdicts);
     console.log(`✓ filed round ${round} — ping ${r.ping_id}\n  approve verdict: "${approve_verdicts[0]}"\n  gate: node harness/workflow.js gate ${name} review   (or: node harness/review-qa.js verify ${name})\n  wake on result: pingfusi wait ${r.ping_id}`);
     return;
@@ -495,51 +731,124 @@ async function main() {
   if (cmd === "poll" || cmd === "poll-result") {
     const hq = loadHq(name);
     hq.polls = hq.polls || [];
-    // shared printer: exit 0 once ≥1 answer exists, 1 while pending/expired
-    const report = (sc, entry) => {
-      entry.last = { status: sc.status, n_received: sc.n_received, responses: (sc.responses || []).map((r) => ({ choice: r.choice != null ? r.choice : null, text: r.free_text || r.text || null })) };
-      entry.checked_at = new Date().toISOString();
-      saveHq(name, hq);
-      const resp = entry.last.responses;
-      if (resp.length) {
-        console.log(`poll answered (${resp.length}):` + resp.map((r) => `\n  ${r.choice != null ? `[${r.choice}] ` : ""}${r.text || ""}`).join(""));
-        return 0;
-      }
-      console.error(`poll ${entry.ping_id} ${sc.status || "pending"} — 0 answers yet; re-check (free): node harness/review-qa.js poll-result ${name} ${entry.ping_id}`);
-      return 1;
-    };
     if (cmd === "poll-result") {
       if (!extra) { console.error("usage: review-qa.js poll-result <name> <ping_id>"); process.exit(2); }
       const entry = hq.polls.find((p) => p.ping_id === extra) || (() => { const e = { ping_id: extra, question: null, asked_at: null }; hq.polls.push(e); return e; })();
-      process.exit(report(await rpc("get_ping", { ping_id: extra }), entry));
+      process.exit(pollReport(name, hq, await rpc("get_ping", { ping_id: extra }), entry));
     }
     const question = extra;
     if (!question) { console.error('usage: review-qa.js poll <name> "question" [--choices "A,B,C"]'); process.exit(2); }
-    // A comparison-shaped question ("does the clone match the real page?") through the
-    // text-poll channel strips the reviewer of the side-by-side compare UI — flagged by a
-    // reviewer TWICE on one run. Polls may reference ONE side; a question naming both sides
-    // is a comparison and belongs in a filed round (file --region "…" scopes a quick compare
-    // round). Refusal, not advice — prose rules kept being skipped.
-    const namesTheClone = /\b(clone|draft|replica|copy|ours?|our (page|site|version))\b/i.test(question);
-    const namesTheLive = /\b(original|real|live|reference|actual)\b[^.]{0,40}\b(page|site|version|one)\b|\bthe (original|real thing)\b/i.test(question);
-    if (namesTheClone && namesTheLive && !args.includes("--allow-comparison")) {
+    // Comparison guard (see comparisonShaped): polls may reference ONE side; a question
+    // naming both sides needs the compare UI of a filed round.
+    if (comparisonShaped(question) && !args.includes("--allow-comparison")) {
       console.error(`❌ refusing to poll — this question names BOTH the clone and the live page, which makes it a COMPARISON: the reviewer needs the side-by-side compare UI, not a text question.\n   file a scoped compare round instead: node harness/review-qa.js file ${name} --region "<the section>"\n   (or, if this genuinely isn't a comparison, re-run with --allow-comparison)`);
       process.exit(1);
     }
-    // context the reviewer needs to answer a visual question: the verified draft + original
-    let ctx = "";
-    try { ctx += `\nDraft: ${readJson(path.join(targetDir(name), "tunnel.json")).url}`; } catch (e) {}
-    try { ctx += `\nOriginal: ${readJson(path.join(targetDir(name), "target.json")).url}`; } catch (e) {}
     const choices = (opt("--choices") || "").split(",").map((s) => s.trim()).filter(Boolean);
-    const args_ = { question: question + ctx, n_target: 1, deadline_seconds: 3600 };
-    if (choices.length) args_.choices = choices;
-    const sc = await rpc("quick_poll", args_, 320_000); // server blocks up to ~300s while a reviewer answers
-    const entry = { ping_id: sc.ping_id || null, question, asked_at: new Date().toISOString(), last: null, checked_at: null };
-    hq.polls.push(entry);
-    process.exit(report(sc, entry));
+    const { sc, entry } = await fileMicroPoll(name, hq, question, choices, null);
+    process.exit(pollReport(name, hq, sc, entry));
   }
 
-  console.error(`unknown command "${cmd}" — template | file | record | verify | poll | poll-result`);
+  if (cmd === "assist-result") {
+    if (!extra) { console.error("usage: review-qa.js assist-result <name> <ping_id>"); process.exit(2); }
+    const hq = loadHq(name);
+    hq.diagnostics = hq.diagnostics || [];
+    const entry = hq.diagnostics.find((d) => d.ping_id === extra) || (() => { const e = { ping_id: extra, kind: "diagnostic", filed_at: null }; hq.diagnostics.push(e); return e; })();
+    const sc = await rpc("get_test_results", { ping_id: extra });
+    entry.last = { status: sc.status, n_received: sc.n_received, responses: (sc.responses || []).map((r) => ({ choice: r.choice != null ? r.choice : (r.verdict != null ? r.verdict : null), text: r.free_text || r.notes || r.comment || null })) };
+    entry.checked_at = new Date().toISOString();
+    saveHq(name, hq);
+    const resp = entry.last.responses;
+    if (resp.length) {
+      console.log(`diagnostic answered (${resp.length}):` + resp.map((r) => `\n  ${r.choice != null ? `[${r.choice}] ` : ""}${r.text || ""}`).join(""));
+      for (const c of (Array.isArray(sc.comments) ? sc.comments : []).slice(0, 6)) console.log(`  pin: ${c.text}${c.selector ? ` (${c.selector})` : ""}`);
+      process.exit(0);
+    }
+    console.error(`diagnostic ${extra} ${sc.status || "pending"} — 0 answers yet; re-check (free): node harness/review-qa.js assist-result ${name} ${extra}`);
+    process.exit(1);
+  }
+
+  if (cmd === "assist") {
+    // The stall escalation: the STALLED banner (workflow.js/score.js) says WHEN, this
+    // composes WHAT from the failing phase's own artifacts and files the cheapest channel
+    // that answers it — a ~$0.05 one-sided micro-poll by default, a scoped diagnostic
+    // round with --compare when the question is inherently two-sided. Advisory only:
+    // neither channel ever satisfies the review gate.
+    const wf = require("./workflow.js");
+    const hq = loadHq(name);
+    // ONE open assist per target — the queue-thrash cap.
+    const open = openAssist(hq);
+    if (open) {
+      const check = open.kind === "diagnostic" ? `assist-result ${name} ${open.ping_id}` : `poll-result ${name} ${open.ping_id}`;
+      console.error(`❌ an assist is already open (${open.kind === "diagnostic" ? "diagnostic round" : "poll"} ${open.ping_id}, phase ${open.assist.phase}) — never open a second ask while one is pending; it multiplies credits without resolving the first.\n   re-check it (free): node harness/review-qa.js ${check}`);
+      process.exit(1);
+    }
+    // Resolve the stuck phase: --phase wins, else the first non-pass phase in order.
+    let phaseKey = opt("--phase");
+    if (!phaseKey) {
+      try {
+        const st = readJson(path.join(targetDir(name), "workflow.json"));
+        const next = wf.PHASES.find((p) => !(st.phases[p.key] && st.phases[p.key].status === "pass"));
+        phaseKey = next && next.key;
+      } catch (e) {}
+    }
+    if (!phaseKey) { console.error(`assist can't tell which phase is stuck — no workflow.json here; pass --phase <key> (and --ask "…" if artifacts are missing).`); process.exit(2); }
+
+    const ask = opt("--ask");
+    const composed = ask
+      ? { ok: true, question: ask, subject: "the flagged area" }
+      : composeAssist(name, phaseKey);
+    if (!composed.ok) { console.error(`❌ assist refused for "${phaseKey}": ${composed.reason}`); process.exit(1); }
+    const wantCompare = args.includes("--compare");
+    // Safety net for hand-written --ask text (composed questions are one-sided by
+    // construction): a two-sided question through the poll channel strips the compare UI.
+    if (!wantCompare && comparisonShaped(composed.question)) {
+      console.error(`❌ this question names BOTH the clone and the live page — a comparison needs the side-by-side compare UI. Re-run with --compare to file a scoped diagnostic round instead.`);
+      process.exit(1);
+    }
+    // Login check BEFORE any receipt — a failed filing must leave no ledger event (the
+    // assist receipt is what resets the stall streak; an unfiled ask must not reset it).
+    if (!BASE.startsWith("file://") && !resolveToken()) {
+      console.error(`❌ assist needs a review login — run: pingfusi setup\n   continuing without a reviewer is a receipted call, not a silent one: node harness/workflow.js advance ${name} ${phaseKey} --blocked "<what you tried>" (environment constraints only) — or keep iterating.`);
+      process.exit(1);
+    }
+    const assistMeta = { phase: phaseKey, streakAtAsk: wf.stallInfo(name, phaseKey).fails };
+
+    if (wantCompare) {
+      // Two-sided question → scoped DIAGNOSTIC round (full credit, review queue — the
+      // poll is cheaper and faster; this is for when a one-sided description won't do).
+      let draft = null;
+      try { draft = readJson(path.join(targetDir(name), "draft.json")).url; } catch (e) {}
+      if (!draft) { try { draft = readJson(path.join(targetDir(name), "tunnel.json")).url; } catch (e) {} }
+      if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
+        console.error(`❌ assist --compare files a round, and a remote reviewer must open the draft — push one first: node harness/draft.js push ${name}`);
+        process.exit(1);
+      }
+      const region = /^the /i.test(composed.subject) ? composed.subject : `the ${composed.subject}`;
+      const spec = buildDiagnosticSpec(name, draft, region, ask || composed.question);
+      const { approve_verdicts, ...toolArgs } = spec;
+      void approve_verdicts;
+      const r = await rpc("request_review", toolArgs);
+      if (!r.ping_id) throw new Error("diagnostic filing returned no ping_id");
+      pushDiagnostic(name, r.ping_id, spec, region, assistMeta);
+      try { wf.appendLedger(name, { ts: new Date().toISOString(), event: "assist", phase: phaseKey, runId: wf.runId(), gate: null, forced: false, ping_id: r.ping_id, reason: `assist diagnostic round filed: ${region}` }); } catch (e) {}
+      console.log(`✓ diagnostic round filed — ping ${r.ping_id} (scoped to ${region}; full credit, enters the review queue)\n  advisory: it buys a description, never the review gate.\n  keep iterating; check between iterations (free): node harness/review-qa.js assist-result ${name} ${r.ping_id}`);
+      return;
+    }
+
+    console.error(`assist (phase ${phaseKey}${assistMeta.streakAtAsk ? `, after ${assistMeta.streakAtAsk} failed advances` : ""}): ${composed.question}`);
+    const { sc, entry } = await fileMicroPoll(name, hq, composed.question, null, assistMeta);
+    if (entry.ping_id) {
+      try { wf.appendLedger(name, { ts: new Date().toISOString(), event: "assist", phase: phaseKey, runId: wf.runId(), gate: null, forced: false, ping_id: entry.ping_id, reason: `assist poll filed: ${composed.question.slice(0, 80)}` }); } catch (e) {}
+    }
+    const answered = pollReport(name, hq, sc, entry) === 0;
+    // Filing IS the success condition — the ask is in front of a reviewer either way.
+    // Pending just means: keep iterating, re-check between iterations (free).
+    if (!answered) console.error(`assist filed — keep iterating while it waits; the stall streak resets on the FILED receipt, not the answer.`);
+    process.exit(entry.ping_id ? 0 : 1);
+  }
+
+  console.error(`unknown command "${cmd}" — template | file | record | verify | poll | poll-result | assist | assist-result`);
   process.exit(2);
 }
 
@@ -547,5 +856,5 @@ async function main() {
 // (hosted-draft verify), and draft.js requires this module back — with exports
 // assigned last, that circular require captured undefined resolveToken/BASE and
 // node printed circular-dependency warnings in the real `pingfusi review file` flow.
-module.exports = { buildSpec, resolveToken, BASE };
+module.exports = { buildSpec, buildDiagnosticSpec, composeAssist, comparisonShaped, resolveToken, BASE };
 if (require.main === module) main().catch((e) => { console.error(`review-qa: ${e.message}`); process.exit(1); });

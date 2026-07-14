@@ -39,13 +39,27 @@ not by the user, and never by you.
      deliver; read its report before advancing), `{prefix:'clone'}` on the clone —
      then `pingfusi capture pull <NAME> --all` retrieves everything integrity-verified.
      Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
+   - Behavior discovery needs `document.hidden === false`. If your browser tooling reports
+     tabs hidden PERMANENTLY (some automation stacks do), skip in-tab discovery — it can
+     never pass the gate, and `--force` poisons `done`. Run
+     `pingfusi behavior-capture <NAME>` instead (kit-owned Chrome, both sides, probe-gated;
+     name marquees/hovers in `targets/<NAME>/behavior-opts.json`).
+   - **A blocked gate is a ladder, not a stop.** When a gate refuses, its message names the
+     way out — try THAT first (hidden tabs → `behavior-capture` above). If a reviewer's one
+     look could unstick you, that's `pingfusi assist <NAME>`. Only when the provided remedies
+     are genuinely exhausted (an environment constraint you cannot fix from here): receipt it
+     with `pingfusi advance <NAME> <phase> --blocked "what you tried and why it failed"`, then
+     KEEP GOING — file the round; the spec documents the gap to the reviewer automatically. A
+     blocked phase is not done (`done` refuses it until re-advanced with a passing gate), but
+     a filed round with a named gap ships a fix list; a stopped session ships nothing.
    - All reviewer contact through `pingfusi review <NAME> …` (file/poll/verify) — never through
      any MCP directly. First filings carry `--context "one line: what this site/page is and
      where to look"` (the reviewer sees it); refiles carry `--changelog "what changed"`.
    - No pingfusi login (doctor shows it missing)? STOP and tell the user to run
      `pingfusi setup` — review rounds require the login; there is no offline review path.
-   - If anything blocks filing a round, STOP and tell the user exactly what failed —
-     never invent a substitute for independent review.
+   - If the SERVICE side blocks filing a round (login, filing errors), STOP and tell the
+     user exactly what failed — never invent a substitute for independent review. A red or
+     environment-blocked GATE is not that case: it has the ladder above.
 
 4. **Tell the user how review works** (first run especially): each round goes to an
    independent reviewer on the pingfusi service — NOT to the user. The reviewer opens
@@ -64,6 +78,14 @@ not by the user, and never by you.
    plainly: "answer the ping, then tell me to continue." Act on every verdict
    immediately: fix from the site's own captured artifacts (authored mechanisms, never
    invented values), re-green the gates, refile with a changelog, re-arm the waiter.
+   **When `pingfusi score` or `pingfusi status` prints STALLED, do not run another blind
+   iteration**: run `pingfusi assist <NAME>` — a ~$0.05 poll auto-composed from the failing
+   gate's own artifacts; a reviewer names in one look what costs you three iterations. If
+   the question is inherently two-sided, `pingfusi assist <NAME> --compare` files a scoped
+   diagnostic round instead (full credit, slower — poll first). Assists don't block you:
+   keep iterating while one is pending and re-check the answer (free) with the printed
+   poll-result/assist-result command between iterations. Never open a second ask while
+   one is pending.
    Done = `pingfusi gate <NAME> done` exits 0 — all ten phases, including a real
    approving verdict from the reviewer. A first draft, green machine gates, or a filed
    round are NOT done: ending your turn before done, without being blocked on the

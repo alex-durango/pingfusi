@@ -37,6 +37,21 @@ function checkBinary(name, args, why, fix, required) {
   return { name: `${name} (${why})`, ok, detail, fix, required };
 }
 
+// Optional: the behavior-capture runner needs a launchable Chrome. Not required — a
+// foregroundable interactive tab still works — but agents whose automation reports
+// document.hidden=true permanently NEED this path, so surface it at minute one.
+function checkChrome(resolveChrome) {
+  let r = { error: "resolver unavailable" };
+  try { r = resolveChrome({}); } catch (e) {}
+  return {
+    name: "Chrome (behavior-capture runner)",
+    ok: !r.error,
+    detail: r.path || "none of the known install paths",
+    fix: "install Google Chrome, or point at one with PPK_CHROME=<path> — needed for `pingfusi behavior-capture`, the required path when your agent's browser tabs are permanently hidden",
+    required: false,
+  };
+}
+
 function checkReviewToken(resolveToken) {
   let token = null;
   try { token = resolveToken(); } catch (e) {}
@@ -76,10 +91,11 @@ function main() {
     checkNode(process.versions.node),
     checkBinary("cloudflared", ["--version"], "OPTIONAL — only `pingfusi tunnel --url` (live dev-server drafts) needs it; the default clone flow is tunnel-free", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
     checkReviewToken(resolveToken),
+    checkChrome(require("./chrome.js").resolveChrome),
     checkBinary("ffmpeg", ["-version"], "optional — frame-level video verification", "brew install ffmpeg", false),
   ];
   process.exit(report(checks));
 }
 
 if (require.main === module) main();
-module.exports = { checkNode, checkBinary, checkReviewToken, report };
+module.exports = { checkNode, checkBinary, checkChrome, checkReviewToken, report };

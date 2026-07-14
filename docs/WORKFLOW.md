@@ -85,6 +85,18 @@ see `docs/PLAYBOOK.md`'s behavior section for the full technique writeup. In sho
    changes what `--visual` would see (a frozen, still-mid-transition end state) is a paint
    delta in spirit and should be fixed, not excused.
 
+**A hidden tab is not a measurement environment — and the kit can bring its own.** The gate
+refuses any snapshot whose `discovery.documentHidden` is `true` (throttled timers + a frozen
+compositor make every duration/speed an artifact of the capture, not the page). When the
+automation environment can never foreground a tab — some stacks report `document.hidden=true`
+permanently, which would otherwise deadlock behavior → review → done — run
+`pingfusi behavior-capture <name>`: it executes the SAME `tools/behavior-capture.js` in a
+kit-owned Chrome (launched with throttling disabled, or attached via `--attach`), refuses its
+own environment unless a measured probe shows rAF and a known-rate CSS animation advancing,
+and writes both `behaviors-*.json` files directly with a `discovery.runner` attestation that
+the gate cites in its pass reason (cited when present, never required — a genuinely
+foregrounded interactive tab remains a valid instrument).
+
 **"Discovery ran" is itself evidenced**, not inferred from an empty inventory (a
 `behaviors-live.json` with `behaviors: {}` and no `discovery` metadata is indistinguishable
 from a script that silently no-oped, so the gate refuses it as a paint-over). Every capture
@@ -165,8 +177,23 @@ Or via the shim: `./bin/pingfusi status <name>` (symlink `bin/pingfusi` onto you
   ordering, missing attestation evidence, or a failing gate — records `forced:true` plus an
   `overrode:[…]` list naming exactly what was skipped. The `done` gate refuses a workflow
   containing any forced phase until it is cleanly re-advanced.
+- **`--blocked "reason"` is the OTHER receipted escape — for the environment, not the gate.**
+  When a gate cannot run here at all (and the remedy its refusal names has been tried), an
+  advance with `--blocked` records the phase as `blocked:true` / `overrode:["blocked-env"]`
+  with the reason as evidence. It exists so the run still reaches a reviewer: `review file`
+  accepts blocked phases and the round spec documents the gap automatically (a KNOWN GAP
+  step). It is refused when the gate actually passes, is mutually exclusive with `--force`,
+  and — like forced — the `done` gate refuses blocked phases until each is re-advanced with
+  a passing gate.
 - **Refusals are receipted too.** A rejected advance (out of order, missing evidence, failing
   gate) appends a `gate:"refused"` line to the ledger, so probing the gates leaves a trace.
+- **Three failed advances on one phase print STALLED.** The streak is derived from the
+  ledger's gate-failure refusals (nothing new is stored) and surfaces in `status`, failing
+  `gate` probes, and the refusal itself, with the runnable escalation: `pingfusi assist
+  <name>` — a ~$0.05 reviewer question auto-composed from the failing gate's own artifacts
+  (`--compare` files a scoped diagnostic round instead). Advisory: nothing blocks. The
+  streak resets when an assist is FILED (the ledger `assist` receipt), not when it is
+  answered — one ask buys more iterations while the answer arrives.
 
 ### Receipts / audit trail
 Every advance appends one line to `targets/<name>/workflow.jsonl`:
@@ -208,7 +235,10 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   genuinely irreproducible statically, e.g.
   `{ "mutation:div.hero-canvas": { "reason": "WebGL generative — irreproducible statically" } }`.
 - `review-qa.json` — the review rounds (ping_id, approve verdicts, latest fetched
-  result per round), written by `harness/review-qa.js`.
+  result per round), written by `harness/review-qa.js`. Also holds `polls` (micro-polls,
+  including assist asks with their `assist:{phase,…}` metadata) and `diagnostics`
+  (scoped diagnostic rounds — kept OUT of `rounds` so `verify` and round numbering
+  never see them; a diagnostic can never satisfy the review gate).
 - `draft.json` — the HOSTED draft url (`harness/draft.js push` uploads `clone/` to the
   review service, integrity-verifies the bundle server-side, byte-verifies the served
   page, then records this); `review-qa.js file` uses it as the default `--draft` and
@@ -227,6 +257,16 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
 - **Micro-polls**: `review-qa.js poll` puts a ~$0.05 single question in front of a reviewer
   mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `reviewer`
   gate never reads polls; it requires an approving verdict on a full round.
+- **Assists**: `pingfusi assist <name>` is the stall escalation — it auto-composes the
+  question from the failing phase's own artifacts (worst failing diff row, uncovered leaf,
+  behavior row) and files a micro-poll, or with `--compare` a scoped diagnostic round
+  (side-by-side compare UI; recorded under `diagnostics`). At most ONE open assist per
+  target — a second unanswered ask multiplies credits without resolving the first. A filed
+  assist appends an `event:"assist"` receipt to `workflow.jsonl` (this is what resets the
+  stall streak); answers are re-fetched free with `poll-result` / `assist-result`, and
+  `status` surfaces the pending/answered ask. Assist refuses phases a reviewer can't help
+  with: mechanical artifacts, and environment-shaped behavior failures (those steer to
+  `pingfusi behavior-capture`).
 
 ---
 
