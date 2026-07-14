@@ -34,7 +34,10 @@ Environment notes (operational, not workflow):
   fight the environment and do not retry: run `pingfusi behavior-capture {{NAME}}`
   instead — a kit-owned Chrome measures BOTH sides (probe-gated, attestation recorded)
   and writes behaviors-*.json directly. Name marquees/hover triggers in
-  targets/{{NAME}}/behavior-opts.json first.
+  targets/{{NAME}}/behavior-opts.json first. It runs INVISIBLY (headless by default,
+  ephemeral ports, never touches the user's own browser) — do not pass --headful
+  unless its probe-refusal error explicitly tells you to; the user is working while
+  you clone, and a surprise Chrome window is an interruption.
 - Long-running processes (sink, serve, tunnels, `pingfusi wait`) run as background
   Bash tasks. Sandboxed Bash may need the sandbox disabled for network commands.
 - NEVER end your turn at a review-wait without a live waiter: a parked agent is not

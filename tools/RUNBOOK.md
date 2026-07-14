@@ -127,6 +127,15 @@ stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(o
 > sink, no CSP dance. Name marquees/hovers once in `targets/<name>/behavior-opts.json`
 > (string selectors — the same opts go to both sides mechanically). Steps 1/3 below stay
 > the interactive path for a tab you can genuinely foreground.
+>
+> **It is invisible by default**: headless=new launch, probe-gated per run — no window, no
+> focus steal, safe while the user keeps working. A window appears ONLY on explicit
+> `--headful`, and the probe-refusal error tells you when that's actually needed. It never
+> attaches to a browser it didn't launch unless you pass `--attach` — popping tabs into the
+> user's own Chrome is an interruption, and concurrent runs in one window would fight over
+> the single visible tab. Ports are collision-free by construction (the debug port and the
+> clone server are both OS-assigned per run — concurrent clones of different sites can't
+> cross-serve each other here).
 
 1. **On the LIVE tab:** inject `tools/behavior-capture.js`, set `pxRegion`, name what you
    can see moving — `opts = { marqueeSelectors: [["logo_belt", ".belt-wrapper"]],

@@ -971,7 +971,9 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      automation's tabs are permanently hidden (the
                                                      behavior gate refuses hidden captures); probe-gated,
                                                      injects the same tools/behavior-capture.js and
-                                                     writes behaviors-*.json directly (no sink)
+                                                     writes behaviors-*.json directly (no sink).
+                                                     Invisible by default (headless, ephemeral ports);
+                                                     --headful only if the probe refuses your headless
   pingfusi score   <name>                            score live-vs-clone vs the last run
   pingfusi diff    <live.json> <clone.json> [--visual|--inspect|--all|--tol N]   raw numeric diff
 
@@ -1004,7 +1006,7 @@ function main() {
   switch (cmd) {
     case "new": { if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); } return delegate("harness/new-target.js", [name, ...rest]); }
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
-    case "behavior-capture": { if (!name) { console.error("usage: pingfusi behavior-capture <name> [--side both|live|clone] [--attach <port>] [--headless] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/behavior-runner.js", [name, ...rest]); }
+    case "behavior-capture": { if (!name) { console.error("usage: pingfusi behavior-capture <name> [--side both|live|clone] [--attach <port>] [--headful] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/behavior-runner.js", [name, ...rest]); }
     case "capture": { if (!name || !rest[0]) { console.error("usage: pingfusi capture open <name> | pingfusi capture pull <name> <file>|--all"); process.exit(2); } return delegate("harness/capture-remote.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
     case "assist": { if (!name) { console.error('usage: pingfusi assist <name> [--phase <key>] [--ask "…"] [--compare]'); process.exit(2); } return delegate("harness/review-qa.js", ["assist", name, ...rest]); }

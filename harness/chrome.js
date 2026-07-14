@@ -113,8 +113,11 @@ async function launchChrome({ chromePath, width, height, headless, profileDir = 
   };
 }
 
-// Acquire a debuggable Chrome by the documented priority: explicit attach → auto-probe →
-// launch our own. Returns { mode, port, chromeVersion, headless, profile, cleanup }.
+// Acquire a debuggable Chrome: explicit attach (--attach / PPK_CDP_URL), else launch our
+// own. There is deliberately NO silent auto-attach to :9222 — the runner must never open
+// tabs in a browser it didn't launch (that browser is the USER's; popping tabs into it is
+// an interruption, and its frontmost-tab-only visibility makes concurrent runs fight).
+// Returns { mode, port, chromeVersion, headless, profile, cleanup }.
 async function acquire({ attach = null, chromePath = null, headless = false, profileDir = null, width, height, env = process.env } = {}) {
   const attachTo = attach || env.PPK_CDP_URL || null;
   if (attachTo) {
@@ -122,12 +125,6 @@ async function acquire({ attach = null, chromePath = null, headless = false, pro
     const [host, port] = String(attachTo).includes(":") ? String(attachTo).split(":") : ["127.0.0.1", attachTo];
     const v = await cdp.version(+port, { host }).catch((e) => { throw new Error(`--attach ${attachTo}: ${e.message}\n(Chrome 136+ refuses --remote-debugging-port on the DEFAULT profile — launch the Chrome you attach to with its own --user-data-dir)`); });
     return { mode: "cdp-attached", host, port: +port, chromeVersion: v.Browser, headless: false, profile: "attached", cleanup: async () => {} };
-  }
-  const probePort = +(env.PPK_CDP_PORT || 9222);
-  const found = await cdp.version(probePort).catch(() => null);
-  if (found) {
-    console.log(`· found a debuggable Chrome already listening on :${probePort} (${found.Browser}) — attaching to it`);
-    return { mode: "cdp-attached", host: "127.0.0.1", port: probePort, chromeVersion: found.Browser, headless: false, profile: "attached", cleanup: async () => {} };
   }
   const bin = resolveChrome({ env, cliPath: chromePath });
   if (bin.error) throw new Error(bin.error);

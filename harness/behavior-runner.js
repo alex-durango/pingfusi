@@ -11,8 +11,14 @@
 // writes behaviors-live.json / behaviors-clone.json directly — no sink round-trip, since
 // Runtime.evaluate returns the snapshot by value and is not subject to the page's CSP.
 //
+// The runner is INVISIBLE by default: headless=new launch, probe-gated (phase 0 measured
+// headless at wall-clock rate; the probe re-verifies on every run, so this is not trust).
+// The user has an agent cloning in the background precisely so they can keep working — a
+// window popping up is an interruption, so one appears ONLY on explicit --headful, and the
+// probe-refusal error is what tells you when that's actually needed.
+//
 // usage: pingfusi behavior-capture <name> [--side both|live|clone]
-//          [--attach <port|host:port>] [--chrome <path>] [--headless] [--profile]
+//          [--attach <port|host:port>] [--chrome <path>] [--headful] [--profile]
 //          [--live-url <url>] [--clone-url <url>] [--opts <file>]
 //          [--nav-timeout <ms>] [--keep-open] [--dry-run]
 //
@@ -56,7 +62,8 @@ function parseArgs(argv) {
     if (v === "--side") a.side = argv[++i];
     else if (v === "--attach") a.attach = argv[++i];
     else if (v === "--chrome") a.chrome = argv[++i];
-    else if (v === "--headless") a.headless = true;
+    else if (v === "--headful") a.headful = true;
+    else if (v === "--headless") a.headless = true; // accepted for back-compat; headless is the default now
     else if (v === "--profile") a.profile = true;
     else if (v === "--live-url") a.liveUrl = argv[++i];
     else if (v === "--clone-url") a.cloneUrl = argv[++i];
@@ -178,7 +185,7 @@ async function main() {
     const bin = chrome.resolveChrome({ cliPath: args.chrome });
     console.log(`behavior-capture ${args.name} — dry run`);
     console.log(`  sides: ${args.side}${args.side !== "clone" ? `   live: ${liveUrl}` : ""}${wantClone ? `   clone: ${args.cloneUrl || `self-served from targets/${args.name}/clone${cloneMissing ? " (MISSING — build it first)" : ""}`}` : ""}`);
-    console.log(`  acquisition: ${args.attach || process.env.PPK_CDP_URL ? `attach to ${args.attach || process.env.PPK_CDP_URL}` : bin.error ? "LAUNCH — but " + bin.error : `launch ${bin.path}${args.headless ? " (headless=new, probe-gated)" : " (headful)"}${args.profile ? " with the persistent kit profile" : " with a temp profile"}`}`);
+    console.log(`  acquisition: ${args.attach || process.env.PPK_CDP_URL ? `attach to ${args.attach || process.env.PPK_CDP_URL}` : bin.error ? "LAUNCH — but " + bin.error : `launch ${bin.path}${args.headful ? " (headful — a window WILL appear)" : " (headless=new — invisible, probe-gated)"}${args.profile ? " with the persistent kit profile" : " with a temp profile"}`}`);
     console.log(`  opts: ${optsPath ? optsPath : "none (defaults; discovery still runs — marquee/hover rows just need behavior-opts.json)"}`);
     console.log(`  viewport: ${width}px (target.json${target.width ? "" : " absent — default"})`);
     process.exit(!args.attach && bin.error ? 1 : 0);
@@ -188,7 +195,7 @@ async function main() {
     die(`no targets/${args.name}/clone/index.html to capture — build it first (${CMD} capture-build ${args.name}) or pass --clone-url`);
 
   const acq = await chrome.acquire({
-    attach: args.attach, chromePath: args.chrome, headless: args.headless,
+    attach: args.attach, chromePath: args.chrome, headless: !args.headful,
     profileDir: args.profile ? path.join(require("os").homedir(), ".pingfusi", "chrome-profile") : null,
     width, height: 1050,
   }).catch((e) => die(e.message));
@@ -217,7 +224,12 @@ async function main() {
     if (args.side !== "clone") await captureSide("live", liveUrl, ctx);
     console.log(`\n✓ behavior capture done — next: ${CMD} gate ${args.name} behavior`);
   } catch (e) {
-    console.error(`✗ ${e.message}`);
+    // The default headless launch is probe-gated, not trusted — if THIS Chrome's headless
+    // fails the probe, the one legitimate reason for a visible window exists, and the
+    // error is where the user learns it (never a surprise window).
+    const headfulHint = acq.mode === "cdp-launched" && acq.headless && /environment refused/.test(e.message)
+      ? `\n  headless Chrome failed the measurement probe on this machine — re-run with --headful (one visible Chrome window for the duration of the capture; that is the only time this tool interrupts)` : "";
+    console.error(`✗ ${e.message}${headfulHint}`);
     process.exitCode = 1;
   } finally {
     await teardown();

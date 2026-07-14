@@ -40,8 +40,8 @@ const check = (label, ok, detail) => {
   check("port 0 → Chrome picks and writes DevToolsActivePort", flags.includes("--remote-debugging-port=0"));
   check("user-data-dir + window-size carried", flags.includes("--user-data-dir=/tmp/prof") && flags.includes("--window-size=1512,1000"));
   check("no first-run noise", flags.includes("--no-first-run") && flags.includes("--no-default-browser-check"));
-  check("headful by default (no --headless)", !flags.some((f) => f.startsWith("--headless")));
-  check("headless opt-in uses headless=new", flagsFor({ userDataDir: "/x", headless: true }).includes("--headless=new"));
+  check("flagsFor omits --headless unless asked (the runner's DEFAULT is headless — policy lives there)", !flags.some((f) => f.startsWith("--headless")));
+  check("headless uses headless=new", flagsFor({ userDataDir: "/x", headless: true }).includes("--headless=new"));
 }
 
 // ── parseDevToolsActivePort ────────────────────────────────────────────────────

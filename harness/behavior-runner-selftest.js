@@ -198,6 +198,13 @@ function makeTarget(work, name, extra = {}) {
     const r = await run(["t1", "--dry-run", "--attach", "127.0.0.1:1"], work);
     check("--dry-run: attach decision printed, exit 0, nothing launched", r.code === 0 && /dry run/.test(r.out) && /attach to 127\.0\.0\.1:1/.test(r.out));
   }
+  // launch-mode dry runs need a resolvable Chrome (path only — nothing is launched)
+  if (!resolveChrome({}).error) {
+    const r = await run(["t1", "--dry-run"], work);
+    check("--dry-run default is INVISIBLE: headless=new, probe-gated, no window", r.code === 0 && /headless=new — invisible, probe-gated/.test(r.out));
+    const rh = await run(["t1", "--dry-run", "--headful"], work);
+    check("--headful is the only path that announces a window", /a window WILL appear/.test(rh.out) && !/window WILL appear/.test(r.out));
+  }
 
   // ── integration: the real local Chrome, headless, against a known marquee ────
   const bin = resolveChrome({});
@@ -211,7 +218,7 @@ function makeTarget(work, name, extra = {}) {
       @keyframes belt { from { transform: translateX(0); } to { transform: translateX(-600px); } }
       .track { width: 1200px; height: 40px; background: #ddd; animation: belt 6s linear infinite; }
     </style></head><body><div class="track"></div><p style="height:2000px">tall</p></body></html>`);
-    const r = await run(["rt1", "--side", "clone", "--headless"], work, { PPK_CDP_PORT: "1" }); // :1 → auto-probe misses fast, forcing a launch
+    const r = await run(["rt1", "--side", "clone"], work); // default path: headless launch (no silent attach exists to interfere)
     if (r.code !== 0 && /environment refused/.test(r.out)) {
       console.log("✓ skipped real-Chrome integration (headless is not a measurement environment on this Chrome — the probe refused it, which is the designed behavior)");
     } else {
