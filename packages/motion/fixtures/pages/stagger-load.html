@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #151520; display: flex; gap: 24px; align-items: center; justify-content: center; height: 100vh; }
+  .card {
+    width: 180px; height: 240px; border-radius: 16px; background: #2c2c44;
+    animation: pop 600ms cubic-bezier(.22,1,.36,1) both;
+  }
+  .card:nth-child(2) { animation-delay: 150ms; }
+  .card:nth-child(3) { animation-delay: 300ms; }
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(60px) scale(.9); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+</style>
+</head>
+<body>
+<div class="card"></div>
+<div class="card"></div>
+<div class="card"></div>
+</body>
+</html>

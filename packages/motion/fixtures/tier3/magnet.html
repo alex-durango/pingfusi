@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #141018; height: 100vh; overflow: hidden; }
+  #m1 { position: fixed; left: 560px; top: 315px; width: 160px; height: 90px;
+        border-radius: 12px; background: #8df54f; border: 0; }
+</style>
+</head>
+<body>
+<button id="m1"></button>
+<script>
+  // Magnetic button, RELEASE step. The button starts already attracted — displaced
+  // toward a cursor parked on it before capture (set at load so the release is isolated
+  // from attract dynamics; motion segments can only carry one origin→target transition).
+  // A pointer: path that exits the button fires mouseleave → closed-form damped-spring
+  // release back to rest, v0 = 0. Ground truth the gate must recover: k=280, c=16
+  // (ζ ≈ 0.48 — visibly rings, so a monotone pursuit fit can't steal the win).
+  const K = 280, C = 16, DX = 24, DY = 12;
+  const el = document.getElementById('m1');
+  // Pre-displace a hair off the spring's t=0 value: discovery is mutation-driven, and
+  // tracking must start AT the release's first write (like springs.html) — tracking the
+  // resting element earlier would prepend a flat head that no spring can reproduce.
+  el.style.transform = `translate(${DX + 0.001}px, ${DY + 0.001}px)`;
+  // same closed-form damped spring as springs.html (motion's generator, v0=0, mass=1)
+  function springPos(t, k, c, from, to) {
+    const d = to - from, z = c / (2 * Math.sqrt(k)), w = Math.sqrt(k) / 1000, E = Math.exp(-z * w * t);
+    if (Math.abs(z - 1) < 1e-4) return to - E * (d + w * d * t);
+    if (z < 1) {
+      const wd = w * Math.sqrt(1 - z * z);
+      return to - E * (((z * w * d) / wd) * Math.sin(wd * t) + d * Math.cos(wd * t));
+    }
+    const wd = w * Math.sqrt(z * z - 1), f = Math.min(wd * t, 300);
+    return to - (E * ((z * w * d) * Math.sinh(f) + wd * d * Math.cosh(f))) / wd;
+  }
+  let released = false;
+  el.addEventListener('mouseleave', () => {
+    if (released) return;
+    released = true;
+    let t0 = null;
+    function step() {
+      const now = performance.now();
+      if (t0 === null) t0 = now;
+      const t = now - t0;
+      el.style.transform = `translate(${springPos(t, K, C, DX, 0)}px, ${springPos(t, K, C, DY, 0)}px)`;
+      if (t < 3000) requestAnimationFrame(step);
+      else el.style.transform = 'translate(0px, 0px)';
+    }
+    requestAnimationFrame(() => requestAnimationFrame(step));
+  });
+</script>
+</body>
+</html>

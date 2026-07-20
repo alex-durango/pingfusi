@@ -45,6 +45,9 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { diffSnapshots } = require("../tools/pixel-diff.js");
+const { activeMotionItems, advisoryMotionCandidates, readMotionItems, updateMotionItem } = require("./motion-items.js");
+const { installAndProbeMotionBrowser } = require("./motion-browser.js");
+const { DISPLAY_RANGE, supportsNode } = require("./node-runtime.js");
 
 // PKG = where the kit is installed (its own tools/docs/harness live here, read-only when
 // installed globally). WORK = the user's current directory, where their clone `targets/`
@@ -90,7 +93,7 @@ const runId = () => crypto.randomBytes(5).toString("hex");
 // STALL_AFTER: consecutive failed advances on the SAME phase before the kit says
 // "stop iterating blind, ask a reviewer". Rationale: the run history shows the misses that
 // burn rounds (an underline wrong three ways in a row, four rounds on one camera intro, 93
-// visual fails chasing a font) are mechanisms a reviewer names in ONE look (~$0.05 poll) —
+// visual fails chasing a font) are mechanisms a reviewer names in ONE look (1-result poll) —
 // while two failures are still normal fix-loop turnaround. Three failures with no reviewer
 // input in between is the earliest point where the poll is cheaper than the next blind try.
 const STALL_AFTER = 3;
@@ -120,8 +123,9 @@ function stallInfo(name, phaseKey) {
 }
 // One line, printed by status/gate/advance wherever a stalled phase surfaces — the hint is
 // advisory (nothing blocks), so it must be loud and RUNNABLE everywhere the agent looks.
-const stallHint = (name, fails) =>
-  `⚠ STALLED — ${fails} consecutive failed advances with no reviewer input. A reviewer often names the mechanism in one look (~$0.05): ${CMD} assist ${name}   (side-by-side: ${CMD} assist ${name} --compare)`;
+const stallHint = (name, fails, phaseKey) => phaseKey === "behavior"
+  ? `⚠ STALLED — ${fails} consecutive failed behavior advances. Route the measured evidence before asking: ${CMD} next ${name}   (temporal evidence → pingfusi motion; state evidence → behavior-capture; never default to layout compare)`
+  : `⚠ STALLED — ${fails} consecutive failed advances with no reviewer input. A reviewer often names the mechanism in one look (1-result poll, up to 1 credit): ${CMD} assist ${name}   (side-by-side: ${CMD} assist ${name} --compare)`;
 
 // A gate returns { ok, reason, artifact? }. `ok:true` means the phase may be marked done.
 // `artifact` (a file path) is hashed into the receipt as evidence of WHAT was verified.
@@ -247,6 +251,44 @@ function compareMeasured(key, kind, liveM, cloneM) {
   return { ok: misses.length === 0, detail: misses.join("; ") };
 }
 
+// FIRST-DRAFT doctrine (owner decision 2026-07-19): motion results are BUILD RECEIPTS AND
+// WARNINGS, never blocking gates. This helper only summarizes the motion bookkeeping
+// (motion-items.json) into informational lines the gates CITE on their receipts — it can
+// never fail a gate, and `ok` is always true (kept in the shape so call sites stay dumb).
+function motionItemsRequirement(name, liveSnapshot) {
+  let manifest;
+  try { manifest = readMotionItems(targetDir(name)); }
+  catch (error) {
+    return { ok: true, reason: null, artifact: null, advisory: `motion-items.json is corrupt or unsupported: ${error.message} — motion receipts cannot be read (informational; motion never blocks a gate)` };
+  }
+  const advisories = [];
+  let live = liveSnapshot;
+  const liveFile = path.join(targetDir(name), "behaviors-live.json");
+  if (live === undefined && exists(liveFile)) {
+    try { live = readJson(liveFile); }
+    catch (error) { advisories.push(`behaviors-live.json is not valid JSON (${error.message}) — temporal candidates cannot be scanned`); live = null; }
+  }
+  let unowned = [];
+  try { unowned = advisoryMotionCandidates(live, manifest.items); }
+  catch (error) { advisories.push(`behaviors-live.json cannot be scanned for motion candidates: ${error.message}`); }
+  if (unowned.length) {
+    const shown = unowned.slice(0, 6).map((candidate) => candidate.behaviorKey).join(", ");
+    advisories.push(`${unowned.length} temporal candidate(s) without a motion receipt: ${shown}${unowned.length > 6 ? ` … +${unowned.length - 6} more` : ""} — informational (motion checks are build receipts, never gates); inspect with ${CMD} next ${name}`);
+  }
+  const active = activeMotionItems(manifest.items);
+  if (active.length) {
+    const shown = active.slice(0, 6).map((item) => `${item.id} (${item.status || "pending"})`).join(", ");
+    advisories.push(`${active.length} motion item(s) without a green machine receipt: ${shown}${active.length > 6 ? ` … +${active.length - 6} more` : ""} — informational; route the machine chain with ${CMD} next ${name}`);
+  }
+  const verified = manifest.items.length - active.length;
+  return {
+    ok: true,
+    reason: manifest.exists ? `motion receipts: ${verified}/${manifest.items.length} item(s) machine-verified or closed` : null,
+    artifact: manifest.exists ? manifest.file : null,
+    advisory: advisories.join("; ") || null,
+  };
+}
+
 function behaviorGate(name) {
   const dir = targetDir(name);
   const livePath = path.join(dir, "behaviors-live.json");
@@ -285,9 +327,11 @@ function behaviorGate(name) {
   if (!liveKeys.length && !declaredKeys.length) {
     // Legitimate pass: discovery ran (evidenced above) and found nothing dynamic. Cite the
     // discovery metadata IN the pass reason so the receipt itself is the evidence trail.
+    // Motion receipts ride along as informational lines only (first-draft doctrine).
+    const motion = motionItemsRequirement(name, live);
     return {
       ok: true,
-      reason: `no dynamic behaviors discovered — discovery ran: ${d.elementsScanned} elements scanned, scroll swept ${d.scrollSweep.from}→${d.scrollSweep.to}px in ${d.scrollSweep.steps} steps, observed ${d.observeMs}ms` + (d.hoverTriggersProbed && d.hoverTriggersProbed.length ? `, hover-probed [${d.hoverTriggersProbed.join(", ")}]` : "") + cite(live),
+      reason: `no dynamic behaviors discovered — discovery ran: ${d.elementsScanned} elements scanned, scroll swept ${d.scrollSweep.from}→${d.scrollSweep.to}px in ${d.scrollSweep.steps} steps, observed ${d.observeMs}ms` + (d.hoverTriggersProbed && d.hoverTriggersProbed.length ? `, hover-probed [${d.hoverTriggersProbed.join(", ")}]` : "") + cite(live) + (motion.artifact ? `; ${motion.reason}` : "") + (motion.advisory ? `; ⚠ ${motion.advisory}` : ""),
       artifact: livePath,
     };
   }
@@ -334,10 +378,14 @@ function behaviorGate(name) {
       if (!cloneDescriptors.has(descriptorOf(k))) undisposed.push(k);
     }
     if (undisposed.length)
-      return { ok: false, reason: `${undisposed.length} DECLARED behavior(s) with NO disposition — markers say these are supposed to move; nothing reproduces or excuses them: ${undisposed.slice(0, 6).join(", ")}${undisposed.length > 6 ? ` … +${undisposed.length - 6} more` : ""} — run: node tools/behavior-worksheet.js ${name} (it prints ready-to-send poll questions for the reviewer)` };
+      return { ok: false, reason: `${undisposed.length} DECLARED behavior(s) with NO disposition — markers say these are supposed to move; nothing reproduces or excuses them: ${undisposed.slice(0, 6).join(", ")}${undisposed.length > 6 ? ` … +${undisposed.length - 6} more` : ""} — run: ${CMD} behavior-worksheet ${name} (it prints ready-to-send poll questions for the reviewer)` };
   }
 
-  const summary = `${liveKeys.length} live behavior(s) verified — ${liveKeys.length - documented.length} reproduced within tolerance` + (documented.length ? `, ${documented.length} documented deviation(s) [${documented.join(", ")}]` : "") + (declaredKeys.length ? `; ${declaredKeys.length} declared row(s) disposed (${declaredKeys.length - declaredExcused} reproduced, ${declaredExcused} excused)` : "") + cite(live);
+  // Motion receipts are informational lines on the receipt, never a gate result.
+  const motion = motionItemsRequirement(name, live);
+  const summary = `${liveKeys.length} live behavior(s) verified — ${liveKeys.length - documented.length} reproduced within tolerance` + (documented.length ? `, ${documented.length} documented deviation(s) [${documented.join(", ")}]` : "") + (declaredKeys.length ? `; ${declaredKeys.length} declared row(s) disposed (${declaredKeys.length - declaredExcused} reproduced, ${declaredExcused} excused)` : "") + cite(live) + (motion.artifact ? `; ${motion.reason}` : "") + (motion.advisory ? `; ⚠ ${motion.advisory}` : "");
+  // The receipt must keep hashing behaviors-clone.json — WHAT WAS VERIFIED — never the
+  // motion manifest state (a manifest edit must not re-stamp a behavior verification).
   return { ok: true, reason: summary, artifact: clonePath };
 }
 
@@ -571,9 +619,13 @@ const PHASES = [
         process.execPath, [path.join(PKG, "harness", "review-qa.js"), "verify", name],
         { encoding: "utf8", cwd: WORK, timeout: 30_000 }
       );
-      const line = ((r.stdout || "") + (r.stderr || "")).trim().split("\n")[0] || "verify produced no output";
-      if (r.status !== 0) return { ok: false, reason: line };
-      return { ok: true, reason: line, artifact: hq };
+      // The FULL verify output is the gate reason, not just its first line: verify
+      // prints the reviewer's structured marks (the ⌖ per-comment blocks — region,
+      // align deltas, dual-anchor, measured elements under the mark) BELOW the
+      // verdict line, and an agent driving via gates only ever sees the reason.
+      const out = ((r.stdout || "") + (r.stderr || "")).trim() || "verify produced no output";
+      if (r.status !== 0) return { ok: false, reason: out };
+      return { ok: true, reason: out, artifact: hq };
     },
   },
   {
@@ -588,6 +640,9 @@ const PHASES = [
       // the re-captured subset carry stale measurements a fix may have displaced (astryx's
       // bento-height fix moved the footer). done demands one final FULL capture of each —
       // a full re-capture overwrites the file and clears the stamp.
+      // Motion receipts are cited on the terminal receipt as information only — the
+      // first-draft doctrine: motion never blocks done.
+      const motion = motionItemsRequirement(name);
       for (const f of ["live.json", "clone.json"]) {
         const p = path.join(targetDir(name), f);
         if (exists(p)) {
@@ -616,7 +671,7 @@ const PHASES = [
       // A blocked phase let the run reach a reviewer despite the environment — that was the
       // point — but it is an override, not a verification: done stays red until it is earned.
       if (blockedPhases.length) return { ok: false, reason: `phase(s) were receipted as environment-BLOCKED, not verified: ${blockedPhases.join(", ")} — re-advance each with a passing gate (in an environment that can run it) before claiming done` };
-      return { ok: true, reason: "every phase gate re-verified green against current artifacts, in order, none forced" };
+      return { ok: true, reason: "every phase gate re-verified green against current artifacts, in order, none forced" + (motion.reason ? `; ${motion.reason}` : "") + (motion.advisory ? `; ⚠ ${motion.advisory}` : "") };
     },
   },
 ];
@@ -709,14 +764,16 @@ function cmdStatus(name, opts = {}) {
   const pending = PHASES.filter((p) => st.phases[p.key].status !== "pass");
   const blocked = PHASES.filter((p) => st.phases[p.key].status === "pass" && st.phases[p.key].blocked);
   const forced = PHASES.filter((p) => st.phases[p.key].status === "pass" && st.phases[p.key].forced && !st.phases[p.key].blocked);
+  const motion = motionItemsRequirement(name);
+  if (motion.advisory) console.log(`\n  ⚠ motion advisory — ${motion.advisory}`);
 
   if (nextRequired) {
     const g = safeGate(nextRequired, name);
     console.log(`\n  next: ${nextRequired.key} — ${nextRequired.title}`);
     console.log(`  gate: ${g.ok ? "READY (gate passes) → advance it" : "blocked — " + g.reason}`);
     if (nextRequired.key === "review" && !g.ok) {
-      // A filed-and-pending round means WAIT (re-filing burns a credit and re-enters the
-      // queue); no round at all means the file ritual hasn't happened — say which.
+      // A filed-and-pending round means WAIT (re-filing spends credits on duplicate results
+      // and re-enters the queue); no round at all means the file ritual hasn't happened — say which.
       const pend = /pending[^(]*\(ping ([0-9a-f-]{36})\)/.exec(g.reason);
       if (pend) {
         console.log(`  run:  pingfusi wait ${pend[1]}   (BACKGROUND task — round already filed; the verdict wakes you, do NOT refile)`);
@@ -728,7 +785,7 @@ function cmdStatus(name, opts = {}) {
     } else {
       console.log(`  run:  ${CMD} advance ${name} ${nextRequired.key}` + (nextRequired.kind === "attested" ? ' --evidence "…"' : ""));
       const s = stallInfo(name, nextRequired.key);
-      if (!g.ok && s.fails >= STALL_AFTER) console.log(`  ${stallHint(name, s.fails)}`);
+      if (!g.ok && s.fails >= STALL_AFTER) console.log(`  ${stallHint(name, s.fails, nextRequired.key)}`);
     }
   } else if (forced.length || blocked.length) {
     // every phase "passed", but some were forced/blocked — that is NOT a verified clone.
@@ -747,12 +804,16 @@ function cmdStatus(name, opts = {}) {
     const a = asks[asks.length - 1];
     if (a) {
       const answers = (a.last && a.last.responses) || [];
-      if (answers.length) {
+      const received = Math.max((a.last && Number(a.last.n_received)) || 0, answers.length);
+      const target = a.n_target || (a.last && a.last.n_target) || 1;
+      const resolved = a.last && (a.last.status === "complete" || a.last.status === "expired" || received >= target);
+      if (answers.length && resolved) {
         const first = answers[0].text || (answers[0].choice != null ? `[${answers[0].choice}]` : "") || "(see full result)";
         console.log(`\n  assist answered (phase ${a.assist.phase}): ${String(first).split("\n")[0]}`);
       } else {
         const check = a.kind === "diagnostic" ? `${CMD} review ${name} assist-result ${a.ping_id}` : `${CMD} review ${name} poll-result ${a.ping_id}`;
-        console.log(`\n  assist pending (phase ${a.assist.phase}, ping ${a.ping_id}) — keep iterating; re-check free: ${check}`);
+        const progress = answers.length ? `, ${received}/${target} results` : "";
+        console.log(`\n  assist pending (phase ${a.assist.phase}, ping ${a.ping_id}${progress}) — keep iterating; re-check free: ${check}`);
       }
     }
   } catch (e) { /* no review-qa.json yet — nothing to surface */ }
@@ -786,7 +847,7 @@ function cmdGate(name, phaseKey) {
     // Probes stay read-only (they never count toward the streak) — but when failed ADVANCES
     // already crossed the threshold, the probe is where the agent is looking, so say it here too.
     const s = stallInfo(name, phaseKey);
-    if (s.fails >= STALL_AFTER) console.log(`   ${stallHint(name, s.fails)}`);
+    if (s.fails >= STALL_AFTER) console.log(`   ${stallHint(name, s.fails, phaseKey)}`);
   }
   process.exit(g.ok ? 0 : 1);
 }
@@ -835,7 +896,7 @@ function cmdAdvance(name, phaseKey, opts) {
     if (!opts.force) {
       const streak = stallInfo(name, phaseKey).fails + 1; // + this refusal, receipted below
       const hint = `fix it, or override with --force (recorded as forced in the audit log).` +
-        (streak >= STALL_AFTER ? `\n   ${stallHint(name, streak)}` : "");
+        (streak >= STALL_AFTER ? `\n   ${stallHint(name, streak, phaseKey)}` : "");
       refuse(`gate failed for "${phaseKey}": ${g.reason}`, hint);
     }
     overrode.push("gate");
@@ -928,6 +989,229 @@ function delegate(relScript, args) {
   process.exit(r.status == null ? 1 : r.status);
 }
 
+// Same dependency probe as doctor.js's motion row — one definition of "installed".
+function motionEngineMissingDeps() {
+  const packageDir = path.join(PKG, "packages", "motion");
+  return ["playwright", "pixelmatch", "pngjs"].filter((dep) => {
+    try { require.resolve(dep, { paths: [packageDir] }); return false; } catch (e) { return true; }
+  });
+}
+
+// `pingfusi motion install` — the lazy half of the removed postinstall: download the
+// engine's npm dependencies only when someone actually reaches for motion work.
+function cmdMotionInstall() {
+  const packageDir = path.join(PKG, "packages", "motion");
+  // --global=false: under a global install npm sets npm_config_global=true, which makes a
+  // nested `npm ci` refuse (ECIGLOBAL); the flag forces the nested install back to local.
+  const r = require("child_process").spawnSync("npm", ["ci", "--prefix", packageDir, "--ignore-scripts", "--global=false"], { stdio: "inherit" });
+  if (r.error || r.status !== 0) {
+    console.error(`motion engine dependency install failed${r.error ? `: ${r.error.message}` : ` (npm ci exited ${r.status})`} — retry: pingfusi motion install`);
+    process.exit(1);
+  }
+  console.log("✓ motion engine dependencies installed — next (once): pingfusi motion install-browser   (Chromium + recording FFmpeg)");
+  process.exit(0);
+}
+
+// The temporal engine is intentionally an ESM package boundary and uses APIs available
+// in Node 20+. Keep a precise command-level remedy as defense in depth for stale installs
+// instead of letting an ESM/dependency stack trace choose the workflow.
+function assertMotionRuntime(args) {
+  if (!supportsNode(process.versions.node)) {
+    console.error(`motion fidelity needs ${DISPLAY_RANGE} (running ${process.version}). Switch Node, then re-run: pingfusi motion ${args.join(" ")}`);
+    process.exit(2);
+  }
+}
+
+function delegateMotion(args) {
+  assertMotionRuntime(args);
+  const entry = "packages/motion/bin/motion-kit.js";
+  if (!exists(path.join(PKG, entry))) {
+    console.error("this checkout does not contain the integrated motion engine — use the internal integration branch or install a release that includes it");
+    process.exit(2);
+  }
+  // The entry file ships with every install; the engine's npm dependencies do NOT (no
+  // postinstall — non-motion users never pay the ~18MB download). Probe them the way
+  // doctor does so a lazy install fails with the remedy, never an ESM require stack.
+  const missingDeps = motionEngineMissingDeps();
+  if (missingDeps.length) {
+    console.error(`the motion engine's npm dependencies are not installed (missing: ${missingDeps.join(", ")}) — run: pingfusi motion install`);
+    process.exit(2);
+  }
+  let managed;
+  try { managed = motionLifecycleSpec(args); }
+  catch (error) {
+    console.error(`invalid managed motion command: ${error.message}`);
+    process.exit(2);
+  }
+  if (managed && managed.patch) {
+    try {
+      const dir = targetDir(managed.target);
+      const manifest = readMotionItems(dir);
+      const item = manifest.items.find((candidate) => candidate.id === managed.item);
+      if (!manifest.exists || !item) {
+        throw new Error(`targets/${managed.target}/motion-items.json has no item "${managed.item}"`);
+      }
+      assertMotionLifecycleBinding(managed, item);
+    } catch (error) {
+      console.error(`refusing managed motion command: ${error.message}`);
+      process.exit(2);
+    }
+  }
+  const cp = require("child_process");
+  const childArgs = managed ? managed.childArgs : args;
+  const r = cp.spawnSync(process.execPath, [path.join(PKG, entry), ...childArgs], {
+    stdio: "inherit",
+    cwd: WORK,
+    env: { ...process.env, PPK_ENTRY: "1" },
+  });
+  let code = r.status == null ? 1 : r.status;
+  if (code === 0 && managed && managed.patch) {
+    try {
+      const dir = targetDir(managed.target);
+      const manifest = readMotionItems(dir);
+      const item = manifest.items.find((candidate) => candidate.id === managed.item);
+      if (!manifest.exists || !item) {
+        throw new Error(`targets/${managed.target}/motion-items.json has no item "${managed.item}"`);
+      }
+      // Re-check after the engine exits so a concurrently edited manifest cannot attach this
+      // command's receipt to a newly-declared path or a different artifact lineage.
+      assertMotionLifecycleBinding(managed, item);
+      const patch = finalMotionLifecyclePatch(managed, item);
+      updateMotionItem(dir, managed.item, patch);
+      console.log(`✓ motion item ${managed.item} → ${patch.status}`);
+    } catch (error) {
+      console.error(`motion command succeeded, but its lifecycle receipt failed: ${error.message}`);
+      code = 1;
+    }
+  }
+  process.exit(code);
+}
+
+// `pingfusi next` appends this private context to runnable motion commands. The ESM
+// engine stays reusable and target-agnostic; this installed wrapper removes the context,
+// runs the engine, then advances exactly one manifest item only after exit 0.
+function motionLifecycleSpec(args) {
+  const clean = [];
+  let target = null;
+  let item = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--target" || args[i] === "--item") {
+      const value = args[++i];
+      if (!value || value.startsWith("--")) throw new Error(`${args[i - 1]} needs a value`);
+      if (args[i - 1] === "--target") target = value;
+      else item = value;
+    } else clean.push(args[i]);
+  }
+  if (!target && !item) return null;
+  if (!target || !item) throw new Error("--target and --item must be supplied together");
+  if (target === "." || target === ".." || /[\\/]/.test(target)) throw new Error("--target must be one target name, not a path");
+
+  const command = clean[0];
+  const valueAfter = (flag) => {
+    const values = [];
+    for (let i = 0; i < clean.length; i++) {
+      if (clean[i] !== flag) continue;
+      const value = clean[i + 1];
+      if (!value || value.startsWith("--")) throw new Error(`${flag} needs a value`);
+      values.push(value);
+    }
+    if (values.length > 1) throw new Error(`${flag} may be supplied only once in a managed command`);
+    return values[0] || null;
+  };
+  const out = valueAfter("--out");
+  const primary = clean[1] && !clean[1].startsWith("--") ? clean[1] : null;
+  let patch = null;
+  let binding = null;
+  if (command === "capture") {
+    if (!primary) throw new Error("capture needs its declared source URL");
+    if (!out) throw new Error("managed capture needs --out bound to the item's captureDir");
+    patch = { status: "captured", captureDir: out };
+    binding = { sourceUrl: primary, outputs: [{ value: out, fields: ["captureDir"] }] };
+  } else if (command === "gate") {
+    if (!primary) throw new Error("gate needs its declared captureDir");
+    patch = { status: "gated" };
+    binding = { inputs: [{ value: primary, fields: ["captureDir"] }] };
+  } else if (command === "trace") {
+    if (!primary) throw new Error("trace needs its declared source URL");
+    if (!out) throw new Error("managed trace needs --out bound to the item's traceDir");
+    patch = { status: "traced", traceDir: out };
+    binding = { sourceUrl: primary, outputs: [{ value: out, fields: ["traceDir"] }] };
+  } else if (command === "refit") {
+    if (!primary) throw new Error("refit needs its declared traceDir");
+    patch = { status: "traced" };
+    binding = { inputs: [{ value: primary, fields: ["traceDir"] }] };
+  } else if (command === "loop") {
+    if (!primary) throw new Error("loop needs its declared traceDir");
+    if (!out) throw new Error("managed loop needs --out bound to the item's bundleDir");
+    patch = { status: "bundled", bundleDir: out };
+    binding = {
+      inputs: [{ value: primary, fields: ["traceDir"] }],
+      outputs: [{ value: out, fields: ["bundleDir"] }],
+    };
+  } else if (command === "nudge" || command === "tune") {
+    if (!primary) throw new Error(`${command} needs its declared bundleDir`);
+    patch = { status: "bundled" };
+    binding = { inputs: [{ value: primary, fields: ["bundleDir"] }] };
+  } else if (command === "export") {
+    if (!primary) throw new Error("export needs its declared captureDir or traceDir");
+    if (!out) throw new Error("managed export needs --out bound to the item's libraryDir");
+    patch = { status: "exported", libraryDir: out };
+    binding = {
+      inputs: [{ value: primary, fields: ["captureDir", "traceDir"] }],
+      outputs: [{ value: out, fields: ["libraryDir"] }],
+    };
+  }
+  return { target, item, command, childArgs: clean, patch, binding };
+}
+
+function assertMotionLifecycleBinding(managed, item, workDir = WORK) {
+  if (!managed || !managed.patch || !managed.binding) return true;
+  if (!item || typeof item !== "object") throw new Error("motion lifecycle binding needs its declared item");
+
+  const canonicalPath = (value) => path.resolve(workDir, String(value));
+  const checkPaths = (entries, label) => {
+    for (const entry of entries || []) {
+      const declared = entry.fields
+        .filter((field) => typeof item[field] === "string" && item[field].trim())
+        .map((field) => ({ field, value: item[field] }));
+      if (!declared.length) throw new Error(`motion item ${item.id || managed.item} has no declared ${entry.fields.join(" or ")}`);
+      if (!declared.some((candidate) => canonicalPath(candidate.value) === canonicalPath(entry.value))) {
+        throw new Error(`${managed.command} ${label} path ${JSON.stringify(entry.value)} is not the item's declared ${declared.map((candidate) => candidate.field).join(" or ")}`);
+      }
+    }
+  };
+
+  checkPaths(managed.binding.inputs, "input");
+  checkPaths(managed.binding.outputs, "output");
+  if (managed.binding.sourceUrl) {
+    if (!item.url) throw new Error(`motion item ${item.id || managed.item} has no declared source URL`);
+    const canonicalUrl = (value) => {
+      try { return new URL(String(value)).href; }
+      catch { return String(value); }
+    };
+    if (canonicalUrl(managed.binding.sourceUrl) !== canonicalUrl(item.url)) {
+      throw new Error(`${managed.command} source URL is not the item's declared URL`);
+    }
+  }
+  return true;
+}
+
+// Export proves that a fitted runtime was emitted. Under the first-draft doctrine every
+// export is a terminal machine receipt ("exported") — there is no review round left to
+// park it for. A trace export still invalidates downstream bundle receipts: keeping one
+// would let `next` serve stale evidence even though the fitted runtime changed underneath.
+function finalMotionLifecyclePatch(managed, item, workDir = WORK) {
+  if (!managed || !managed.patch || managed.command !== "export") return managed && managed.patch;
+  const input = managed.binding && managed.binding.inputs && managed.binding.inputs[0] && managed.binding.inputs[0].value;
+  if (!input || !item || !item.traceDir) return managed.patch;
+  if (path.resolve(workDir, String(input)) !== path.resolve(workDir, String(item.traceDir))) return managed.patch;
+  return {
+    ...managed.patch,
+    bundleDir: null,
+    bundleKind: null,
+  };
+}
+
 const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enforced, gated workflow
 
   pingfusi setup                                     FIRST CONTACT — one interactive command: global
@@ -935,8 +1219,8 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      for review rounds), agent skills.
                                                      Also: npx pingfusi setup
   pingfusi doctor                                    read-only preflight re-check, fix command per miss
-  pingfusi agent-setup [--force]                     teach your AI agent: installs the clone-site skill
-                                                     into ~/.claude/skills — then just ask your agent
+  pingfusi agent-setup [client] [--force]            teach Claude Code, Cursor, or Codex: installs the
+                                                     clone-site skill in its native skill directory
                                                      to "clone https://example.com pixel-perfect"
   pingfusi where                                     print the installed kit's directory (docs live there)
 
@@ -947,7 +1231,13 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      then: pingfusi tunnel <name> --url <dev-url> → pingfusi review file
   pingfusi capture-build <name> [domFile]            build the clone FROM the captured live DOM (default
                                                      build strategy — LEARNINGS #19; needs targets/<name>/dom.html,
-                                                     captured with pxSendDom, see RUNBOOK "Build by capture")
+                                                     captured with pxSendDom, see RUNBOOK "Build by capture").
+                                                     Runs the DEFAULT-ON motion pass after the build:
+                                                     animations from motion-doc.json are reproduced in
+                                                     the draft (receipts + warnings, never a failure);
+                                                     --no-motion skips it
+  pingfusi motion  pass <name> [--no-probe]          re-run the build motion pass standalone (hand-built
+                                                     clones, re-captures) — same receipts, never a gate
   pingfusi serve   <name> [port]                     serve the clone + the kit's /tools
   pingfusi draft   <name> push                       upload the clone as a HOSTED draft (stable public
                                                      url, byte-verified, survives this machine — the
@@ -981,17 +1271,44 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      writes behaviors-*.json directly (no sink).
                                                      Invisible by default (headless, ephemeral ports);
                                                      --headful only if the probe refuses your headless
+  pingfusi behavior-worksheet <name>                 list every observed/declared behavior and its
+                                                     reproduction or documented disposition
+  pingfusi next    <name> [--json]                  inspect current evidence and route the next action
+                                                     to layout, interaction, motion, or environment tooling
+  pingfusi motion  capture|trace|gate|export|loop|nudge|tune|serve …
+                                                     temporal-fidelity engine for CSS, WAAPI, JS, spring,
+                                                     scroll/pointer-driven, canvas, and WebGL animation
+                                                     (machine receipts and warnings — never a gate)
+  pingfusi motion  install                           install the motion engine's npm dependencies (lazy —
+                                                     not downloaded with the kit; motion commands need it once)
+  pingfusi motion  install-browser                   install the package-owned Chromium + FFmpeg runtime
+  pingfusi motion  verify-introspected <name> <motion-id>
+                                                     provenance gate for introspected engine declarations
+                                                     (motion-doc tier introspected-*): exact live-vs-clone
+                                                     keyframe/timing diff (±1ms, ±0.01) — exit 0 terminates
+                                                     the item as verified-introspected, no review round
+  pingfusi motion  sample <name> <motion-id> [--fps 60] [--frames 240]
+                                                     SAMPLED tier for motion no engine declares: computed
+                                                     values read at uniform VIRTUAL-time steps in a
+                                                     kit-owned invisible Chrome (deterministic —
+                                                     --verify-determinism runs the capture twice and
+                                                     diffs); tracks merge into motion-doc.json, item →
+                                                     status "sampled" (non-terminal)
+  pingfusi motion  apply-sampled <name> <motion-id>  replay the item's sampled tracks into the clone as
+                                                     time-based WAAPI keyframes
+  pingfusi motion  verify-sampled <name> <motion-id> live-vs-clone diff of the sampled tracks — exit 0
+                                                     terminates the item as verified-sampled
   pingfusi score   <name>                            score live-vs-clone vs the last run
   pingfusi diff    <live.json> <clone.json> [--visual|--inspect|--all|--tol N]   raw numeric diff
 
-  pingfusi review  <name> file [--draft <url>]       file a scope-pinned review round (the "review"
+  pingfusi review  <name> file [--draft <url>] [--results 1..20]   file a scope-pinned review round (default 5; the "review"
                                                      phase gate — verify/template/record via the same command;
                                                      --draft defaults to the hosted draft, then the tunnel)
-  pingfusi review  <name> poll "question" [--choices "A,B"]   ~$0.05 mid-round micro-check with a
+  pingfusi review  <name> poll "question" [--choices "A,B"]   1-result mid-round micro-check with a
                                                      reviewer (advisory — never satisfies the review gate)
-  pingfusi assist  <name> [--compare]                STALLED on a gate? file a reviewer ask AUTO-COMPOSED
-                                                     from the failing gate's own artifacts (~$0.05 poll;
-                                                     --compare files a scoped side-by-side diagnostic
+  pingfusi assist  <name> [--compare [--results 1..20]]   STALLED on a gate? file a reviewer ask AUTO-COMPOSED
+                                                     from the failing gate's own artifacts (1-result poll;
+                                                     --compare files a 5-result scoped side-by-side diagnostic
                                                      round instead — advisory, never the review gate)
   pingfusi status  <name>                            phase table + the next required action
   pingfusi gate    <name> <phase>                    run ONE gate read-only (exit 0/1)
@@ -1011,9 +1328,40 @@ function main() {
 
   // delegating subcommands make `pingfusi` the single entrypoint for installed users
   switch (cmd) {
+    case "motion": {
+      if (name === "install") { assertMotionRuntime([name]); return cmdMotionInstall(); }
+      if (name === "install-browser") {
+        assertMotionRuntime([name]);
+        const packageDir = path.join(PKG, "packages", "motion");
+        const r = installAndProbeMotionBrowser(packageDir, { probe: require("./doctor.js").probeMotionBrowser });
+        if (!r.ok) {
+          console.error(r.stage === "probe"
+            ? `Chromium downloaded, but motion recording is not usable: ${r.reason}`
+            : `motion browser install failed: ${r.reason}`);
+          process.exit(1);
+        }
+        console.log("✓ motion browser runtime installed — re-run: pingfusi doctor");
+        process.exit(0);
+      }
+      // The build motion pass is pure harness too: re-run it standalone for hand-built
+      // clones or after a re-capture (capture-build runs it automatically).
+      if (name === "pass") return delegate("harness/motion-pass.js", rest);
+      // The introspected exact-diff gate is pure harness (CDP + the shared readers) — it
+      // deliberately does NOT require the ESM motion engine or its npm dependencies.
+      if (name === "verify-introspected") return delegate("harness/motion-verify.js", rest);
+      // The SAMPLED tier is pure harness too: the virtual-time sampler, its clone-side
+      // apply, and the sampled verify gate never require the ESM engine (the sampler
+      // LIFTS to the engine's tier-3 fitters only when they resolve, receipted either way).
+      if (name === "sample") return delegate("harness/motion-sampler.js", rest);
+      if (name === "apply-sampled") return delegate("harness/motion-apply.js", rest);
+      if (name === "verify-sampled") return delegate("harness/motion-verify.js", ["--sampled", ...rest]);
+      return delegateMotion([name, ...rest].filter((a) => a != null));
+    }
+    case "next": { if (!name) { console.error("usage: pingfusi next <name> [--json]"); process.exit(2); } return delegate("harness/next.js", [name, ...rest]); }
     case "new": { if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); } return delegate("harness/new-target.js", [name, ...rest]); }
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
     case "behavior-capture": { if (!name) { console.error("usage: pingfusi behavior-capture <name> [--side both|live|clone] [--attach <port>] [--headful] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/behavior-runner.js", [name, ...rest]); }
+    case "behavior-worksheet": { if (!name) { console.error("usage: pingfusi behavior-worksheet <name>"); process.exit(2); } return delegate("tools/behavior-worksheet.js", [name, ...rest]); }
     case "capture-run": { if (!name) { console.error("usage: pingfusi capture-run <name> [--side auto|both|live|clone] [--attach <port>] [--headful] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/capture-runner.js", [name, ...rest]); }
     case "capture": { if (!name || !rest[0]) { console.error("usage: pingfusi capture open <name> | pingfusi capture pull <name> <file>|--all"); process.exit(2); } return delegate("harness/capture-remote.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
@@ -1049,4 +1397,4 @@ if (require.main === module) main();
 // stallInfo/STALL_AFTER/appendLedger/runId/safeGate are exported for review-qa.js's `assist`
 // (streak at ask time, the assist receipt that resets it, the failing gate's reason) — one
 // authority for the ledger record shape and the stall arithmetic.
-module.exports = { PHASES, initWorkflow, loadState, targetDir, main, sha256OfFile, compareMeasured, STALL_AFTER, stallInfo, appendLedger, runId, safeGate };
+module.exports = { PHASES, initWorkflow, loadState, targetDir, main, sha256OfFile, compareMeasured, behaviorGate, motionItemsRequirement, motionLifecycleSpec, assertMotionLifecycleBinding, finalMotionLifecyclePatch, STALL_AFTER, stallInfo, stallHint, appendLedger, runId, safeGate };

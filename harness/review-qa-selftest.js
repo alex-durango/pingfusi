@@ -18,19 +18,23 @@ const cp = require("child_process");
 
 const KIT = path.resolve(__dirname, "..");
 const HQ = path.join(KIT, "harness", "review-qa.js");
+const BIN = path.join(KIT, "bin", "pingfusi");
 let failed = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed++; console.log(`  ✗ ${msg}`); } };
 
 const MOCK = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-hq-"));
 const NAME = "hqselftest_" + process.pid;
 const dir = path.join(KIT, "targets", NAME);
-process.on("exit", () => { try { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(MOCK, { recursive: true, force: true }); } catch (e) {} });
+const MOTION_NAME = "hqmotion_" + process.pid;
+const motionDir = path.join(KIT, "targets", MOTION_NAME);
+process.on("exit", () => { try { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(motionDir, { recursive: true, force: true }); fs.rmSync(MOCK, { recursive: true, force: true }); } catch (e) {} });
 fs.rmSync(dir, { recursive: true, force: true }); // pre-clean a stale target dir only — MOCK was just created
 fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(path.join(dir, "target.json"), JSON.stringify({ name: NAME, url: "https://example.com/", width: 1512 }));
 fs.writeFileSync(path.join(dir, "coverage.json"), JSON.stringify(["logo", "nav_product", "nav_pricing", "download_btn", "signin_btn", "locale_caret"]));
 
 const run = (args, env) => { const r = cp.spawnSync(process.execPath, [HQ, ...args], { encoding: "utf8", cwd: KIT, env: { ...process.env, PPK_PINGHUMANS_URL: "file://" + MOCK, ...env } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
+const runPing = (args) => { const r = cp.spawnSync(process.execPath, [BIN, ...args], { encoding: "utf8", cwd: KIT, env: { ...process.env, PPK_PINGHUMANS_URL: "file://" + MOCK } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
 // deterministic login state regardless of the machine's real ~/.config credentials:
 // "" = behave as if no login exists (the resolveToken opt-out hook)
 const runNoLogin = (args) => run(args, { PPK_PINGHUMANS_TOKEN: "" });
@@ -38,7 +42,7 @@ const runLoggedIn = (args) => run(args, { PPK_PINGHUMANS_TOKEN: "tok-selftest" }
 
 console.log("review-qa-selftest — the review phase tooling");
 
-// ── template: scope-pinned, coverage-driven, behavior informational ───────────
+// ── template: scope-pinned, coverage-driven, structured motion handoff ────────
 const t = run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the top navigation header"]);
 ok(t.code === 0, "template generates");
 const spec = JSON.parse(t.out);
@@ -50,7 +54,24 @@ ok(spec.steps.some((s) => /logo, nav product/.test(s.text) && s.options), "per-l
 // with a Zod "too_big", so the round could not be filed at all). 6 short leaves now fit one step.
 ok(spec.steps.filter((s) => /Compare these elements/.test(s.text)).length === 1, "6 short leaves pack into 1 dense compare step (300-char cap, not a fixed 5)");
 ok(spec.steps.every((s) => s.text.length <= 300), "every step honours the 300-char text cap");
-ok(spec.steps.some((s) => /INFORMATIONAL/.test(s.text) && /does not affect your verdict/.test(s.text)), "behavior step is informational, never a fail criterion");
+// First-draft doctrine: the motion routing probe is gone — motion is machine-checked in
+// the build; the reviewer notes motion issues like any other observation.
+ok(!spec.review_contract && !spec.steps.some((s) => /ROUTING ONLY|Temporal difference observed/.test(s.text || "")), "the page round carries no motion routing probe and no review contract");
+ok(spec.steps.some((s) => /including motion that is missing, different, or mistimed/.test(s.text || "")), "the describe step invites motion observations as ordinary notes");
+ok(spec.n_target === 5, "full review templates default to the standard 5-result depth");
+{
+  const quick = JSON.parse(run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--results", "1"]).out);
+  const deep = JSON.parse(run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--results", "20"]).out);
+  const diagnostic = JSON.parse(run(["template", NAME, "--diagnostic", "--draft", "https://x.trycloudflare.com", "--region", "the header", "--results", "15"]).out);
+  ok(quick.n_target === 1 && deep.n_target === 20 && diagnostic.n_target === 15,
+    "--results selects quick, deep, and diagnostic result targets within the 1..20 service range");
+  for (const bad of ["0", "21", "1.5", "five"]) {
+    const invalid = run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--results", bad]);
+    ok(invalid.code === 2 && /--results must/.test(invalid.out), `--results ${bad} is a usage error`);
+  }
+  const pollDepth = run(["poll", NAME, "question", "--results", "5"]);
+  ok(pollDepth.code === 2 && /polls always target 1 result/.test(pollDepth.out), "polls reject --results because their depth is fixed at 1");
+}
 
 // A region:page target has HUNDREDS of painted leaves, not a dozen. The review service caps a
 // round at 20 STEPS, and the old fixed "5 leaves per step" walked straight into it (lelabo: 80
@@ -180,11 +201,23 @@ ok(run(["template", NAME, "--draft", "http://localhost:8199"]).code === 1, "loca
 
 // ── file: records a round via the (mocked) API ───────────────────────────────
 const PING1 = "00000000-0000-4000-8000-0000000000a1";
+const PING_DIAGNOSTIC = "00000000-0000-4000-8000-0000000000d1";
+fs.writeFileSync(path.join(MOCK, "request_review.json"), JSON.stringify({ ping_id: PING_DIAGNOSTIC, status: "pending" }));
+// The temporal word list is LEXICAL, so it may only warn: "the hero heading moved 4px
+// left" is a legitimate static filing that matches it. It must never exit 1.
+const temporalDiagnostic = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--diagnostic", "--region", "the expanding hero circle", "--ask", "Does its scroll animation match?"]);
+ok(temporalDiagnostic.code === 0 && /⚠/.test(temporalDiagnostic.out) && /pingfusi next/.test(temporalDiagnostic.out) && /filed diagnostic round/.test(temporalDiagnostic.out),
+  "temporal wording warns (with the motion routing hint) but no longer blocks the filing — lexical grounds never exit 1");
+const staticMovedFiling = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--diagnostic", "--region", "the hero", "--ask", "The hero heading moved 4px left - confirm?"]);
+ok(staticMovedFiling.code === 0 && /filed diagnostic round/.test(staticMovedFiling.out),
+  "a static ask that merely uses a movement word ('moved 4px left') files fine");
+const layoutDiagnostic = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--diagnostic", "--region", "the header grid", "--ask", "Are the margins and column alignment correct?"]);
+ok(layoutDiagnostic.code === 0 && /filed diagnostic round/.test(layoutDiagnostic.out) && !/⚠ the requested/.test(layoutDiagnostic.out), "a layout-only scoped diagnostic files without any temporal warning");
 fs.writeFileSync(path.join(MOCK, "request_review.json"), JSON.stringify({ ping_id: PING1, status: "pending" }));
 const f = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the header"]);
 ok(f.code === 0 && f.out.includes(PING1), "file records round 1 with the returned ping_id");
 const hq1 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-ok(hq1.rounds.length === 1 && hq1.rounds[0].ping_id === PING1 && hq1.rounds[0].approve_verdicts.length === 1, "review-qa.json round 1 shape correct");
+ok(hq1.rounds.length === 1 && hq1.rounds[0].ping_id === PING1 && hq1.rounds[0].n_target === 5 && hq1.rounds[0].approve_verdicts.length === 1, "review-qa.json round 1 persists its 5-result target");
 
 // ── verify: pending → 1, comment-only → 1, rejected → 1 with flag, approved → 0 ──
 // Mocks use the REAL pingfusi response schema (verified empirically 2026-07-02):
@@ -192,6 +225,12 @@ ok(hq1.rounds.length === 1 && hq1.rounds[0].ping_id === PING1 && hq1.rounds[0].a
 // the legacy `verdict`/`notes` keys, covering the fallback mapping.)
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "pending", n_received: 0, n_target: 1, responses: [] }));
 ok(run(["verify", NAME]).code === 1, "verify exits 1 while pending");
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "pending", n_received: 1, n_target: 5, responses: [{ choice: "Header identical", free_text: null }] }));
+{
+  const partial = run(["verify", NAME]);
+  ok(partial.code === 1 && /1\/5 responses/.test(partial.out) && /requested result depth/.test(partial.out),
+    "one early approval cannot pass a standard round while the other requested results are still collecting");
+}
 // comment-only response (choice:null) — approval must NEVER be inferred from prose,
 // even prose that contains the approve verdict verbatim (paid for on opendesign round 2)
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ choice: null, free_text: "1 comment(s): <div> — Header identical" }] }));
@@ -265,10 +304,158 @@ ok(run(["verify", NAME]).code === 1, "the approve verdict as a PIN comment on an
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Header clearly different", free_text: "sign in button color off" }] }));
 const rej = run(["verify", NAME]);
 ok(rej.code === 1 && /sign in button color off/.test(rej.out), "verify exits 1 on rejection and surfaces the reviewer's notes (the fix list)");
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: "Header clearly different", free_text: "startup animation missing", steps_result: [{}, {}, {}, {}] }],
+}));
+const proseOnlyMotion = run(["verify", NAME]);
+ok(proseOnlyMotion.code === 1 && /startup animation missing/.test(proseOnlyMotion.out) && !fs.existsSync(path.join(dir, "motion-items.json")), "motion-shaped reviewer prose never manufactures motion bookkeeping — it is ordinary rejection notes");
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Header identical", free_text: null }] }));
 ok(run(["verify", NAME]).code === 0, "verify exits 0 on approval");
 const cached = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
 ok(cached.rounds[0].last.responses[0].verdict === "Header identical" && cached.rounds[0].checked_at, "verify caches the fetched result + timestamp (receipt content)");
+
+// ── the structured comment envelope: persisted VERBATIM, printed as ⌖ blocks ──
+// The compare tools post rich marks (side, selector, target, op, drawn annotation with
+// 0..1 points, viewport, rect, dual-anchor other, position); verify used to keep only
+// {step_index, text, text_sha256} and print NONE of it — the agent saw a one-line
+// verdict while the reviewer's actual marks died in the wire response.
+{
+  // snapshots for the element cross-check (pure read): viewport width 1512 matches the
+  // mark-time viewport of the comments below; the mobile-width comment must NOT match.
+  fs.writeFileSync(path.join(dir, "live.json"), JSON.stringify({
+    url: "https://example.com/", viewport: { width: 1512, height: 982, dpr: 2 },
+    elements: {
+      hero_image: { present: true, rect: { x: 120, y: 210, w: 100, h: 80 } },
+      hero_heading: { present: true, rect: { x: 90, y: 190, w: 400, h: 200 } },
+      far_away_leaf: { present: true, rect: { x: 1000, y: 900, w: 50, h: 50 } },
+    },
+  }));
+  fs.writeFileSync(path.join(dir, "clone.json"), JSON.stringify({
+    url: "http://localhost/", viewport: { width: 1512, height: 982, dpr: 2 },
+    elements: { cta_button: { present: true, rect: { x: 700, y: 400, w: 180, h: 48 } } },
+  }));
+  const ALIGN_PROSE = "Alignment (measured at 1512px-wide viewport; element is 180×48px): this element should move -4px right, 12px down and scale ×1.05 to match the original.";
+  const richComments = [
+    // sticky note: side + selector + target, no annotation
+    { step_index: 2, text: "font looks lighter here", side: "draft", selector: "header > h1", target: "<h1> \"Welcome\"" },
+    // drawn mark on the ORIGINAL: points are 0..1 fractions of the element box (verbatim)
+    { step_index: 1, text: "this corner is clipped", side: "original", selector: "img.hero", target: "<img> hero",
+      annotation: { shape: "rect", points: [[0.1, 0.05], [0.48, 0.2]] },
+      viewport: { w: 1512, h: 982 }, rect: { x: 100, y: 200, w: 300, h: 150 } },
+    // align move: the tx/ty/scale numbers live ONLY in the prose — parsed, never guessed
+    { step_index: 1, text: ALIGN_PROSE, side: "draft", selector: "div.cta", target: "<div> CTA", op: "move",
+      viewport: { w: 1512, h: 982 }, rect: { x: 700, y: 400, w: 180, h: 48 }, position: { dx: -4, dy: 12, ex: 0, ey: 0 } },
+    // dual-anchor: the same tap named the matching element on the OTHER side
+    { step_index: 0, text: "match this nav to the original", side: "draft", selector: "nav.main", target: "<nav> Main",
+      other: { side: "original", label: "<nav> \"Main navigation\"" } },
+    // mark taken at a DIFFERENT viewport width — element match must be skipped, said out loud
+    { step_index: 0, text: "mobile-width note", side: "draft", selector: "footer", target: "<footer>",
+      viewport: { w: 390, h: 844 }, rect: { x: 0, y: 0, w: 390, h: 100 } },
+    // old-shape comment (text-only) from an older round — must keep working untouched
+    { step_index: 0, text: "legacy text-only comment" },
+  ];
+  fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+    status: "complete", n_received: 1, n_target: 1,
+    responses: [{ choice: "Header identical", free_text: null, steps_result: [{}, {}, {}, {}] }],
+    comments: richComments,
+  }));
+  const approvedRich = run(["verify", NAME]);
+  ok(approvedRich.code === 0, "an approved round with rich comments still passes");
+  ok(/⌖ DRAFT · <h1> "Welcome" \[header > h1\] — note — "font looks lighter here" \(step 2\)/.test(approvedRich.out),
+    "APPROVAL still prints the ⌖ blocks — approved rounds carry notes worth reading");
+  ok(/⌖ ORIGINAL · <img> hero \[img\.hero\] — drawn rect — "this corner is clipped"/.test(approvedRich.out),
+    "a drawn mark names its side, target, selector and shape");
+  ok(/region: x\[10%–48%\] y\[5%–20%\] of the element \(viewport 1512×982\)/.test(approvedRich.out),
+    "the annotation points bbox prints as a sub-region of the element");
+  ok(/align: move 4px left, 12px down, scale ×1\.05 \(measured at 1512px\)/.test(approvedRich.out),
+    "align prose deltas are parsed and printed as actionable numbers");
+  ok(/other side: <nav> "Main navigation"/.test(approvedRich.out),
+    "a dual-anchor comment prints the matching element on the other side");
+  ok(/measured elements under the mark: hero_image, hero_heading/.test(approvedRich.out),
+    "the ORIGINAL-side mark is cross-checked against live.json leaves that intersect its rect (most-covered first)");
+  ok(/measured elements under the mark: cta_button/.test(approvedRich.out),
+    "the DRAFT-side mark is cross-checked against clone.json");
+  ok(/\(viewport differs from capture width — skipping element match\)/.test(approvedRich.out),
+    "a mark measured at a different viewport width skips the element match and says so");
+
+  // persistence: the full envelope survives into review-qa.json, absent-tolerant
+  const hqRich = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
+  const kept = hqRich.rounds[0].last.comments;
+  ok(kept.length === richComments.length && /^[0-9a-f]{64}$/.test(hqRich.rounds[0].last.result_sha256),
+    "every comment is persisted and result_sha256 still hashes the full envelope");
+  const drawn = kept.find((c) => c.selector === "img.hero");
+  ok(drawn && drawn.side === "original" && drawn.target === "<img> hero" &&
+    JSON.stringify(drawn.annotation) === JSON.stringify({ shape: "rect", points: [[0.1, 0.05], [0.48, 0.2]] }) &&
+    JSON.stringify(drawn.rect) === JSON.stringify({ x: 100, y: 200, w: 300, h: 150 }) &&
+    JSON.stringify(drawn.viewport) === JSON.stringify({ w: 1512, h: 982 }),
+    "the drawn mark persists side/target/annotation points VERBATIM plus viewport and rect");
+  const alignKept = kept.find((c) => c.op === "move");
+  ok(alignKept && JSON.stringify(alignKept.position) === JSON.stringify({ dx: -4, dy: 12, ex: 0, ey: 0 }) &&
+    JSON.stringify(alignKept.alignDeltas) === JSON.stringify({ tx: -4, ty: 12, scale: 1.05, viewportW: 1512 }),
+    "an align comment persists op/position AND the parsed alignDeltas riding beside the prose");
+  const dual = kept.find((c) => c.selector === "nav.main");
+  ok(dual && dual.other && dual.other.label === "<nav> \"Main navigation\"", "the dual-anchor other element persists");
+  const legacy = kept.find((c) => c.text === "legacy text-only comment");
+  ok(legacy && legacy.text_sha256 && !("side" in legacy) && !("annotation" in legacy) && !("alignDeltas" in legacy),
+    "an old-shape text-only comment persists exactly as before (no invented fields)");
+
+  // the same blocks print on REJECTION — that is where the fix list lives
+  fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+    status: "complete", n_received: 1, n_target: 1,
+    responses: [{ choice: "Header clearly different", free_text: "cta is misaligned" }],
+    comments: richComments,
+  }));
+  const rejectedRich = run(["verify", NAME]);
+  ok(rejectedRich.code === 1 && /NOT approved/.test(rejectedRich.out) &&
+    /⌖ DRAFT · <div> CTA \[div\.cta\] — move — "Alignment/.test(rejectedRich.out) &&
+    /align: move 4px left, 12px down, scale ×1\.05 \(measured at 1512px\)/.test(rejectedRich.out),
+    "REJECTION prints the same ⌖ blocks after the verdict line (the marks ARE the fix list)");
+
+  // …and on the NO-VERDICT-PICK path — the third response outcome. Observed live: a
+  // reviewer left 7 rich structured comments and no choice, and verify exited BEFORE
+  // printCommentBlocks, so the agent got only the one-line prose digest while the
+  // actual marks died in review-qa.json. The comments are the ONLY feedback that
+  // state has; the blocks must print there too (still exit 1 — no verdict is never
+  // a pass). None of richComments sits on the verdict step (index 3 here), so
+  // neither exact-match exception can fire and the round stays genuinely pick-less.
+  fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({
+    status: "complete", n_received: 1, n_target: 1,
+    responses: [{ choice: null, free_text: "left marks on everything that differs", steps_result: [{}, {}, {}, {}] }],
+    comments: richComments,
+  }));
+  const noPickRich = run(["verify", NAME]);
+  ok(noPickRich.code === 1 && /NO verdict pick/.test(noPickRich.out) && /left marks on everything that differs/.test(noPickRich.out),
+    "a no-pick response with rich comments still fails the gate (comments alone never pass)");
+  ok(/⌖ DRAFT · <h1> "Welcome" \[header > h1\] — note — "font looks lighter here" \(step 2\)/.test(noPickRich.out) &&
+    /⌖ ORIGINAL · <img> hero \[img\.hero\] — drawn rect — "this corner is clipped"/.test(noPickRich.out) &&
+    /align: move 4px left, 12px down, scale ×1\.05 \(measured at 1512px\)/.test(noPickRich.out) &&
+    /measured elements under the mark: cta_button/.test(noPickRich.out),
+    "NO-PICK prints the full ⌖ blocks too — the reviewer's marks reach the agent even without a verdict");
+
+  // restore the approved state the sections below build on
+  fs.writeFileSync(path.join(MOCK, `get_test_results-${PING1}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Header identical", free_text: null }] }));
+  ok(run(["verify", NAME]).code === 0, "verify re-approves after the rich-comment round (state restored)");
+  fs.rmSync(path.join(dir, "live.json"));
+  fs.rmSync(path.join(dir, "clone.json"));
+}
+
+// ── parseAlignDeltas: tolerant, direction-aware, never guessing ──────────────
+{
+  const { parseAlignDeltas } = require("./review-qa.js");
+  const canonical = parseAlignDeltas("Alignment (measured at 1512px-wide viewport; element is 180×48px): this element should move -4px right, 12px down and scale ×1.05 to match the original.");
+  ok(JSON.stringify(canonical) === JSON.stringify({ tx: -4, ty: 12, scale: 1.05, viewportW: 1512 }),
+    "canonical alignText prose parses to signed tx/ty + scale + viewport width");
+  const leftUp = parseAlignDeltas("this element should move 30px left, 5px up to match the original");
+  ok(leftUp && leftUp.tx === -30 && leftUp.ty === -5 && leftUp.scale === null && leftUp.viewportW === null,
+    "left/up wording negates onto the canonical right/down axes; absent scale/viewport stay null");
+  const noScale = parseAlignDeltas("Alignment (measured at 900px-wide viewport): this element should move 2px right, 0px down to match the original.");
+  ok(noScale && noScale.tx === 2 && noScale.ty === 0 && noScale.scale === null && noScale.viewportW === 900,
+    "a no-scale move parses (0px down is a real 0, not a missing field)");
+  ok(parseAlignDeltas("make it pop more") === null, "garbage prose parses to null — never guessed");
+  ok(parseAlignDeltas("Alignment (measured at 1512px-wide viewport): this element should be nudged to match the original.") === null,
+    "the app's delta-less 'be nudged' prose parses to null (a viewport alone is not a delta)");
+}
 
 // ── refile: verify judges the LATEST round, not a stale approval ─────────────
 const PING2 = "00000000-0000-4000-8000-0000000000a2";
@@ -341,9 +528,68 @@ fs.writeFileSync(path.join(dir, "workflow.json"), JSON.stringify({
 }));
 const premature = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the header"]);
 ok(premature.code === 1 && /behavior/.test(premature.out) && /refusing to file/.test(premature.out), "file refuses while a pre-review phase is pending — names it (missing key = pending, not exempt)");
+// The temporal word check on assist --compare is lexical too → warn-and-proceed; the
+// only failure left here is the genuinely missing draft, never the wording.
+const crossPhaseTemporalAssist = runLoggedIn(["assist", NAME, "--phase", "visual", "--ask", "Compare the expanding circle animation as the page scrolls", "--compare"]);
+ok(crossPhaseTemporalAssist.code === 1 && !/refused/.test(crossPhaseTemporalAssist.out) && /⚠/.test(crossPhaseTemporalAssist.out) &&
+  /pingfusi next/.test(crossPhaseTemporalAssist.out) && /push one first/.test(crossPhaseTemporalAssist.out),
+  "a temporal-sounding assist --compare warns and proceeds — it then fails only on the missing draft, never on lexical grounds");
 const anyway = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the header", "--anyway"]);
 ok(anyway.code === 0 && /--anyway/.test(anyway.out), "--anyway overrides with a printed warning (deliberate out-of-band round)");
 fs.rmSync(path.join(dir, "workflow.json")); // standalone usage (no workflow.json) keeps filing freely — proven by every earlier case above
+
+// ── first-draft doctrine: motion state is informational — the page round always files ──
+fs.mkdirSync(motionDir, { recursive: true });
+fs.writeFileSync(path.join(motionDir, "target.json"), JSON.stringify({ name: MOTION_NAME, url: "https://motion.example/", width: 1512 }));
+fs.writeFileSync(path.join(motionDir, "coverage.json"), JSON.stringify(["hero"]));
+const beforeReview = ["target", "assets", "measure", "build", "visual", "coverage", "strict", "behavior"];
+fs.writeFileSync(path.join(motionDir, "workflow.json"), JSON.stringify({
+  name: MOTION_NAME,
+  url: "https://motion.example/",
+  phaseOrder: [...beforeReview, "review", "done"],
+  phases: Object.fromEntries([...beforeReview.map((key) => [key, { status: "pass" }]), ["review", { status: "pending" }], ["done", { status: "pending" }]]),
+}));
+fs.writeFileSync(path.join(motionDir, "behaviors-live.json"), JSON.stringify({
+  discovery: { elementsScanned: 9, scrollSweep: { from: 0, to: 900, steps: 6 }, observeMs: 1200, documentHidden: false },
+  behaviors: {},
+  declared: { "declared:img.intro": { hints: ["animation-name:intro-up"], startState: { opacity: 1, transform: "none" } } },
+}));
+const PING_UNOWNED = "00000000-0000-4000-8000-0000000000b0";
+fs.writeFileSync(path.join(MOCK, "request_review.json"), JSON.stringify({ ping_id: PING_UNOWNED, status: "pending" }));
+const unownedFile = run(["file", MOTION_NAME, "--draft", "https://motion.trycloudflare.com", "--region", "the page"]);
+ok(unownedFile.code === 0 && /no motion receipt/.test(unownedFile.out) && /pingfusi next/.test(unownedFile.out) && !/refusing generic page review/.test(unownedFile.out),
+  "receipt-less captured motion WARNS and files — motion state never blocks the page round");
+// An ACTIVE motion item cannot block a page round either: motion is receipts + warnings.
+fs.writeFileSync(path.join(motionDir, "motion-items.json"), JSON.stringify({
+  schema: "pingfusi/motion-items@1",
+  items: [{ id: "intro-up", kind: "css-animation", status: "pending", declaredBy: "manual", sourceBehaviorKeys: ["declared:img.intro"] }],
+}, null, 2));
+const PING_MOTION = "00000000-0000-4000-8000-0000000000b1";
+fs.writeFileSync(path.join(MOCK, "request_review.json"), JSON.stringify({ ping_id: PING_MOTION, status: "pending" }));
+const activeMotionFile = run(["file", MOTION_NAME, "--draft", "https://motion.trycloudflare.com", "--region", "the page"]);
+ok(activeMotionFile.code === 0 && /no green machine receipt/.test(activeMotionFile.out) && !/refusing/.test(activeMotionFile.out),
+  "an active motion item warns informationally and the round still files — never a refusal, no --anyway needed");
+// Reviewer prose about motion is ordinary notes: no supersede, no bookkeeping writes.
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING_MOTION}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ choice: "Page identical", free_text: "the opening circle still expands late", steps_result: [{}, {}, {}, {}] }],
+  comments: [{ step_index: 1, text: "expanding circle on scroll" }],
+}));
+const motionProse = run(["verify", MOTION_NAME]);
+let motionManifest = JSON.parse(fs.readFileSync(path.join(motionDir, "motion-items.json"), "utf8"));
+ok(motionProse.code === 0 && motionManifest.items.length === 1 && !motionManifest.items.some((item) => /^review-\d+-temporal$/.test(item.id)),
+  "an approving verdict passes even with motion prose in the notes — no supersede, no manufactured motion bookkeeping");
+const motionLedgerEvents = fs.existsSync(path.join(motionDir, "workflow.jsonl"))
+  ? fs.readFileSync(path.join(motionDir, "workflow.jsonl"), "utf8").trim().split("\n").filter((line) => /review-motion-routed/.test(line)).length
+  : 0;
+ok(motionLedgerEvents === 0, "no review-motion-routed ledger event exists anymore — the probe routing was removed with the review machinery");
+// Legacy superseded receipts (written by earlier kit versions) still refuse verdict reuse.
+let motionHq = JSON.parse(fs.readFileSync(path.join(motionDir, "review-qa.json"), "utf8"));
+motionHq.rounds[motionHq.rounds.length - 1].superseded = { reason: "legacy structured temporal supersede", at: new Date().toISOString() };
+fs.writeFileSync(path.join(motionDir, "review-qa.json"), JSON.stringify(motionHq, null, 2));
+const legacySuperseded = run(["verify", MOTION_NAME]);
+ok(legacySuperseded.code === 1 && /superseded/.test(legacySuperseded.out) && /file a fresh page review/.test(legacySuperseded.out),
+  "a legacy superseded round stays unusable as a verdict — file a fresh round instead");
 
 console.log(failed ? `\n❌ review-qa-selftest: ${failed} assertion(s) failed.` : `\n✓ review-qa-selftest: all assertions pass.`);
 process.exit(failed ? 1 : 0);

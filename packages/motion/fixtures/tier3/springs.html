@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #181014; display: grid; place-items: center; height: 100vh; gap: 16px; }
+  .box { width: 110px; height: 110px; border-radius: 14px; }
+  #s1 { background: #f54f6d; } #s2 { background: #b44ff5; } #s3 { background: #f5e04f; }
+  button { position: fixed; top: 12px; left: 12px; }
+</style>
+</head>
+<body>
+<button id="go">go</button>
+<div class="box" id="s1"></div>
+<div class="box" id="s2"></div>
+<div class="box" id="s3"></div>
+<script>
+  // closed-form damped spring (same math as motion's generator, v0=0, mass=1) — the
+  // fixture IS the ground truth the fitter must recover
+  function springPos(t, k, c, from, to) {
+    const d = to - from, z = c / (2 * Math.sqrt(k)), w = Math.sqrt(k) / 1000, E = Math.exp(-z * w * t);
+    if (Math.abs(z - 1) < 1e-4) return to - E * (d + w * d * t);
+    if (z < 1) {
+      const wd = w * Math.sqrt(1 - z * z);
+      return to - E * (((z * w * d) / wd) * Math.sin(wd * t) + d * Math.cos(wd * t));
+    }
+    const wd = w * Math.sqrt(z * z - 1), f = Math.min(wd * t, 300);
+    return to - (E * ((z * w * d) * Math.sinh(f) + wd * d * Math.cosh(f))) / wd;
+  }
+  function springAnim(el, k, c, from, to) {
+    // clock starts on the first frame — starting at call time would skip the head of the
+    // motion (the recorded element would visibly jump on frame one)
+    let t0 = null;
+    function step() {
+      const now = performance.now();
+      if (t0 === null) t0 = now;
+      const t = now - t0;
+      el.style.transform = `translateX(${springPos(t, k, c, from, to)}px)`;
+      if (t < 3000) requestAnimationFrame(step);
+      else el.style.transform = `translateX(${to}px)`;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(step));
+  }
+  document.getElementById('go').addEventListener('click', () => {
+    springAnim(document.getElementById('s1'), 200, 10, 0, 200); // bouncy underdamped
+    springAnim(document.getElementById('s2'), 500, 25, 0, 240); // Motion transform default
+    springAnim(document.getElementById('s3'), 120, 22, 0, 180); // ~critically damped
+  });
+</script>
+</body>
+</html>

@@ -8,6 +8,21 @@ const fs = require("fs"), path = require("path");
 const KIT = path.resolve(__dirname, "..");
 
 const tests = [path.join(KIT, "tools", "selftest.js"), path.join(KIT, "tools", "cli-selftest.js"), path.join(KIT, "harness", "workflow-selftest.js"), path.join(KIT, "harness", "capture-build-selftest.js"), path.join(KIT, "harness", "review-qa-selftest.js"), path.join(KIT, "harness", "assist-selftest.js"), path.join(KIT, "harness", "draft-selftest.js"), path.join(KIT, "harness", "capture-remote-selftest.js"), path.join(KIT, "harness", "enumerate-selftest.js"), path.join(KIT, "harness", "tunnel-selftest.js"), path.join(KIT, "harness", "behavior-selftest.js"), path.join(KIT, "harness", "cdp-selftest.js"), path.join(KIT, "harness", "chrome-selftest.js"), path.join(KIT, "harness", "behavior-runner-selftest.js"), path.join(KIT, "harness", "capture-runner-selftest.js"), path.join(KIT, "harness", "merge-snapshot-selftest.js"), path.join(KIT, "harness", "doctor-selftest.js"), path.join(KIT, "harness", "setup-selftest.js"), path.join(KIT, "harness", "bin-dispatch-selftest.js"), path.join(KIT, "harness", "docs-selftest.js")];
+// Integrated-engine contract tests are unconditional in the INTERNAL source tree: a
+// missing package or router is a broken one-repo workflow, not an optional feature.
+tests.push(
+  path.join(KIT, "harness", "capability-router-selftest.js"),
+  path.join(KIT, "harness", "next-selftest.js"),
+  path.join(KIT, "harness", "motion-integration-selftest.js"),
+  path.join(KIT, "harness", "motion-items-selftest.js"),
+  path.join(KIT, "harness", "motion-doc-selftest.js"),
+  path.join(KIT, "harness", "motion-sampler-selftest.js"),
+  path.join(KIT, "harness", "motion-verify-selftest.js"),
+  path.join(KIT, "harness", "motion-pass-selftest.js"),
+  path.join(KIT, "harness", "package-smoke-selftest.js"),
+  path.join(KIT, "packages", "motion", "harness", "selftest.js"),
+  path.join(KIT, "packages", "motion", "harness", "fit-selftest.js"),
+);
 const fixDir = path.join(__dirname, "fixtures");
 if (fs.existsSync(fixDir))
   for (const f of fs.readdirSync(fixDir).filter((f) => f.endsWith(".js")).sort()) tests.push(path.join(fixDir, f));
@@ -29,12 +44,12 @@ let failed = 0;
 // (caught by an agent mid-clone when `pingfusi new` wouldn't start). `node --check` every
 // kit script so the whole surface at least parses.
 const syntaxFiles = [path.join(KIT, "bin", "pingfusi")];
-for (const root of ["tools", "harness"].map((d) => path.join(KIT, d))) {
+for (const root of ["tools", "harness", "packages/motion/bin", "packages/motion/src", "packages/motion/harness"].map((d) => path.join(KIT, d))) {
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const fp = path.join(d, e.name);
       if (e.isDirectory()) walk(fp);
-      else if (e.name.endsWith(".js")) syntaxFiles.push(fp);
+      else if (e.name.endsWith(".js") || e.name.endsWith(".mjs")) syntaxFiles.push(fp);
     }
   };
   if (fs.existsSync(root)) walk(root);

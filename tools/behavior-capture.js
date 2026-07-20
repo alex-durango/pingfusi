@@ -13,8 +13,9 @@
 //                     across the region, snapshot computed opacity/transform/filter PER
 //                     ELEMENT before and after a scripted scroll sweep + hover of each
 //                     candidate trigger, and diff. Whatever actually changed is a real
-//                     behavior; whatever stayed frozen in its start state is presentational
-//                     noise (a candidate that never fires isn't a behavior to reproduce).
+//                     behavior. A candidate that stays frozen remains DECLARED inventory:
+//                     it still needs measurement or an explicit non-temporal disposition,
+//                     but weak marker evidence alone does not become a motion owner.
 //   measure, don't eyeball — a marquee's speed is sampled translateX over a real time
 //                     window and converted to px/sec; a reveal's duration is the wall-clock
 //                     time between trigger and the computed style settling; there is no
@@ -83,6 +84,27 @@
   // apple ships data-anim-scroll-group / data-video-load-kf etc.; generic data-scroll-* and
   // data-animate-* cover the common libraries).
   const DECLARED_ATTR_RE = /^data-(anim|animate|scroll|video-load|autoplay|parallax|reveal|carousel|gallery|progress)/i;
+  const timeMs = (value) => Math.max(0, ...String(value || "0s").split(",").map((part) => {
+    const text = part.trim();
+    const n = parseFloat(text) || 0;
+    return text.endsWith("ms") ? n : n * 1000;
+  }));
+  function meaningfulTransform(value) {
+    const text = String(value || "").trim();
+    if (!text || text === "none") return false;
+    const matrix = /^matrix\(([^)]+)\)$/.exec(text);
+    if (matrix) {
+      const n = matrix[1].split(",").map(Number);
+      return n.length !== 6 || n.some((v, i) => Math.abs(v - [1, 0, 0, 1, 0, 0][i]) > 1e-6);
+    }
+    const matrix3d = /^matrix3d\(([^)]+)\)$/.exec(text);
+    if (matrix3d) {
+      const n = matrix3d[1].split(",").map(Number);
+      const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+      return n.length !== 16 || n.some((v, i) => Math.abs(v - identity[i]) > 1e-6);
+    }
+    return true;
+  }
   function declaredHints(el, cs) {
     const hints = [];
     if (cs.animationName && cs.animationName !== "none") hints.push("animation-name:" + cs.animationName);
@@ -91,9 +113,40 @@
     if (cs.willChange && cs.willChange !== "auto") hints.push("will-change:" + cs.willChange);
     for (const a of el.attributes) if (DECLARED_ATTR_RE.test(a.name)) hints.push("attr:" + a.name);
     // a transition paired with a hidden/offset start state = a reveal waiting for a trigger
-    if (cs.transitionDuration && cs.transitionDuration !== "0s" && (parseFloat(cs.opacity) === 0 || (cs.transform && cs.transform !== "none"))) hints.push("transition-from-start-state");
+    if (timeMs(cs.transitionDuration) > 0 && (parseFloat(cs.opacity) === 0 || meaningfulTransform(cs.transform))) hints.push("transition-from-start-state");
     if (el.tagName === "VIDEO") hints.push(`video:${el.autoplay ? "autoplay" : "scripted"}:${el.preload || "auto"}`);
     return hints;
+  }
+  function temporalEvidence(cs, hints) {
+    const names = String(cs.animationName || "").split(",").map((name) => name.trim()).filter((name) => name && name !== "none");
+    const animationDurationMs = timeMs(cs.animationDuration);
+    const animationDelayMs = timeMs(cs.animationDelay);
+    if (names.length && animationDurationMs > 0) {
+      return {
+        candidate: "strong",
+        kind: "css-animation",
+        trigger: "load",
+        animationName: names.join(","),
+        durationMs: animationDurationMs,
+        delayMs: animationDelayMs,
+        easing: cs.animationTimingFunction || null,
+        iterationCount: cs.animationIterationCount || null,
+        signals: hints.filter((hint) => /^animation-name:/i.test(hint)),
+        reason: `named CSS animation ${names.join(", ")} with ${animationDurationMs}ms duration`,
+      };
+    }
+    const transitionDurationMs = timeMs(cs.transitionDuration);
+    if (transitionDurationMs > 0 && hints.includes("transition-from-start-state")) {
+      return {
+        candidate: "weak",
+        mechanism: "css-transition",
+        durationMs: transitionDurationMs,
+        delayMs: timeMs(cs.transitionDelay),
+        easing: cs.transitionTimingFunction || null,
+        signals: ["transition-from-start-state"],
+      };
+    }
+    return null;
   }
   function staticCandidates(root_) {
     const kf = keyframeNames();
@@ -103,7 +156,7 @@
       if (!inRegion(el)) continue;
       const cs = getComputedStyle(el);
       const hints = declaredHints(el, cs);
-      if (hints.length) out.push({ el, hints });
+      if (hints.length) out.push({ el, hints, temporal: temporalEvidence(cs, hints) });
     }
     return { keyframes: [...kf], candidates: out };
   }
@@ -138,6 +191,88 @@
   // existed must not read as a mismatch (same old-schema rule as strut/mode).
   const styleSnapEq = (a, b) => a.opacity === b.opacity && a.transform === b.transform && a.filter === b.filter && a.visibility === b.visibility &&
     (a.display === undefined || b.display === undefined || a.display === b.display);
+
+  // A scroll-linked transform can be perfectly reversible: y=0 starts at state A, the sweep
+  // reaches state B, then returning to y=0 lands back on A. Comparing only the pre-sweep and
+  // post-reset snapshots therefore erases the very motion the sweep was meant to measure.
+  // Reconcile the bounded snapshots taken AT each scroll stop and retain one representative
+  // maximum delta. This helper is deliberately pure so the reversible case is regression-
+  // testable without browser timing.
+  function styleSweepEvidence(before, samples, after) {
+    const differenceCount = (snapshot) => {
+      if (!snapshot) return 0;
+      let count = 0;
+      for (const field of ["opacity", "transform", "filter", "visibility"]) {
+        if (before[field] !== snapshot[field]) count++;
+      }
+      if (before.display !== undefined && snapshot.display !== undefined && before.display !== snapshot.display) count++;
+      return count;
+    };
+    let representative = null;
+    let maxChangedProperties = 0;
+    const rows = Array.isArray(samples) ? samples : [];
+    for (const row of rows) {
+      if (!row || !row.snapshot) continue;
+      const changedProperties = differenceCount(row.snapshot);
+      if (changedProperties > maxChangedProperties) {
+        maxChangedProperties = changedProperties;
+        representative = { atY: row.atY, snapshot: row.snapshot };
+      }
+    }
+    const finalChangedProperties = differenceCount(after);
+    const changedDuringSweep = maxChangedProperties > 0;
+    if (!changedDuringSweep && finalChangedProperties > 0) {
+      maxChangedProperties = finalChangedProperties;
+      representative = { atY: null, snapshot: after };
+    }
+    return {
+      changed: changedDuringSweep || finalChangedProperties > 0,
+      changedDuringSweep,
+      returnedToStart: changedDuringSweep && finalChangedProperties === 0,
+      representative,
+      maxChangedProperties,
+      sampleCount: rows.filter((row) => row && row.snapshot).length,
+    };
+  }
+
+  // A named/structured animation can keep advancing while the scroll sweep happens without
+  // being CAUSED by scroll. Preserve an already-strong measured trigger; infer scroll only
+  // when the sweep is the first strong temporal evidence.
+  function triggerForSweep(temporal) {
+    return temporal && temporal.candidate === "strong" && temporal.trigger
+      ? temporal.trigger
+      : "scroll-sweep";
+  }
+
+  function mutationTemporalEvidence(samples) {
+    const rows = (samples || []).filter((sample) => sample && sample.snapshot);
+    if (rows.length < 3) return null;
+    const distinct = new Set(rows.map((sample) => JSON.stringify(sample.snapshot))).size;
+    const durationMs = Number(rows[rows.length - 1].t) - Number(rows[0].t);
+    if (distinct < 2 || !Number.isFinite(durationMs) || durationMs < 32) return null;
+    const ys = new Set(rows.map((sample) => Number(sample.atY)).filter(Number.isFinite));
+    const trigger = ys.size > 1 ? "scroll-sweep" : "load";
+    const differenceCount = (a, b) => {
+      let count = 0;
+      for (const field of ["opacity", "transform", "filter", "visibility", "display"])
+        if (a[field] !== undefined && b[field] !== undefined && a[field] !== b[field]) count++;
+      return count;
+    };
+    let representative = rows[0];
+    for (const sample of rows) {
+      if (differenceCount(rows[0].snapshot, sample.snapshot) > differenceCount(rows[0].snapshot, representative.snapshot)) representative = sample;
+    }
+    if (!differenceCount(rows[0].snapshot, representative.snapshot)) return null;
+    return {
+      trigger,
+      before: rows[0].snapshot,
+      after: rows[rows.length - 1].snapshot,
+      during: representative.snapshot,
+      sampleCount: rows.length,
+      durationMs: num(durationMs),
+      returnedToStart: styleSnapEq(rows[0].snapshot, rows[rows.length - 1].snapshot),
+    };
+  }
 
   // Sample an element's transform translation over a wall-clock window → px/sec on the
   // DOMINANT axis (a logo belt is usually horizontal, a ticker/credits roll is vertical —
@@ -192,7 +327,7 @@
 
   // Scripted scroll sweep in increments, dwelling briefly at each stop so scroll-linked /
   // IntersectionObserver-triggered reveals get a chance to fire (playbook §8a).
-  async function scrollSweep(steps, dwellMs) {
+  async function scrollSweep(steps, dwellMs, onSample) {
     const max = Math.max(0, (document.scrollingElement || document.documentElement).scrollHeight - window.innerHeight);
     const positions = [];
     for (let i = 0; i <= steps; i++) {
@@ -200,6 +335,7 @@
       window.scrollTo(0, y);
       positions.push(y);
       await new Promise((r) => setTimeout(r, dwellMs));
+      if (onSample) onSample(y);
     }
     window.scrollTo(0, 0);
     await new Promise((r) => setTimeout(r, dwellMs));
@@ -262,6 +398,25 @@
     return `${prefix}:${path}`;
   }
 
+  function selectorOf(el) {
+    if (el.id) {
+      const escaped = root.CSS && typeof root.CSS.escape === "function" ? root.CSS.escape(el.id) : String(el.id).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
+      return `#${escaped}`;
+    }
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === 1 && parts.length < 5) {
+      let part = cur.tagName.toLowerCase();
+      if (cur.parentElement) {
+        const peers = [...cur.parentElement.children].filter((node) => node.tagName === cur.tagName);
+        if (peers.length > 1) part += `:nth-of-type(${peers.indexOf(cur) + 1})`;
+      }
+      parts.unshift(part);
+      cur = cur.parentElement;
+    }
+    return parts.join(">");
+  }
+
   // ── the discovery + measurement pass ─────────────────────────────────────────
   // opts: { scrollSteps=6, dwellMs=250, hoverTriggers=[[name, findFn]], marqueeSelectors=[…],
   //         settleMs=1500 }
@@ -273,13 +428,30 @@
 
     const { keyframes, candidates } = staticCandidates(scanRoot);
     const before = new Map(candidates.map((c) => [c.el, styleSnap(c.el)]));
+    const sweepSamples = new Map(candidates.map((c) => [c.el, []]));
 
     // dynamic pass: MutationObserver across the whole region while we sweep+dwell
     const mutated = new Set();
-    const mo = new MutationObserver((records) => { for (const r of records) if (r.target && r.target.nodeType === 1) mutated.add(r.target); });
+    const mutationSamples = new Map();
+    const mo = new MutationObserver((records) => {
+      const t = now();
+      for (const r of records) {
+        if (!r.target || r.target.nodeType !== 1) continue;
+        const el = r.target;
+        mutated.add(el);
+        const rows = mutationSamples.get(el) || [];
+        const snapshot = styleSnap(el);
+        const previous = rows[rows.length - 1];
+        if (!previous || !styleSnapEq(previous.snapshot, snapshot)) rows.push({ t, atY: window.scrollY, snapshot });
+        if (rows.length > 80) rows.shift();
+        mutationSamples.set(el, rows);
+      }
+    });
     mo.observe(scanRoot, { attributes: true, attributeFilter: ["class", "style"], subtree: true, attributeOldValue: false, childList: true });
 
-    const sweep = await scrollSweep(o.scrollSteps, o.dwellMs);
+    const sweep = await scrollSweep(o.scrollSteps, o.dwellMs, (atY) => {
+      for (const { el } of candidates) sweepSamples.get(el).push({ atY, snapshot: styleSnap(el) });
+    });
     await waitQuiet(scanRoot, 200, o.settleMs);
     mo.disconnect();
 
@@ -294,20 +466,45 @@
     // engineered, so two distinct behaviors can't silently merge into one invented hybrid,
     // and each row can be put in front of the reviewer ("something happens here — what?").
     const declared = {};
-    for (const { el, hints } of candidates) {
+    for (const { el, hints, temporal } of candidates) {
       const b = before.get(el);
       const a = styleSnap(el);
-      if (!styleSnapEq(a, b)) {
+      const sweepEvidence = styleSweepEvidence(b, sweepSamples.get(el), a);
+      if (sweepEvidence.changed) {
         const key = keyOf(el, "reveal");
+        const trigger = triggerForSweep(temporal);
+        // A style change at a scroll stop is STATE evidence: it proves a reveal fired, not
+        // that specialist motion work exists. Grade it with temporalEvidence's own bar
+        // (motion-items keeps dormant transitions "weak"): only an element that already
+        // carries an engine timing signal (a named animation with a real duration) keeps a
+        // strong temporal candidate — everything else records the observation WITHOUT
+        // promotion, or every ordinary reveal auto-enters the specialist motion queue.
         behaviors[key] = {
-          trigger: "scroll",
+          trigger,
           kind: "class-toggle-or-style-mutation",
+          selector: selectorOf(el),
           hints,
-          measured: { before: b, after: a, mutatedDuringSweep: mutated.has(el) },
+          temporal: {
+            ...(temporal || {}),
+            trigger,
+            reason: sweepEvidence.returnedToStart
+              ? "computed style changed during the measured scroll sweep and returned to its start state"
+              : "computed style changed during the measured scroll sweep",
+          },
+          measured: {
+            before: b,
+            after: a,
+            ...(sweepEvidence.changedDuringSweep ? { during: sweepEvidence.representative } : {}),
+            changedDuringSweep: sweepEvidence.changedDuringSweep,
+            returnedToStart: sweepEvidence.returnedToStart,
+            maxChangedProperties: sweepEvidence.maxChangedProperties,
+            sampleCount: sweepEvidence.sampleCount,
+            mutatedDuringSweep: mutated.has(el),
+          },
         };
       } else {
         const key = keyOf(el, "declared");
-        if (!declared[key]) declared[key] = { hints, startState: b, text: (el.textContent || "").trim().slice(0, 60) || null };
+        if (!declared[key]) declared[key] = { hints, ...(temporal ? { temporal } : {}), startState: b, text: (el.textContent || "").trim().slice(0, 60) || null };
       }
     }
     // any element the observer saw mutate but that wasn't a static candidate (e.g. a purely
@@ -317,7 +514,34 @@
       if (before.has(el)) continue; // already reconciled above
       const key = keyOf(el, "mutation");
       if (behaviors[key]) continue;
-      behaviors[key] = { trigger: "mutation", kind: "observed-mutation", measured: { after: styleSnap(el) } };
+      const measuredMotion = mutationTemporalEvidence(mutationSamples.get(el));
+      // Same deliberate grading as the static pass above: a handful of class/childList
+      // mutations spread across scroll stops is how ordinary content mounts and reveals
+      // look, so the sampled observation alone never promotes. Promotion requires the
+      // element itself to carry engine timing evidence right now (temporalEvidence's bar —
+      // a named animation with a real duration; a dormant transition stays weak).
+      const cs = getComputedStyle(el);
+      const engine = temporalEvidence(cs, declaredHints(el, cs));
+      behaviors[key] = measuredMotion && engine && engine.candidate === "strong" ? {
+        trigger: measuredMotion.trigger,
+        kind: "animation",
+        selector: selectorOf(el),
+        temporal: {
+          ...engine,
+          trigger: measuredMotion.trigger,
+          durationMs: measuredMotion.durationMs,
+          reason: "repeated computed temporal-style mutations were measured during discovery on an element with an active engine timing declaration",
+        },
+        measured: measuredMotion,
+      } : measuredMotion ? {
+        // Observation recorded without promotion: keep the sampled states but NOT the
+        // sampled durationMs — a temporal field in `measured` is itself a motion-owner
+        // signal (motion-items hasTemporalField), and mutation spread is not a timing.
+        trigger: "mutation",
+        kind: "observed-mutation",
+        selector: selectorOf(el),
+        measured: { before: measuredMotion.before, after: measuredMotion.after, during: measuredMotion.during, sampleCount: measuredMotion.sampleCount, returnedToStart: measuredMotion.returnedToStart },
+      } : { trigger: "mutation", kind: "observed-mutation", selector: selectorOf(el), measured: { after: styleSnap(el), sampleCount: (mutationSamples.get(el) || []).length } };
     }
 
     // marquees: explicit selectors (the caller names the moving belt — playbook §8: "animate
@@ -328,7 +552,12 @@
       if (!el) continue;
       const speed = await sampleTranslateSpeed(el, 1000);
       const key = `marquee:${name}`;
-      behaviors[key] = { trigger: "load", kind: "marquee", measured: speed };
+      behaviors[key] = {
+        trigger: "load",
+        kind: "marquee",
+        ...(typeof sel === "string" ? { selector: sel } : {}),
+        measured: speed,
+      };
     }
 
     // hover-mounted content: caller supplies [name, triggerFindFn, scopeFindFn?]
@@ -397,5 +626,5 @@
   // gate half already was). Without this the capture is only testable by driving a browser,
   // which is exactly how a capture-side blind spot (a reveal it never records) stays invisible
   // to the regression suite. Harmless in the browser — `module` is undefined there.
-  if (typeof module !== "undefined" && module.exports) module.exports = { probeHover, styleSnap, styleSnapEq, isAgentDom, AGENT_DOM_SELECTOR };
+  if (typeof module !== "undefined" && module.exports) module.exports = { probeHover, styleSnap, styleSnapEq, styleSweepEvidence, triggerForSweep, mutationTemporalEvidence, isAgentDom, meaningfulTransform, temporalEvidence, AGENT_DOM_SELECTOR };
 })(typeof window !== "undefined" ? window : globalThis);

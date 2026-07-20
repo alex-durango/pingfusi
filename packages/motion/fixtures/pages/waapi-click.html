@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #fff; display: grid; place-items: center; height: 100vh; }
+  .chip { width: 160px; height: 160px; border-radius: 24px; background: #0a7cff; }
+</style>
+</head>
+<body>
+<div class="chip" id="chip"></div>
+<script>
+  document.getElementById('chip').addEventListener('click', () => {
+    document.getElementById('chip').animate(
+      [
+        { transform: 'translateX(0px) rotate(0deg)', opacity: 1 },
+        { transform: 'translateX(240px) rotate(180deg)', opacity: 0.5, offset: 0.7 },
+        { transform: 'translateX(160px) rotate(360deg)', opacity: 1 },
+      ],
+      { duration: 700, easing: 'cubic-bezier(.34,1.56,.64,1)', fill: 'both' },
+    );
+  });
+</script>
+</body>
+</html>

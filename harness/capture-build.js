@@ -32,9 +32,12 @@
 // self-host, a stripped script that removed a load-bearing class, and environment drift.
 //
 // USAGE
-//   node harness/capture-build.js <name> [domFile] [--fixes]
-//   pingfusi capture-build <name> [domFile] [--fixes]
+//   node harness/capture-build.js <name> [domFile] [--fixes] [--no-motion]
+//   pingfusi capture-build <name> [domFile] [--fixes] [--no-motion]
 // domFile defaults to targets/<name>/dom.html.
+// After the clone is written, the DEFAULT-ON motion pass (harness/motion-pass.js) runs
+// automatically — animations recorded in motion-doc.json are reproduced in the draft,
+// receipts + warnings only, never a build failure. --no-motion skips it.
 // --fixes injects <script src="fixes.js" defer></script> before </body> — the ONE vanilla
 // reproduction script for the `behavior` phase (docs/WORKFLOW.md; method: lovable_dupe_html's
 // CLONE_PLAYBOOK.md §8). It's a flag, not automatic:
@@ -198,7 +201,7 @@ async function main() {
   const args = process.argv.slice(2);
   const flags = new Set(args.filter((a) => a.startsWith("--")));
   const [name, domArg] = args.filter((a) => !a.startsWith("--"));
-  if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); }
+  if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes] [--no-motion]"); process.exit(2); }
   // The web QA toolbar is GONE (reviewing happens in the review app, which brings its own
   // pinning UI): the injected <script> just 404'd on every draft view. Refuse the stale flag.
   if (flags.has("--qa-toolbar")) { console.error("❌ --qa-toolbar was removed — reviewers use the review app's own tools; no script tag is injected into clones."); process.exit(1); }
@@ -354,6 +357,23 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
   if (state.failures.length) {
     console.error(`  ❌ ${state.failures.length} download(s) FAILED — these are pixel-determining; fix before advancing build:\n      ${state.failures.join("\n      ")}`);
     process.exit(1);
+  }
+
+  // ── the DEFAULT-ON motion pass (first-draft doctrine, 2026-07-19) ───────────────────
+  // The draft build reproduces animations automatically: what capture-run recorded in
+  // targets/<name>/motion-doc.json is applied to the clone here — CSS tiers are already
+  // carried by the captured stylesheets (verified statically), engine/sampled tiers get
+  // the WAAPI player. Everything is receipts + warnings (motion-pass.json, a
+  // workflow.jsonl line, motion-items.json@2 bookkeeping) — the build NEVER fails
+  // because of motion, and any pass crash is itself just a warning.
+  if (flags.has("--no-motion")) {
+    console.log(`  motion pass: skipped (--no-motion) — re-run later with: ${process.env.PPK_ENTRY === "1" ? "pingfusi" : "node harness/workflow.js"} motion pass ${name}`);
+  } else {
+    try {
+      await require("./motion-pass.js").runMotionPass(name, {});
+    } catch (e) {
+      console.log(`  ⚠ motion pass failed (build unaffected): ${String((e && e.message) || e).split("\n")[0]}`);
+    }
   }
   console.log(`
 next: serve + capture the clone (RUNBOOK), then the gates run unchanged:

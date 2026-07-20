@@ -409,6 +409,33 @@
       const imgWaitMs = o.imageWaitMs || 8000;
       let waited = 0;
       while (pendingImages().length && waited < imgWaitMs) { await sleep(250); waited += 250; }
+      // A lazy image can be UNLOADABLE BY DESIGN at settle time. Measured on mindmarket
+      // (2026-07-17): the client-logo belt ships loading="lazy" logos whose boxes are ZERO-WIDTH
+      // until the bytes arrive (height attr only, width:auto) — the lazy loader never fires for a
+      // box it never sees intersect, so `complete` stays false FOREVER and the wait above times
+      // out identically on every run. That is #32's shape again: a gate demanding a state the
+      // page cannot reach on its own is a deadlock, not honesty. So the kit PROVIDES the state
+      // instead of waiting for it: promote the stuck lazy images to eager (the fetch fires
+      // immediately, no intersection needed), give the network one more bounded window, then put
+      // the attribute back so dom.html ships byte-identical to live — the instrument must not
+      // bake itself into the artifact (#24/#29). A promoted image that STILL never completes
+      // refuses the capture exactly as before: eager-and-in-flight means the page truly is not
+      // ready, and stable:false stays the verdict. The promotion is recorded in the report — a
+      // capture that intervened must say so.
+      const lazyPromoted = [];
+      for (const im of pendingImages().filter((i) => i.loading === "lazy")) {
+        const attr = typeof im.getAttribute === "function" ? im.getAttribute("loading") : null;
+        im.loading = "eager";
+        lazyPromoted.push({ im, attr, src: im.currentSrc || im.src || "(no src)" });
+      }
+      if (lazyPromoted.length) {
+        let promoWaited = 0;
+        while (pendingImages().length && promoWaited < imgWaitMs) { await sleep(250); promoWaited += 250; }
+        for (const p of lazyPromoted) {
+          if (p.attr != null && typeof p.im.setAttribute === "function") p.im.setAttribute("loading", p.attr);
+          else if (p.attr == null && typeof p.im.removeAttribute === "function") p.im.removeAttribute("loading");
+        }
+      }
       const stillPending = pendingImages();
       const imagesPending = stillPending.length;
       // An image still in flight after the bound means the page is NOT in its final layout. Say so
@@ -421,6 +448,8 @@
       // still loading. Capturing now yields a page that does not exist. Investigate, don't hope.
       return {
         scrolledTo, frozenOpacity0, stable, sweeps, heights, imagesPending,
+        lazyPromoted: lazyPromoted.length,
+        lazyPromotedSrcs: lazyPromoted.slice(0, 5).map((p) => p.src),
         pendingImageSrcs: stillPending.slice(0, 5).map((im) => im.currentSrc || im.src || "(no src)"),
       };
     })();
@@ -668,8 +697,651 @@
     return report;
   };
 
+  // ── in-page animation readers: pxIntrospectAnimations + pxProbeGsap ──────────
+  // The DECLARED-motion tiers of the capture ladder: read what the page itself declares
+  // (CSS/WAAPI via document.getAnimations, GSAP via its public timeline API) before any
+  // sampling tier has to reverse-engineer pixels. Both readers are STRICTLY read-only —
+  // no play/pause/seek, no style writes: an instrument that perturbs the animation it is
+  // recording is measuring itself (the agent-DOM lesson, one layer down). Output is plain
+  // JSON, CAPPED (never unbounded — a page can hold thousands of live animations), and
+  // shaped EXACTLY as harness/motion-doc.js's IntrospectionRecord / GsapRecord JSDoc
+  // contracts, so fromIntrospection/fromGsap consume the `records` arrays verbatim.
+
+  // A STABLE selector for an arbitrary element: #id when it has one (escaped), else a
+  // short nth-of-type path. Algorithm-identical with behavior-capture.js selectorOf —
+  // the two files are injected SEPARATELY on strict-CSP pages, so the algorithm is
+  // duplicated by design and must stay in lockstep: a motion track and a behavior record
+  // must key the same element with the same string.
+  const selectorOf = (el) => {
+    if (!el || el.nodeType !== 1 || !el.tagName) return null;
+    if (el.id) {
+      const escaped = root.CSS && typeof root.CSS.escape === "function" ? root.CSS.escape(el.id) : String(el.id).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
+      return `#${escaped}`;
+    }
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === 1 && parts.length < 5) {
+      let part = cur.tagName.toLowerCase();
+      if (cur.parentElement) {
+        const peers = [...cur.parentElement.children].filter((node) => node.tagName === cur.tagName);
+        if (peers.length > 1) part += `:nth-of-type(${peers.indexOf(cur) + 1})`;
+      }
+      parts.unshift(part);
+      cur = cur.parentElement;
+    }
+    return parts.join(">");
+  };
+  root.pxSelectorOf = selectorOf;
+
+  const isScalarValue = (v) => v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+  // Infinity does not survive JSON — the motion-doc contract (see its JSDoc) is to ship
+  // it as the STRING "Infinity"; the converter maps it back (normalizeIterations).
+  const jsonSafeScalar = (v) => (typeof v === "number" && !isFinite(v) ? String(v) : v);
+
+  // effect.getKeyframes() frames are already near-plain objects; keep ONLY scalar entries
+  // (offset may legally be null — preserved) so the record is JSON-safe by construction.
+  const safeKeyframe = (kf) => {
+    const out = {};
+    for (const k of Object.keys(kf || {})) {
+      const v = kf[k];
+      if (isScalarValue(v)) out[k] = jsonSafeScalar(v);
+    }
+    return out;
+  };
+
+  // getComputedTiming() subset per the IntrospectionRecord contract. A scroll-driven
+  // animation may report a NON-number duration (a CSSNumericValue percentage) — record
+  // its string form rather than dropping it; the converter treats non-numbers as 0.
+  const introspectTiming = (effect, anim) => {
+    let t = {};
+    try { t = effect.getComputedTiming() || {}; } catch (e) {}
+    const out = {};
+    const put = (k, v) => { if (v !== undefined) out[k] = isScalarValue(v) ? jsonSafeScalar(v) : String(v); };
+    put("duration", t.duration);
+    put("delay", t.delay);
+    put("iterations", t.iterations);   // Infinity → "Infinity" (motion-doc JSDoc contract)
+    put("direction", t.direction);
+    put("fill", t.fill);
+    put("endTime", t.endTime);         // Infinity → "Infinity"; diagnosis, not consumed
+    if (typeof anim.playbackRate === "number" && isFinite(anim.playbackRate)) out.playbackRate = anim.playbackRate;
+    return out;
+  };
+
+  // Chrome reports an unset animation range as the string "normal" (the default) — that
+  // is the absence of a binding, not a binding; recording it would invent a constraint.
+  const rangeString = (r) => {
+    if (r == null) return null;
+    if (typeof r === "string") return r;
+    if (typeof r === "object" && r.rangeName) return `${r.rangeName}${r.offset != null ? " " + String(r.offset) : ""}`;
+    return String(r);
+  };
+  // Feature-detected: on a host without ScrollTimeline/ViewTimeline globals nothing can
+  // BE one, so everything classifies "document" — never a throw. ViewTimeline extends
+  // ScrollTimeline, so it must be tested first.
+  const introspectTimeline = (anim) => {
+    const tl = anim.timeline;
+    if (!tl) return { type: "document" };
+    const isView = !!(root.ViewTimeline && tl instanceof root.ViewTimeline);
+    const isScroll = isView || !!(root.ScrollTimeline && tl instanceof root.ScrollTimeline);
+    if (!isScroll) return { type: "document" };
+    const out = { type: isView ? "view" : "scroll" };
+    const src = selectorOf(tl.subject || tl.source);  // ViewTimeline names it subject, ScrollTimeline source
+    if (src) out.source = src;
+    const rs = rangeString(anim.rangeStart), re = rangeString(anim.rangeEnd);
+    if (rs && rs !== "normal") out.rangeStart = rs;
+    if (re && re !== "normal") out.rangeEnd = re;
+    return out;
+  };
+
+  // instanceof when the host has the constructors, duck-typing as the fallback (only
+  // CSSAnimation exposes animationName; only CSSTransition exposes transitionProperty).
+  const animationType = (anim) => {
+    if (root.CSSTransition && anim instanceof root.CSSTransition) return "CSSTransition";
+    if (root.CSSAnimation && anim instanceof root.CSSAnimation) return "CSSAnimation";
+    if (typeof anim.animationName === "string") return "CSSAnimation";
+    if (typeof anim.transitionProperty === "string") return "CSSTransition";
+    return "Animation";
+  };
+
+  root.pxIntrospectAnimations = function (opts) {
+    const o = opts || {};
+    const cap = o.cap || 500;
+    if (!document || typeof document.getAnimations !== "function") {
+      return { supported: false, total: 0, truncated: false, records: [], skipped: { noTarget: 0, agentDom: 0 } };
+    }
+    let anims = [];
+    try { anims = document.getAnimations({ subtree: true }) || []; }
+    catch (e) { try { anims = document.getAnimations() || []; } catch (e2) { anims = []; } }
+    const skipped = { noTarget: 0, agentDom: 0 };
+    const records = [];
+    let truncated = false;
+    for (const anim of anims) {
+      if (records.length >= cap) { truncated = true; break; }
+      const effect = anim && anim.effect;
+      const target = effect && effect.target;
+      // No target = nothing a clone could bind the track to; skipped WITH a count — a
+      // reader that drops silently is a reader that cannot be audited.
+      if (!target) { skipped.noTarget++; continue; }
+      // The agent's own overlay animates (glow-border pulse). The instrument must not
+      // record itself as the site's motion — same contract as pxDomHtml/pxEnumerateLeaves.
+      if (root.pxIsAgentDom(target)) { skipped.agentDom++; continue; }
+      const type = animationType(anim);
+      const selector = selectorOf(target);
+      if (!selector) { skipped.noTarget++; continue; }
+      let keyframes = [];
+      try { keyframes = (effect.getKeyframes() || []).map(safeKeyframe); } catch (e) {}
+      const record = {
+        type,
+        // a pseudo-element animation belongs to `#sel::before`, not to `#sel`
+        selector: selector + (effect.pseudoElement || ""),
+        keyframes,
+        timing: introspectTiming(effect, anim),
+        timeline: introspectTimeline(anim),
+      };
+      if (type === "CSSAnimation" && typeof anim.animationName === "string") record.animationName = anim.animationName;
+      if (type === "CSSTransition" && typeof anim.transitionProperty === "string") record.transitionProperty = anim.transitionProperty;
+      records.push(record);
+    }
+    return { supported: true, total: anims.length, truncated, records, skipped };
+  };
+
+  // pxProbeGsap — serialize the page's GSAP tweens (window.gsap v3) as GsapRecords.
+  // Version-guarded: an unknown major is REPORTED ({present:true, unsupported}) instead of
+  // guessed at — a probe walking internals it does not know would fabricate a receipt.
+  root.pxProbeGsap = function (opts) {
+    const o = opts || {};
+    const cap = o.cap || 500;
+    const gsap = root.gsap;
+    if (!gsap) return { present: false };
+    const version = String(gsap.version || "");
+    if (parseInt(version, 10) !== 3) return { present: true, unsupported: version || "(unknown)" };
+    const result = {
+      present: true, version, truncated: false, tweens: 0,
+      records: [], scrollTriggers: [],
+      skipped: { nonElementTargets: 0, agentDom: 0, droppedVarKeys: 0 },
+    };
+    let children = [];
+    try {
+      children = gsap.globalTimeline && typeof gsap.globalTimeline.getChildren === "function"
+        ? gsap.globalTimeline.getChildren(true, true, true) || []   // (nested, tweens, timelines)
+        : [];
+    } catch (e) { children = []; }
+
+    // ScrollTrigger may live on window (script-tag load) or only inside gsap's registered
+    // globals (bundler load) — check both, never require either.
+    let ST = root.ScrollTrigger || null;
+    if (!ST && gsap.core && typeof gsap.core.globals === "function") {
+      try { ST = gsap.core.globals().ScrollTrigger || null; } catch (e) { ST = null; }
+    }
+    let triggers = [];
+    try { triggers = ST && typeof ST.getAll === "function" ? ST.getAll() || [] : []; } catch (e) { triggers = []; }
+    const trigEntries = triggers.map((st) => {
+      const vars = (st && st.vars) || {};
+      const cfg = {};
+      const trig = (st && st.trigger) || vars.trigger;
+      const tsel = typeof trig === "string" ? trig : selectorOf(trig);
+      if (tsel) cfg.trigger = tsel;
+      // authored config first (vars.start "top 80%"), computed px fallback; functions are
+      // not values — skipped. Strings because the GsapRecord contract says string.
+      const startRaw = isScalarValue(vars.start) && vars.start != null ? vars.start : (st && isScalarValue(st.start) && st.start != null ? st.start : null);
+      const endRaw = isScalarValue(vars.end) && vars.end != null ? vars.end : (st && isScalarValue(st.end) && st.end != null ? st.end : null);
+      if (startRaw != null) cfg.start = String(startRaw);
+      if (endRaw != null) cfg.end = String(endRaw);
+      if (isScalarValue(vars.scrub) && vars.scrub != null) cfg.scrub = jsonSafeScalar(vars.scrub);
+      return { st, cfg, matched: false };
+    });
+    // a trigger drives a tween directly (st.animation === tween) or drives a TIMELINE the
+    // tween sits on — walk the parent chain so nested tweens inherit their trigger.
+    const matchTrigger = (tween) => {
+      for (const t of trigEntries) {
+        const anim = t.st && t.st.animation;
+        if (!anim) continue;
+        for (let a = tween; a; a = a.parent) {
+          if (a === anim) { t.matched = true; return t.cfg; }
+        }
+      }
+      return null;
+    };
+
+    // vars, data-only: scalars kept verbatim, functions and non-startAt objects DROPPED
+    // with a count (never serialized — a stringified callback is not a value). startAt
+    // (gsap.fromTo start values) is consumed by the converter, so its scalars survive.
+    const safeVars = (vars) => {
+      const out = {};
+      let dropped = 0;
+      for (const k of Object.keys(vars || {})) {
+        const v = vars[k];
+        if (isScalarValue(v)) { out[k] = jsonSafeScalar(v); continue; }
+        if (k === "startAt" && v && typeof v === "object" && !Array.isArray(v)) {
+          const sub = {};
+          for (const sk of Object.keys(v)) {
+            if (isScalarValue(v[sk])) sub[sk] = jsonSafeScalar(v[sk]);
+            else dropped++;
+          }
+          out.startAt = sub;
+          continue;
+        }
+        dropped++;
+      }
+      return { vars: out, dropped };
+    };
+    const readNum = (fn) => { try { const v = fn(); return typeof v === "number" && isFinite(v) ? v : undefined; } catch (e) { return undefined; } };
+
+    for (const child of children) {
+      if (!child || typeof child.targets !== "function") continue;  // timelines are containers, not motion
+      if (result.records.length >= cap) { result.truncated = true; break; }
+      result.tweens++;
+      let targets = [];
+      try { targets = child.targets() || []; } catch (e) { targets = []; }
+      const sv = safeVars(child.vars);
+      result.skipped.droppedVarKeys += sv.dropped;
+      const duration_s = readNum(() => child.duration());
+      const delay_s = readNum(() => child.delay());
+      const startTime_s = readNum(() => child.startTime());
+      const repeat = readNum(() => child.repeat());
+      let yoyo = false;
+      try { yoyo = typeof child.yoyo === "function" ? !!child.yoyo() : false; } catch (e) {}
+      const ease = child.vars && typeof child.vars.ease === "string" ? child.vars.ease : undefined;
+      const scrollTrigger = matchTrigger(child);
+      for (const t of targets) {
+        if (result.records.length >= cap) { result.truncated = true; break; }
+        // plain-object tweens (gsap.to({val:0},…)) animate no pixels a clone could show;
+        // skipped with a count, same audit contract as the introspection reader.
+        if (!t || t.nodeType !== 1) { result.skipped.nonElementTargets++; continue; }
+        if (root.pxIsAgentDom(t)) { result.skipped.agentDom++; continue; }
+        const selector = selectorOf(t);
+        if (!selector) { result.skipped.nonElementTargets++; continue; }
+        const rec = { selector, vars: sv.vars, duration_s: duration_s !== undefined ? duration_s : 0 };
+        if (delay_s !== undefined) rec.delay_s = delay_s;
+        if (startTime_s !== undefined) rec.startTime_s = startTime_s;
+        if (ease !== undefined) rec.ease = ease;
+        if (repeat !== undefined) rec.repeat = repeat;
+        if (yoyo) rec.yoyo = true;
+        if (scrollTrigger) rec.scrollTrigger = scrollTrigger;
+        result.records.push(rec);
+      }
+    }
+    // every trigger is reported (matched or not) — an unmatched trigger is inventory the
+    // sampling tiers must dispose of, not a config that silently vanished.
+    result.scrollTriggers = trigEntries.map((t) => Object.assign({}, t.cfg, { matched: t.matched }));
+    return result;
+  };
+
   // Expose the pure sibling walk to node so the prevGap invariance can be fixtured without
   // driving a browser (same reason behavior-capture.js exports probeHover). Harmless in the
   // browser — `module` is undefined there.
   if (typeof module !== "undefined" && module.exports) module.exports = { prevRenderedSibling, classifyLeaf, slugName, captureAllShouldAbort };
+})(typeof window !== "undefined" ? window : globalThis);
+
+// ── pxDenseRecord* — the SAMPLED tier's in-page dense recorder ────────────────
+// The last rung of the capture ladder: when a page declares nothing (no CSS/WAAPI
+// animation to introspect, no GSAP timeline to probe) but pixels still move — a
+// hand-rolled rAF loop writing inline styles — the only honest record is a SAMPLED
+// one: computed values read at uniform virtual-time steps. The recorder does NOT
+// own the clock. The node-side runner (harness/motion-sampler.js) steps virtual
+// time over CDP (Emulation.setVirtualTimePolicy, or the hooked-clock fallback) and
+// hands each step's tMs in; this file only READS at the moments it is told about.
+// Determinism — two runs must produce byte-identical samples — is therefore the
+// runner's stepped clock plus this file's pure reads, and nothing else.
+//
+// Read-only against the page's rendering, same doctrine as pxIntrospectAnimations:
+// observers and getComputedStyle reads only — no style writes, no play/pause/seek,
+// no DOM nodes added. An instrument that perturbs the animation it is recording is
+// measuring itself. And the instrument must not RECORD itself either: the agent
+// overlay namespace (pxIsAgentDom) is skipped at element resolution AND at write
+// capture, with counts — a reader that drops silently cannot be audited.
+//
+// Contract (the sampler binds to these exact names):
+//   pxDenseRecordStart({scopes:[selector], props:["transform","opacity",…]})
+//     → resolves elements from the scopes NOW (each scope root, plus descendants
+//       with their OWN computed transform — they animate independently and a
+//       scope-level sample cannot see them), installs a MutationObserver for
+//       inline-style writes (attributes:true, attributeFilter:["style"],
+//       attributeOldValue:true, subtree:true) on each scope root.
+//   pxDenseRecordStep(tMs)
+//     → drains pending style-write records (attributed to THIS step's tMs: a write
+//       lands during the frame advance between steps, and at the declared fps the
+//       step boundary IS its observable virtual timestamp — sub-step ordering is
+//       below the instrument's resolution by design), then snapshots the computed
+//       value of every requested prop for every tracked element.
+//   pxDenseRecordStop()
+//     → { frames, stepMs, elements: [{selector, samples: [{t, values}]}],
+//         writes: [{t, selector, prop, value}], truncated }
+//       plus audit fields (skipped counts, writesObserved). Raw samples out —
+//       Stop CONVERTS NOTHING; turning samples into motion-doc tracks
+//       (provenance.tier "sampled") is the node-side sampler's job.
+//
+// Plain-JSON by construction and CAPPED, never unbounded: 200 elements, 2000
+// frames, 5000 writes — any cap trip sets the explicit `truncated` flag. Values
+// ship as computed strings exactly as getComputedStyle returns them (transform is
+// the computed matrix string or "none"); a prop the host cannot resolve is null.
+(function (root) {
+  "use strict";
+  const DENSE_MAX_ELEMENTS = 200;
+  const DENSE_MAX_FRAMES = 2000;
+  const DENSE_MAX_WRITES = 5000;
+  const DENSE_DEFAULT_PROPS = ["transform", "opacity", "filter", "visibility"];
+
+  let dr = null; // the active recording — one at a time; Start resets, Stop clears
+
+  // Inline-style declaration parser: split on ";" at paren/quote depth 0 (a url()
+  // or data: value may legally contain semicolons), prop lowercased except custom
+  // properties (-- prefix is case-sensitive by spec). Later duplicates win, as in
+  // the style attribute itself.
+  const parseDenseDecls = (cssText) => {
+    const out = [];
+    const text = String(cssText == null ? "" : cssText);
+    let depth = 0, quote = null, start = 0;
+    const push = (chunk) => {
+      const i = chunk.indexOf(":");
+      if (i < 1) return;
+      const raw = chunk.slice(0, i).trim();
+      const prop = raw.indexOf("--") === 0 ? raw : raw.toLowerCase();
+      if (prop) out.push([prop, chunk.slice(i + 1).trim()]);
+    };
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quote) { if (ch === quote && text[i - 1] !== "\\") quote = null; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === "(") depth++;
+      else if (ch === ")") depth = depth > 0 ? depth - 1 : 0;
+      else if (ch === ";" && depth === 0) { push(text.slice(start, i)); start = i + 1; }
+    }
+    push(text.slice(start));
+    return out;
+  };
+  const denseDeclMap = (cssText) => {
+    const m = {};
+    for (const d of parseDenseDecls(cssText)) m[d[0]] = d[1];
+    return m;
+  };
+  const denseStyleAttr = (el) => {
+    try { return (el && el.getAttribute && el.getAttribute("style")) || ""; } catch (e) { return ""; }
+  };
+
+  // Drain style-write records and attribute them to virtual time t. All records —
+  // whether the observer's async callback fired mid-advance or takeRecords() hands
+  // them over now — are processed HERE, at the step boundary, so the attribution
+  // never depends on when the host chose to schedule a microtask: that is what
+  // makes two runs byte-identical. Per element, the FIRST record's oldValue is the
+  // pre-step baseline and the current attribute is the post-step state; the diff
+  // between them is what a recorder sampling at this fps can honestly observe
+  // (multiple sub-step writes collapse to their final value — the same collapse
+  // the screen itself performs). A removed prop records value "".
+  const denseDrainWrites = (t) => {
+    if (!dr || !dr.observer) return;
+    const records = dr.queue.splice(0);
+    let taken = [];
+    try { taken = dr.observer.takeRecords() || []; } catch (e) { taken = []; }
+    for (const r of taken) records.push(r);
+    if (!records.length) return;
+    const perEl = new Map();
+    for (const rec of records) {
+      const target = rec && rec.target;
+      if (!target || target.nodeType !== 1) continue;
+      if (root.pxIsAgentDom && root.pxIsAgentDom(target)) { dr.skipped.agentDom++; continue; }
+      if (!perEl.has(target)) perEl.set(target, rec.oldValue != null ? rec.oldValue : "");
+    }
+    for (const entry of perEl) {
+      const target = entry[0];
+      const before = denseDeclMap(entry[1]);
+      const after = denseDeclMap(denseStyleAttr(target));
+      const selector = root.pxSelectorOf ? root.pxSelectorOf(target) : null;
+      if (!selector) continue;
+      const props = new Set(Object.keys(before).concat(Object.keys(after)));
+      for (const p of props) {
+        if (before[p] === after[p]) continue;
+        if (dr.writes.length >= DENSE_MAX_WRITES) { dr.truncated = true; return; }
+        dr.writes.push({ t, selector, prop: p, value: after[p] !== undefined ? after[p] : "" });
+      }
+    }
+  };
+
+  root.pxDenseRecordStart = function (opts) {
+    const o = opts || {};
+    const scopes = Array.isArray(o.scopes) && o.scopes.length ? o.scopes.map(String) : ["body"];
+    const props = Array.isArray(o.props) && o.props.length ? o.props.map(String) : DENSE_DEFAULT_PROPS.slice();
+    if (dr && dr.observer) { try { dr.observer.disconnect(); } catch (e) {} }
+    dr = {
+      props, tracked: [], times: [], writes: [], queue: [],
+      truncated: false, lastT: 0, observer: null,
+      skipped: { agentDom: 0 },
+    };
+    const seen = new Set();
+    const roots = [];
+    const track = (el) => {
+      if (!el || el.nodeType !== 1 || seen.has(el)) return;
+      if (root.pxIsAgentDom && root.pxIsAgentDom(el)) { dr.skipped.agentDom++; return; }
+      if (dr.tracked.length >= DENSE_MAX_ELEMENTS) { dr.truncated = true; return; }
+      seen.add(el);
+      dr.tracked.push({ el, selector: root.pxSelectorOf ? root.pxSelectorOf(el) : null, samples: [] });
+    };
+    for (const sel of scopes) {
+      let hits = [];
+      try { hits = [...document.querySelectorAll(sel)]; } catch (e) { hits = []; }
+      for (const scopeEl of hits) {
+        if (root.pxIsAgentDom && root.pxIsAgentDom(scopeEl)) { dr.skipped.agentDom++; continue; }
+        roots.push(scopeEl);
+        track(scopeEl);
+        // Descendants with their OWN transform move independently of the scope
+        // root; a sample of the root alone would miss them entirely. Resolved
+        // ONCE, now — the element set is fixed at Start so every frame samples
+        // the same elements (a set that changed mid-run could never be replayed).
+        let descendants = [];
+        try { descendants = scopeEl.querySelectorAll ? [...scopeEl.querySelectorAll("*")] : []; } catch (e) { descendants = []; }
+        for (const d of descendants) {
+          if (dr.tracked.length >= DENSE_MAX_ELEMENTS) { dr.truncated = true; break; }
+          let tf = "none";
+          try { tf = getComputedStyle(d).transform || "none"; } catch (e) { tf = "none"; }
+          if (tf !== "none") track(d);
+        }
+      }
+    }
+    const MO = root.MutationObserver;
+    if (MO) {
+      // The callback only queues — every record is PROCESSED at the next step
+      // boundary (denseDrainWrites), so timestamp attribution is deterministic
+      // regardless of microtask scheduling.
+      const queue = dr.queue;
+      dr.observer = new MO(function (records) { for (const r of records) queue.push(r); });
+      for (const scopeEl of roots) {
+        try {
+          dr.observer.observe(scopeEl, { attributes: true, attributeFilter: ["style"], attributeOldValue: true, subtree: true });
+        } catch (e) {}
+      }
+    }
+    return { tracking: dr.tracked.length, writesObserved: !!dr.observer, truncated: dr.truncated, skipped: dr.skipped };
+  };
+
+  root.pxDenseRecordStep = function (tMs) {
+    // A step against no recording is a caller bug — throw, never silently no-op:
+    // a recorder that pretends to record fabricates the artifact downstream.
+    if (!dr) throw new Error("pxDenseRecordStep: no active dense recording (call pxDenseRecordStart first)");
+    const t = typeof tMs === "number" && isFinite(tMs) ? tMs : 0;
+    dr.lastT = t;
+    denseDrainWrites(t);
+    if (dr.times.length >= DENSE_MAX_FRAMES) {
+      dr.truncated = true;
+      return { frame: dr.times.length, truncated: true };
+    }
+    dr.times.push(t);
+    for (const tr of dr.tracked) {
+      const values = {};
+      let cs = null;
+      try { cs = getComputedStyle(tr.el); } catch (e) { cs = null; }
+      for (const p of dr.props) {
+        let v = cs ? cs[p] : undefined;
+        if (v === undefined && cs && typeof cs.getPropertyValue === "function") {
+          try { v = cs.getPropertyValue(p); } catch (e) { v = undefined; }
+        }
+        values[p] = v === undefined || v === null ? null : String(v);
+      }
+      tr.samples.push({ t, values });
+    }
+    return { frame: dr.times.length, truncated: dr.truncated };
+  };
+
+  root.pxDenseRecordStop = function () {
+    if (!dr) throw new Error("pxDenseRecordStop: no active dense recording");
+    denseDrainWrites(dr.lastT); // writes that landed after the final step still count
+    if (dr.observer) { try { dr.observer.disconnect(); } catch (e) {} }
+    const frames = dr.times.length;
+    const out = {
+      frames,
+      // Uniform stepping is the runner's contract; the recorder REPORTS the step it
+      // actually saw (first delta) rather than trusting a parameter it never received.
+      stepMs: frames >= 2 ? dr.times[1] - dr.times[0] : 0,
+      elements: dr.tracked.map((tr) => ({ selector: tr.selector, samples: tr.samples })),
+      writes: dr.writes,
+      truncated: dr.truncated,
+      skipped: dr.skipped,
+      writesObserved: !!dr.observer,
+    };
+    dr = null;
+    return out;
+  };
+})(typeof window !== "undefined" ? window : globalThis);
+
+// ── pxOwnerProbe — the ONE-OWNER gate's in-page half (motion apply-sampled) ───
+// Before the kit attaches its replay to the clone, apply-sampled must know whether
+// another implementation already writes the target elements — the kit never STACKS
+// implementations (two writers on one element means the later one silently wins, seen
+// live when a finished clip's fill overrode a coexisting implementation forever). This
+// probe watches each selector's elements for ~durationMs of wall time and reports any
+// change to their inline style or computed transform. The kit's OWN replay animations
+// (id-tagged "pingfusi:motion-replay" by the generated player) are cancelled at every
+// tick first: the question is who ELSE writes, and a previously applied replay is the
+// kit, not a competitor.
+//
+// VANTAGE RULE: competing writers are commonly visibility-gated — a belt advances only
+// while its rail is in the viewport (seen live: a rail at document-top 13725px whose rAF
+// writer paused off-screen answered a scroll-0 probe with a false all-clear). So the
+// probe observes every watched element AT the vantage the player will run from: elements
+// are sorted by document top, partitioned into viewport groups (tops within ~0.8·vh),
+// and each group is scrolled into view — one settle tick for its writers to arm — before
+// its baseline is read and its watch window runs. The original scroll position is
+// restored afterwards. Groups are capped (maxGroups, default 5); elements beyond the cap
+// are reported in `unwatched`, never silently skipped — an element the probe did not
+// observe is an element it cannot clear. Read-only toward the page except the
+// cancellation of the kit's own animations and the probe's scrolling; capped (50
+// elements, 50 changes) and promise-returning so the caller can await the full window.
+(function (root) {
+  root.pxOwnerProbe = function (opts) {
+    var o = opts && typeof opts === "object" ? opts : {};
+    var selectors = Array.isArray(o.selectors) ? o.selectors.filter(function (s) { return typeof s === "string" && s; }) : [];
+    var durationMs = typeof o.durationMs === "number" && isFinite(o.durationMs) && o.durationMs > 0 ? o.durationMs : 1000;
+    var maxGroups = typeof o.maxGroups === "number" && isFinite(o.maxGroups) && o.maxGroups >= 1 ? Math.floor(o.maxGroups) : 5;
+    var tickMs = Math.max(40, Math.min(200, Math.floor(durationMs / 10) || 100));
+    var cancelOwn = function () {
+      var anims = [];
+      try { anims = typeof document.getAnimations === "function" ? document.getAnimations() : []; } catch (e) { anims = []; }
+      var n = 0;
+      for (var i = 0; i < anims.length; i++) {
+        var a = anims[i];
+        if (a && typeof a.id === "string" && a.id.indexOf("pingfusi:motion-replay") === 0) {
+          try { a.cancel(); n++; } catch (e) {}
+        }
+      }
+      return n;
+    };
+    var watch = [];
+    var missing = [];
+    for (var s = 0; s < selectors.length; s++) {
+      var els = [];
+      try { els = document.querySelectorAll(selectors[s]); } catch (e) { els = []; }
+      if (!els.length) { missing.push(selectors[s]); continue; }
+      for (var j = 0; j < els.length && watch.length < 50; j++) watch.push({ selector: selectors[s], index: j, el: els[j] });
+    }
+    var read = function (w) {
+      var style = "";
+      var transform = "";
+      try { style = w.el.getAttribute("style") || ""; } catch (e) {}
+      try { var cs = getComputedStyle(w.el); transform = (cs && cs.transform) || ""; } catch (e) {}
+      return { style: style, transform: transform };
+    };
+    var docTop = function (el) {
+      try { var r = el.getBoundingClientRect(); return r.top + (root.scrollY || 0); } catch (e) { return 0; }
+    };
+    var vh = 0;
+    try { vh = root.innerHeight || (root.document.documentElement && root.document.documentElement.clientHeight) || 0; } catch (e) {}
+    for (var k = 0; k < watch.length; k++) watch[k].top = docTop(watch[k].el);
+    var groups = [];
+    var sorted = watch.slice().sort(function (a, b) { return a.top - b.top; });
+    for (var g = 0; g < sorted.length; g++) {
+      var grp = groups.length ? groups[groups.length - 1] : null;
+      if (!grp || (vh > 0 && sorted[g].top - grp.top > Math.max(1, vh * 0.8))) { grp = { top: sorted[g].top, members: [] }; groups.push(grp); }
+      grp.members.push(sorted[g]);
+    }
+    var unwatched = [];
+    while (groups.length > maxGroups) {
+      var over = groups.pop();
+      for (var u = 0; u < over.members.length; u++) unwatched.push({ selector: over.members[u].selector, index: over.members[u].index });
+    }
+    var origX = 0, origY = 0, canScroll = false;
+    try { origX = root.scrollX || 0; origY = root.scrollY || 0; canScroll = typeof root.scrollTo === "function"; } catch (e) {}
+    var scrolledAny = false;
+    var scrollGroup = function (target) {
+      if (!canScroll || vh <= 0) return false;
+      var to = Math.max(0, target.top - vh / 3);
+      var cur = 0;
+      try { cur = root.scrollY || 0; } catch (e) {}
+      if (Math.abs(to - cur) < 2) return false;
+      try { root.scrollTo(0, to); scrolledAny = true; return true; } catch (e) { return false; }
+    };
+    var ownCancelled = cancelOwn();
+    var changed = [];
+    var seen = {};
+    var ticks = 0;
+    var groupsReport = [];
+    return new Promise(function (resolve) {
+      var gi = 0;
+      var runGroup = function () {
+        if (gi >= groups.length) {
+          if (scrolledAny) { try { root.scrollTo(origX, origY); } catch (e) {} }
+          resolve({ schema: "pingfusi/owner-probe@2", durationMs: durationMs, ticks: ticks, elements: watch.length, missing: missing, ownCancelled: ownCancelled, changed: changed, groups: groupsReport, unwatched: unwatched, scrolled: scrolledAny });
+          return;
+        }
+        var grp = groups[gi++];
+        var moved = scrollGroup(grp);
+        var begin = function () {
+          ownCancelled += cancelOwn();
+          for (var i = 0; i < grp.members.length; i++) grp.members[i].base = read(grp.members[i]);
+          var started = Date.now();
+          var tick = function () {
+            ownCancelled += cancelOwn();
+            ticks++;
+            var atMs = Date.now() - started;
+            for (var i = 0; i < grp.members.length; i++) {
+              var w = grp.members[i];
+              var now = read(w);
+              for (var p in now) {
+                if (now[p] === w.base[p]) continue;
+                var key = w.selector + " " + w.index + " " + p;
+                if (seen[key] || changed.length >= 50) continue;
+                seen[key] = 1;
+                changed.push({
+                  selector: w.selector, index: w.index,
+                  prop: p === "style" ? "inline-style" : p,
+                  from: String(w.base[p]).slice(0, 120), to: String(now[p]).slice(0, 120),
+                  atMs: atMs,
+                });
+              }
+            }
+            if (atMs >= durationMs) {
+              groupsReport.push({ top: Math.round(grp.top), elements: grp.members.length, scrolled: moved });
+              runGroup();
+              return;
+            }
+            setTimeout(tick, tickMs);
+          };
+          setTimeout(tick, tickMs);
+        };
+        // A visibility-gated writer needs a beat to arm once its element scrolls into
+        // view — one settle tick (scroll handlers included) before the baseline is read,
+        // so the writer's very first frame lands AFTER the baseline and is seen.
+        if (moved) setTimeout(begin, tickMs); else begin();
+      };
+      runGroup();
+    });
+  };
 })(typeof window !== "undefined" ? window : globalThis);

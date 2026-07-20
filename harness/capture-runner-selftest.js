@@ -4,11 +4,16 @@
 // viewport normalization, navigate, inject, value-mode capture, artifact + receipt writes —
 // plus the contracts that must never soften: the settle STOP (a page still growing writes
 // NOTHING), the bot-wall ladder ending in the interactive FALLBACK (never a dead end), and
-// side=auto picking live-only until a clone exists. INTEGRATION (skip-if-absent): the real
+// side=auto picking live-only until a clone exists. MOTION (additive, quarantined): reader
+// records become a validated motion-doc.json, wire bodies are sniffed and ripped under
+// sha-DERIVED names (never the remote name), oversized bodies are receipted skips, and a
+// reader that throws is a WARNING — the capture itself must still exit 0.
+// INTEGRATION (skip-if-absent): the real
 // local Chrome headless captures a fixture clone and the snapshot's viewport must be EXACTLY
 // the normalized one — width, height, and dpr 2 (the heyaristotle bug, pinned for good).
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -16,6 +21,7 @@ const http = require("http");
 const { execFile } = require("child_process");
 const { acceptKeyFor } = require("./cdp.js");
 const { resolveChrome } = require("./chrome.js");
+const { validateMotionDoc } = require("./motion-doc.js");
 
 let failed = 0;
 const check = (label, ok, detail) => {
@@ -91,6 +97,15 @@ function fakeChrome(script) {
         if (msg.method === "Page.navigate") {
           reply({ frameId: "F1" });
           socket.write(serverFrame(0x1, JSON.stringify({ method: "Page.loadEventFired", params: {} })));
+          // Network events for the asset rip: one responseReceived + loadingFinished pair
+          // per fixture entry, exactly as Chrome bursts them after load.
+          for (const n of acts.network || []) {
+            socket.write(serverFrame(0x1, JSON.stringify({ method: "Network.responseReceived", params: { requestId: n.id, response: { url: n.url, mimeType: n.mime || "" } } })));
+            socket.write(serverFrame(0x1, JSON.stringify({ method: "Network.loadingFinished", params: { requestId: n.id, encodedDataLength: n.encodedDataLength != null ? n.encodedDataLength : Buffer.byteLength(n.body || "", "latin1") } })));
+          }
+        } else if (msg.method === "Network.getResponseBody") {
+          const n = (acts.network || []).find((x) => x.id === (msg.params || {}).requestId);
+          reply(n ? { body: n.base64 ? Buffer.from(n.body, "latin1").toString("base64") : n.body, base64Encoded: !!n.base64 } : { body: "", base64Encoded: false });
         } else if (msg.method === "Emulation.setDeviceMetricsOverride") {
           metricsCalls.push(msg.params);
           reply({});
@@ -103,6 +118,14 @@ function fakeChrome(script) {
           else if (e.startsWith("pxCaptureAll(")) {
             const prefix = /"prefix":"(\w+)"/.exec(e) ? /"prefix":"(\w+)"/.exec(e)[1] : "live";
             value(acts.report ? acts.report(prefix) : GOOD_REPORT(prefix));
+          } else if (e.startsWith("pxIntrospectAnimations")) {
+            if (acts.introspect === "throw") reply({ result: { type: "object", subtype: "error" }, exceptionDetails: { exception: { description: "Error: getAnimations exploded on this page" } } });
+            else if (acts.introspect !== undefined) value(acts.introspect);
+            else reply({ result: { type: "undefined" } }); // reader absent from the injected source
+          } else if (e.startsWith("pxProbeGsap")) {
+            if (acts.gsap === "throw") reply({ result: { type: "object", subtype: "error" }, exceptionDetails: { exception: { description: "Error: gsap probe exploded" } } });
+            else if (acts.gsap !== undefined) value(acts.gsap);
+            else reply({ result: { type: "undefined" } });
           } else reply({ result: { type: "undefined" } }); // injection etc.
         } else reply({});
       }
@@ -172,7 +195,7 @@ function makeTarget(work, name) {
     const server = await fakeChrome([{ report: () => ({ prefix: "live", leaves: 0, ok: false, aborted: "settle-not-stable", hint: "the page never settled — inspect settle.heights.", settle: { stable: false, heights: [4400, 5100, 5800], imagesPending: 3, pendingImageSrcs: ["https://x/img.webp"] }, delivered: [], failed: [] }) }]);
     const r = await run(["t2", "--attach", `127.0.0.1:${server.address().port}`], work);
     check("settle-not-stable → exit 1 with the evidence (heights, pending images)", r.code === 1 && /never settled/.test(r.out) && /5800/.test(r.out) && /3 image/.test(r.out));
-    check("no artifacts written for an unsettled page", !fs.existsSync(path.join(work, "targets", "t2", "live.json")) && !fs.existsSync(path.join(work, "targets", "t2", "dom.html")));
+    check("no artifacts written for an unsettled page (motion-doc.json included)", !fs.existsSync(path.join(work, "targets", "t2", "live.json")) && !fs.existsSync(path.join(work, "targets", "t2", "dom.html")) && !fs.existsSync(path.join(work, "targets", "t2", "motion-doc.json")));
     server.close();
   }
 
@@ -208,6 +231,94 @@ function makeTarget(work, name) {
     const r2 = await run(["t5", "--attach", `127.0.0.1:${allEvil.address().port}`], work);
     check("ALL names refused → hard failure naming the cause", r2.code === 1 && /not running the kit's pxCaptureAll/.test(r2.out));
     server.close(); allEvil.close();
+  }
+
+  // ── motion doc: reader records → tracks, wire bodies → sha-named assets ────────
+  {
+    const dir = makeTarget(work, "t6");
+    // A pre-existing engine-fit artifact must be folded in as a "fitted" track.
+    fs.mkdirSync(path.join(dir, "motion", "m1", "trace"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "motion", "m1", "trace", "fits.json"), JSON.stringify({
+      url: "http://fake-live/", fits: [{ elementId: "e1", path: ".card", channel: "tx",
+        fit: { kind: "tween", transition: { duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }, valueFrom: 0, valueTo: 120, nrmse: 0.03, confidence: 0.9 } }],
+    }));
+    const lottieBody = JSON.stringify({ v: "5.9.6", fr: 60, ip: 0, op: 120, layers: [{ ty: 4, nm: "shape" }] });
+    const rivBody = "RIVE\x07\x00rive-binary-payload";
+    const dotBody = "PK\x03\x04dotlottie-zip-bytes";
+    const server = await fakeChrome([{
+      introspect: { supported: true, total: 1, truncated: false, records: [{ type: "CSSAnimation", animationName: "spin", selector: ".loader",
+        keyframes: [{ offset: 0, easing: "linear", transform: "rotate(0deg)" }, { offset: 1, transform: "rotate(360deg)" }],
+        timing: { duration: 1200, delay: 0, iterations: "infinite", direction: "normal", fill: "none" } }], skipped: { noTarget: 0, agentDom: 0 } },
+      gsap: { present: true, version: "3.12.5", truncated: false, tweens: 1, records: [{ selector: ".hero", vars: { opacity: 1 }, duration_s: 0.5, ease: "power2.out" }], scrollTriggers: [], skipped: {} },
+      network: [
+        { id: "R1", url: "http://fake-live/anim/loader.json", mime: "application/json", body: lottieBody },
+        { id: "R2", url: "http://fake-live/anim/hero.riv", mime: "application/octet-stream", body: rivBody, base64: true },
+        { id: "R3", url: "http://fake-live/anim/badge.lottie", mime: "application/octet-stream", body: dotBody, base64: true },
+        { id: "R4", url: "http://fake-live/api/users.json", mime: "application/json", body: '{"users":[]}' },   // JSON but not Lottie — sniffed, refused, silent
+        { id: "R5", url: "http://fake-live/app.js", mime: "text/javascript", body: "console.log(1)" },          // never a candidate
+        { id: "R6", url: "http://fake-live/anim/huge.json", mime: "application/json", body: "{}", encodedDataLength: 6 * 1024 * 1024 }, // oversized → receipted skip
+      ],
+    }]);
+    const r = await run(["t6", "--attach", `127.0.0.1:${server.address().port}`], work);
+    check("motion phase rides a normal capture: exit 0, doc announced", r.code === 0 && /motion-doc\.json \(3 track/.test(r.out), r.out.slice(0, 600));
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, "motion-doc.json"), "utf8"));
+    let docErr = null; try { validateMotionDoc(doc); } catch (e) { docErr = e.message; }
+    check("motion-doc.json passes validateMotionDoc", !docErr, docErr);
+    check("doc carries schema + url + normalized viewport", doc.schema === "pingfusi/motion-doc@1" && doc.url === "http://fake-live/" && doc.viewport.width === 1440 && doc.viewport.height === 982 && doc.viewport.dpr === 2);
+    const css = doc.tracks.find((t) => t.provenance.tier === "introspected-css");
+    const gsap = doc.tracks.find((t) => t.provenance.tier === "introspected-gsap");
+    const fitted = doc.tracks.find((t) => t.provenance.tier === "fitted");
+    check("introspection record → css track (property, keyframes, infinite iterations)", !!css && css.property === "transform" && css.keyframes.length === 2 && css.timing.iterations === "infinite" && css.timing.duration_ms === 1200);
+    check("gsap record → gsap track (ms timing, exact-ease conversion)", !!gsap && gsap.property === "opacity" && gsap.timing.duration_ms === 500 && /cubic-bezier/.test(gsap.keyframes[0].easing));
+    check("fits.json merged as a fitted track", !!fitted && fitted.fit && fitted.fit.kind === "tween" && fitted.target.selector === ".card");
+    const lot = doc.assets.find((a) => a.kind === "lottie");
+    const riv = doc.assets.find((a) => a.kind === "riv");
+    const dot = doc.assets.find((a) => a.kind === "dotlottie");
+    const lotSha = crypto.createHash("sha256").update(Buffer.from(lottieBody, "utf8")).digest("hex");
+    check("lottie body sniffed + recorded (sha, bytes, source url, derived file)", !!lot && lot.sha256 === lotSha && lot.bytes === Buffer.byteLength(lottieBody) && lot.url === "http://fake-live/anim/loader.json" && lot.file === `motion-assets/${lotSha.slice(0, 16)}.json`);
+    check("lottie body on disk under the derived name, byte-exact", fs.readFileSync(path.join(dir, "motion-assets", `${lotSha.slice(0, 16)}.json`), "utf8") === lottieBody);
+    check("riv + dotlottie sniffed by magic bytes, fixed extensions, nothing else ripped", !!riv && riv.file.endsWith(".riv") && !!dot && dot.file.endsWith(".lottie") && doc.assets.length === 3);
+    check("remote names never touch the disk", !fs.readdirSync(path.join(dir, "motion-assets")).some((f) => /loader|hero|badge|huge/.test(f)));
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
+    const m = receipt.sides[0].motion;
+    check("receipt: motion summary + oversized skip receipted by url and cap", !!m && m.tracks === 3 && m.assets === 3 && m.warnings.some((w) => /huge\.json/.test(w) && /cap/.test(w)));
+    server.close();
+  }
+
+  // ── a motion reader failure is a WARNING, never a capture failure ──────────────
+  {
+    const dir = makeTarget(work, "t7");
+    const server = await fakeChrome([{ introspect: "throw", gsap: { present: false } }]);
+    const r = await run(["t7", "--attach", `127.0.0.1:${server.address().port}`], work);
+    check("reader throwing in-page → capture still exits 0, artifacts written", r.code === 0 && fs.existsSync(path.join(dir, "live.json")), r.out.slice(0, 400));
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
+    check("reader failure printed AND receipted as a warning", /⚠ motion: pxIntrospectAnimations failed/.test(r.out) && receipt.sides[0].motion.warnings.some((w) => /pxIntrospectAnimations/.test(w) && /exploded/.test(w)));
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, "motion-doc.json"), "utf8"));
+    let docErr = null; try { validateMotionDoc(doc); } catch (e) { docErr = e.message; }
+    check("doc still written + valid with zero tracks (absent engine is not a warning)", !docErr && doc.tracks.length === 0 && !receipt.sides[0].motion.warnings.some((w) => /pxProbeGsap/.test(w)));
+    server.close();
+  }
+
+  // ── ongoing-motion auto-sample: skip is RECEIPTED when the page yields no record ──
+  {
+    const receipt = JSON.parse(fs.readFileSync(path.join(work, "targets", "t7", "capture-run.json"), "utf8"));
+    check("auto-sample skip receipted (dense recorder unavailable → note, not a warning)", receipt.sides[0].motion.sampled && /detection skipped/.test(receipt.sides[0].motion.sampled.note || "") && !receipt.sides[0].motion.warnings.some((w) => /auto-sample/.test(w)));
+  }
+
+  // ── ongoing-motion detect classifier + viewport grouping (pure) ────────────────
+  {
+    const { moversFromDetectRecord, groupMoversByViewport } = require("./capture-runner.js");
+    const mk = (txs) => txs.map((tx, i) => ({ t: i * 350, values: { transform: `matrix(1, 0, 0, 1, ${tx}, 0)`, opacity: "1" } }));
+    const rec = { elements: [
+      { selector: ".belt", samples: mk([0, 7, 14, 21]) },                       // moves every interval
+      { selector: ".reveal", samples: [{ t: 0, values: { transform: "none", opacity: "0" } }, { t: 350, values: { transform: "none", opacity: "0.9" } }, { t: 700, values: { transform: "none", opacity: "1" } }, { t: 1050, values: { transform: "none", opacity: "1" } }] }, // settles → not ongoing
+      { selector: ".spin", samples: mk([0, 7, 14, 21]) },                        // covered by a reader
+      { selector: ".static", samples: mk([5, 5, 5, 5]) },
+    ] };
+    const movers = moversFromDetectRecord(rec, new Set([".spin"]));
+    check("classifier: only the never-settling uncovered mover is detected", movers.length === 1 && movers[0].selector === ".belt" && movers[0].property === "transform", JSON.stringify(movers));
+    const g = groupMoversByViewport([{ selector: "a" }, { selector: "b" }, { selector: "c" }, { selector: "gone" }], { a: 5000, b: 5400, c: 9000 }, 982);
+    check("grouping: one viewport group per 0.8×height span, topmost is the anchor, missing tops dropped", g.groups.length === 2 && g.groups[0].anchor === "a" && g.groups[0].movers.length === 2 && g.groups[1].anchor === "c" && g.dropped === 1, JSON.stringify(g));
   }
 
   // ── --dry-run ──────────────────────────────────────────────────────────────────

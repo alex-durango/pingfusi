@@ -1,0 +1,29 @@
+{
+  "name": "pingfusi-motion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Motion capture and verification engine for pingfusi clones",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "pingfusi-motion": "bin/motion-kit.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node harness/selftest.js && node harness/fit-selftest.js && node harness/linked-selftest.js",
+    "test:linked": "node harness/linked-selftest.js",
+    "gate:linked": "node harness/linked-selftest.js",
+    "gate:phase1": "node harness/phase1-gate.js",
+    "gate:phase3": "node harness/phase3-gate.js",
+    "gate:phase4": "node harness/phase4-gate.js",
+    "gate:gl": "node harness/gl-gate.js",
+    "check:player": "node harness/player-check.js"
+  },
+  "dependencies": {
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.61.1",
+    "pngjs": "^7.0.0"
+  }
+}

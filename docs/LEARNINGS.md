@@ -867,3 +867,113 @@ contract: explicit `target.json` fields, else the viewport an existing `live.jso
 > 👁 **Still yours:** picking a nonstandard viewport on purpose (a mobile-width clone, a 1x
 > screenshot target) — set it in `target.json` (`width`/`height`/`dpr`) and the runners obey;
 > the default only exists so that not-choosing isn't silently choosing dpr 1.
+
+## 34. THE LAZY IMAGE THAT COULD NEVER LOAD — provide the state, don't wait for it
+Found terminally on mindmarket (2026-07-17). The client-logo belt shipped `loading="lazy"`
+logos whose boxes are ZERO-WIDTH until the bytes arrive (height attr only, `width:auto`) —
+and the lazy loader never fires for a box it never sees intersect. So `complete` stayed
+false forever, the image-readiness wait (#32's sibling, fixture 32) timed out identically
+on every run, and the settle refusal became a DEADLOCK: `capture-run` could never proceed
+on a page every real visitor loads fine. Same lesson as #32 on a new axis: a gate may only
+demand a state the page (or environment) can actually reach — refusing forever is not
+honesty, it is the instrument mistaking its own blind spot for the site's defect.
+
+The fix intervenes instead of waiting: still-pending `loading="lazy"` images are promoted
+to eager after the normal wait bound (the fetch fires immediately, no intersection needed),
+the network gets one more bounded window, and the attribute is put back so `dom.html` ships
+byte-identical to live (#24/#29: the instrument must not bake itself into the artifact).
+The refusal is NOT weakened — a promoted image that still never completes refuses the
+capture exactly as before, and non-lazy in-flight images are never touched. Every
+intervention is receipted (`settle.lazyPromoted` + `lazyPromotedSrcs` in the run receipt).
+
+🔒 **Locked in:** fixture `39-lazy-image-promotion.js` (deadlock breaks, refusal survives,
+attribute restored); the promotion lives in `pxScrollSettle` so both capture paths get it.
+👁 **Still yours:** a page whose lazy images are gated on user gestures (click-to-load
+galleries) — promotion fetches them too, which may capture MORE than a fresh visitor sees;
+if the diff shows content a visitor must click for, exclude it deliberately.
+
+## 35. THE BELT GLIDED FOR FOUR SECONDS AND FROZE FOREVER — a finite recording of an infinite animation is not an implementation
+Found on the ladder rails (2026-07-19), and it slipped through GREEN. The sampled tier did
+everything it promised: it recorded a forever-running belt as a 4s virtual-time clip,
+`apply-sampled` shipped the clip verbatim as the clone's implementation, and
+`verify-sampled` re-ran the identical stimulus and matched every frame — because the gate
+only ever compared INSIDE the window. The served clone then glided for exactly four
+seconds and froze, forever. Worse: the finished clip's `fill: "forwards"` kept writing the
+final frame at composite priority for the rest of the page's life, silently overriding a
+coexisting implementation that was trying to animate the same element — a dead clip
+squatting on a live element. Three category errors stacked: the record never distinguished
+"motion that ended" from "motion the window ended on"; the apply treated a WINDOW onto
+motion as the motion itself; and the verify certified a clip by checking only the frames
+the clip contains — the one place a frozen clone cannot fail.
+
+**Lesson: a finite recording of an infinite animation is not an implementation — it is a
+window, and a window has edges the pipeline must prove, not assume.** The record must SAY
+whether the motion ever settled (a series still changing in its final frames observed no
+ending — nothing licenses inventing one). An implementation for ongoing motion must have
+the same cardinality as the motion: a loop driven by the fitted LAW (velocity, direction,
+wrap distance measured from the element at runtime), never a replay of the window. And a
+finite clip that does end must END: release the element instead of squatting on it, and
+never take an element another implementation already owns. The gate closes the circle by
+looking PAST the edge it used to stop at.
+
+> 🔒 **Locked in, four ways.** (1) ONGOING DETECTION: the sampler marks `ongoing: true`
+> on any sampled track still moving in its last ~10% of frames (noise-floored), the
+> motion-doc schema carries the flag, and the fit lift's tie-break re-classifies an
+> ongoing track's full-window linear tween as marquee — ongoing beats finite when
+> `ongoing: true` (motion-doc-selftest + motion-sampler-selftest). (2) A CLIP IS NOT AN
+> IMPLEMENTATION FOR ONGOING MOTION: `apply-sampled` refuses to ship a one-shot clip for
+> an ongoing track ("ongoing motion with no periodic fit — trace longer, or declare the
+> loop form"); with a marquee fit it emits the LOOP — `iterations: Infinity` at the
+> fitted velocity, wrap distance from the element's own `scrollWidth/2` at runtime.
+> (3) RELEASE-ON-FINISH + ONE OWNER: finite clips play with `fill: "none"` and an
+> explicit `onfinish` that commits the final frame only when no other writer owns the
+> element, then cancels; and before writing anything, an owner probe watches the target
+> elements' inline style + computed transform for ~1s in the served clone and refuses by
+> selector when another implementation moves them — the kit never stacks
+> implementations. Both asserted from the EMITTED player source executed in a mock DOM,
+> not just unit logic (motion-verify-selftest). (4) THE POST-WINDOW GATE:
+> `verify-sampled` samples extra frames past the clip end on the same virtual clock —
+> live ongoing + clone static exits 1 named "unterminated motion: live continues past
+> the clip, clone froze"; a looping clone must still move at the fitted velocity; a
+> clone still animating where live settled fails too; and ongoing tracks diff in-window
+> by motion LAW (velocity/direction), since a runtime-measured loop owes the law, not
+> the phase.
+> 👁 **Still yours:** ongoing motion that is periodic but not constant-velocity — a
+> pulsing opacity, a spring idling in a loop, a spinner the marquee class refuses. The
+> kit refuses those honestly rather than fabricating a loop form; declaring the loop (or
+> tracing long enough for a better periodic fit) is a judgment about what the motion IS,
+> and that stays with you.
+
+## 36. THE PROBE WATCHED FROM THE TOP OF A PAGE WHOSE WRITERS ONLY WORK MID-SCROLL — observe at the vantage the player will run from
+Found proving §35's ONE-OWNER rule end-to-end (2026-07-19). The owner probe did exactly
+what it said: it watched the target elements' inline style + computed transform for a
+full second in the served clone, saw nothing move, and cleared the apply. But it watched
+from scroll 0 — and the competing writer was a belt that only advances while its rail is
+in the viewport, at document-top 13725px on a 963px viewport. A visibility-gated writer
+is not an exotic adversary; it is the DEFAULT shape of a performant page (the live site's
+own rail component works the same way). The gate's question was right, its vantage was
+wrong, and a wrong vantage converts "no competing writer" into "no competing writer
+visible from where I happened to stand" — a false all-clear the very next scroll refutes.
+
+**Lesson: a probe that observes conditional behavior must reproduce the condition — 
+observe at the vantage the code under question runs from, or the observation is of the
+vantage, not the code.** The probe now sorts watched elements by document position,
+partitions them into viewport groups, scrolls each group into view, gives its writers one
+settle tick to arm, and only then baselines and watches; the original scroll position is
+restored afterwards. Elements beyond the group cap are reported by name as unwatched —
+a partial watch refuses to become an all-clear — and the receipt carries the groups and
+the scrolled flag so a clean verdict names the vantage it was earned from.
+
+> 🔒 **Locked in:** `pxOwnerProbe` (tools/browser-capture.js) implements the vantage
+> rule; `apply-sampled` budgets the probe per viewport group, hard-fails on any
+> unwatched element, and receipts `groups`/`scrolled`. The fixture is a writer gated on
+> its element being in view, below the fold — the pre-fix probe reports it CLEAN (the
+> preserved pre-fix implementation demonstrably returns zero changes against the same
+> fixture), the fixed probe reports the writer by selector and restores the scroll
+> (motion-verify-selftest). Proven live the same day: the probe scrolled to the rail's
+> group, caught the clone's legacy hand-written belt mid-write at +101ms, and the apply
+> refused by selector — the refusal §35 promised.
+> 👁 **Still yours:** writers gated on conditions a scroll cannot reproduce — hover,
+> focus, media-query, time-of-day. The probe reproduces the one condition every scroll
+> trigger shares (being on screen); rarer gates need the operator to stage the condition
+> or resolve ownership by reading the clone's code.

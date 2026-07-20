@@ -17,6 +17,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
+const { triggerForSweep, mutationTemporalEvidence } = require("../tools/behavior-capture.js");
 
 const KIT = path.resolve(__dirname, "..");
 const WF = path.join(KIT, "harness", "workflow.js");
@@ -33,6 +34,14 @@ cleanup();
 fs.mkdirSync(path.join(dir, "clone", "assets"), { recursive: true });
 
 const writeJson = (f, o) => fs.writeFileSync(path.join(dir, f), JSON.stringify(o, null, 2));
+const ownedMotionKeys = new Set();
+const ownMotion = (...keys) => {
+  keys.forEach((key) => ownedMotionKeys.add(key));
+  writeJson("motion-items.json", {
+    schema: "pingfusi/motion-items@1",
+    items: [...ownedMotionKeys].map((key, i) => ({ id: `owned-${i + 1}`, kind: "animation", status: "done", sourceBehaviorKeys: [key] })),
+  });
+};
 
 // discovery metadata that COUNTS as "discovery actually ran" — mirrors the shape
 // tools/behavior-capture.js's discover() emits
@@ -48,6 +57,45 @@ const discoveryMeta = (extra) => Object.assign({
 }, extra || {});
 
 console.log("behavior-selftest — the `behavior` phase gate");
+ok(triggerForSweep({ candidate: "strong", trigger: "load", kind: "css-animation" }) === "load" &&
+  triggerForSweep({ candidate: "weak", trigger: "load" }) === "scroll-sweep",
+  "scroll sampling preserves an already-strong load trigger and only infers scroll for weak evidence");
+const reversibleMutation = mutationTemporalEvidence([
+  { t: 0, atY: 0, snapshot: { opacity: 1, transform: "matrix(0,0,0,0,0,0)", filter: "none" } },
+  { t: 50, atY: 400, snapshot: { opacity: 1, transform: "matrix(2,0,0,2,0,0)", filter: "none" } },
+  { t: 100, atY: 800, snapshot: { opacity: 1, transform: "matrix(0,0,0,0,0,0)", filter: "none" } },
+]);
+ok(reversibleMutation && reversibleMutation.trigger === "scroll-sweep" && reversibleMutation.returnedToStart,
+  "repeated non-candidate style mutations are measured as scroll-linked observation evidence even when they return to start");
+ok(mutationTemporalEvidence([{ t: 0, atY: 0, snapshot: { opacity: 0 } }, { t: 10, atY: 0, snapshot: { opacity: 1 } }]) === null,
+  "one-off non-candidate mutation remains interaction evidence, not automatic motion");
+
+// ── QUARANTINE grading of sweep observations (rows shaped like discover()'s output) ──
+// The sweep used to stamp candidate:"strong" on ANY style change at any scroll stop,
+// auto-promoting ordinary reveals into the motion queue. Grading now follows
+// temporalEvidence's own bar: only an engine timing signal promotes.
+{
+  const { classifyMotionRow } = require("./motion-items.js");
+  const sweptWeak = classifyMotionRow("reveal:div.fade-in", {
+    trigger: "scroll-sweep", kind: "class-toggle-or-style-mutation", selector: "div.fade-in",
+    hints: ["transition-from-start-state"],
+    temporal: { candidate: "weak", mechanism: "css-transition", durationMs: 300, trigger: "scroll-sweep", reason: "computed style changed during the measured scroll sweep" },
+    measured: { before: { opacity: 0 }, after: { opacity: 1 }, changedDuringSweep: true, returnedToStart: false, maxChangedProperties: 1, sampleCount: 7 },
+  }, "behaviors");
+  ok(sweptWeak === null, "an ordinary sweep reveal (dormant transition that fired) stays OUT of the motion queue — observation recorded without promotion");
+  const sweptStrong = classifyMotionRow("reveal:div.hero", {
+    trigger: "load", kind: "class-toggle-or-style-mutation", selector: "div.hero",
+    hints: ["animation-name:hero-in"],
+    temporal: { candidate: "strong", kind: "css-animation", trigger: "load", animationName: "hero-in", durationMs: 900, reason: "named CSS animation hero-in with 900ms duration" },
+    measured: { before: { opacity: 0 }, after: { opacity: 1 }, changedDuringSweep: true, returnedToStart: false, maxChangedProperties: 1, sampleCount: 7 },
+  }, "behaviors");
+  ok(!!sweptStrong && sweptStrong.kind === "css-animation", "a sweep reveal backed by an engine timing declaration keeps its strong candidate");
+  const demotedMutation = classifyMotionRow("mutation:div.lazy", {
+    trigger: "mutation", kind: "observed-mutation", selector: "div.lazy",
+    measured: { before: { opacity: 0 }, after: { opacity: 1 }, during: { opacity: 0.5 }, sampleCount: 4, returnedToStart: false },
+  }, "behaviors");
+  ok(demotedMutation === null, "repeated content-mount mutations without an engine signal record as observed-mutation, never a motion candidate");
+}
 run(["init", NAME]); // seed workflow.json (harmless if it errors on a fresh dir — ignored)
 
 // ── missing live inventory blocks ────────────────────────────────────────────
@@ -68,11 +116,40 @@ const noneFound = run(["gate", NAME, "behavior"]);
 ok(noneFound.code === 0, "passes when discovery metadata is present and genuinely found zero behaviors");
 ok(/elements scanned/.test(noneFound.out) && /scroll swept 0.4000px/.test(noneFound.out.replace(/→/, ".")), "pass reason cites discovery metadata (elements scanned, scroll sweep) as evidence discovery ran");
 
+writeJson("target.json", { name: NAME, url: "https://example.com/", adopted: false });
+writeJson("motion-items.json", {
+  schema: "pingfusi/motion-items@1",
+  items: [{
+    id: "linked-circle", kind: "scroll-linked", status: "done", bundleKind: "linked",
+    candidateUrl: "https://pingfusi.test/d/v1", candidateSha256: "v1", candidateReceiptSource: "draft",
+  }],
+});
+writeJson("draft.json", { url: "https://pingfusi.test/d/v1", verifiedSha256: "v1" });
+ok(run(["gate", NAME, "behavior"]).code === 0, "a terminal linked receipt is valid while its verified candidate receipt matches");
+writeJson("draft.json", { url: "https://pingfusi.test/d/v2", verifiedSha256: "v2" });
+const driftedTerminal = run(["gate", NAME, "behavior"]);
+ok(driftedTerminal.code === 0, "a newer candidate cannot block the gate — motion receipts are informational under the first-draft doctrine");
+fs.rmSync(path.join(dir, "motion-items.json"));
+fs.rmSync(path.join(dir, "draft.json"));
+
 // ── a live behavior with no clone inventory at all blocks ───────────────────
 writeJson("behaviors-live.json", {
   url: "https://example.com/", discovery: discoveryMeta(),
   behaviors: { "marquee:logo_belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 35.4 } } },
 });
+// QUARANTINE: an unowned strong candidate is ADVISORY — the gate's failure here is the
+// ordinary missing-clone one, never a motion-ownership refusal.
+const unownedMarquee = run(["gate", NAME, "behavior"]);
+ok(unownedMarquee.code === 1 && /behaviors-clone\.json missing/.test(unownedMarquee.out) && !/motion owner/.test(unownedMarquee.out),
+  "an unowned strong temporal candidate no longer blocks on ownership — the failure is the ordinary missing-clone one");
+writeJson("behavior-deviations.json", { "marquee:logo_belt": { reason: "skip the moving belt" } });
+writeJson("behaviors-clone.json", { url: "http://localhost:8080/", discovery: discoveryMeta(), behaviors: {} });
+const excusedMarquee = run(["gate", NAME, "behavior"]);
+ok(excusedMarquee.code === 0 && /documented deviation/.test(excusedMarquee.out) && /without a motion receipt/.test(excusedMarquee.out) && !/motion declare/.test(excusedMarquee.out),
+  "an ordinary deviation disposes the row; the receipt-less candidate surfaces as an informational advisory, never a declare command");
+fs.rmSync(path.join(dir, "behavior-deviations.json"));
+fs.rmSync(path.join(dir, "behaviors-clone.json"));
+ownMotion("marquee:logo_belt");
 const noClone = run(["gate", NAME, "behavior"]);
 ok(noClone.code === 1 && /behaviors-clone\.json missing/.test(noClone.out) && /marquee:logo_belt/.test(noClone.out), "blocks when clone inventory is entirely absent, names the live behavior waiting on it");
 
@@ -182,10 +259,15 @@ writeJson("behaviors-clone.json", {
   behaviors: { "reveal:hero_heading": { trigger: "scroll", kind: "class-toggle-or-style-mutation", measured: { after: { opacity: 1, transform: "none", filter: "none" } } } },
 });
 const undocumented = run(["gate", NAME, "behavior"]);
-ok(undocumented.code === 1 && /generative:webgl_bg/.test(undocumented.out) && /MISSING/.test(undocumented.out), "an undocumented missing behavior still blocks even when other behaviors reproduce cleanly");
 writeJson("behavior-deviations.json", { "generative:webgl_bg": { reason: "WebGL generative canvas — irreproducible statically, per-frame noise procedurally generated" } });
+const unownedWebgl = run(["gate", NAME, "behavior"]);
+ok(undocumented.code === 1 && /generative:webgl_bg/.test(undocumented.out) && /MISSING/.test(undocumented.out) && !/motion owner/.test(undocumented.out),
+  "an unowned specialist candidate falls through to the ordinary missing-behavior path (quarantine: ownership never blocks)");
+ok(unownedWebgl.code === 0 && /documented deviation/.test(unownedWebgl.out) && /without a motion receipt/.test(unownedWebgl.out) && !/motion declare/.test(unownedWebgl.out),
+  "a reasoned deviation disposes receipt-less WebGL motion; the candidate remains an informational advisory");
+ownMotion("generative:webgl_bg");
 const withDeviation = run(["gate", NAME, "behavior"]);
-ok(withDeviation.code === 0 && /documented deviation/.test(withDeviation.out) && /generative:webgl_bg/.test(withDeviation.out), "passes once the irreproducible behavior is documented in behavior-deviations.json, and says so");
+ok(withDeviation.code === 0 && /documented deviation/.test(withDeviation.out) && /generative:webgl_bg/.test(withDeviation.out), "after specialist convergence, behavior bookkeeping may document the unsupported inventory row");
 
 // a deviation entry with an empty/missing reason doesn't count as documented (never a free pass)
 writeJson("behavior-deviations.json", { "generative:webgl_bg": { reason: "" } });
@@ -202,6 +284,7 @@ ok(hiddenLive.code === 1 && /HIDDEN/.test(hiddenLive.out), "a hidden-tab live ca
 ok(/behavior-capture/.test(hiddenLive.out), "the hidden-live refusal points at the kit-owned Chrome runner");
 writeJson("behaviors-live.json", { url: "https://example.com/", discovery: discoveryMeta({ documentHidden: false }), behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 46 } } } });
 writeJson("behaviors-clone.json", { url: "http://localhost:8080/", discovery: discoveryMeta({ documentHidden: true }), behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 46 } } } });
+ownMotion("marquee:belt");
 const hiddenClone = run(["gate", NAME, "behavior"]);
 ok(hiddenClone.code === 1 && /behaviors-clone\.json was captured while the tab was HIDDEN/.test(hiddenClone.out) && /behavior-capture/.test(hiddenClone.out), "a hidden-tab clone capture is refused with the same way out");
 

@@ -26,7 +26,7 @@ see **Benchmark vs gajae-code** below for what we borrowed and what we deliberat
 | 5 | `visual`   | `pixel-diff --visual` is green (0 pixel-determining fails, matching widths) | machine |
 | 6 | `coverage` | every painted leaf in `coverage.json` has a measured target on **both** pages | machine |
 | 7 | `strict`   | strict deltas are **0**, or every *structural* one is documented in `deviations.json` — a **paint** delta (one that also fails `--visual`) can never be documented away | machine |
-| 8 | `behavior` | every JS-driven dynamic discovered on the LIVE page (animation, rotation, reveal, marquee, counter, hover-mounted content) either reproduces on the clone within a documented tolerance, or is explicitly excused in `behavior-deviations.json` — an empty/absent discovery pass is never a free pass (see "The `behavior` phase" below) | machine |
+| 8 | `behavior` | every JS-driven dynamic discovered on the LIVE page reproduces or has an honest disposition — an empty/absent discovery pass is never a free pass. Motion bookkeeping (`motion-items.json`) rides along as informational receipt lines only: motion checks are build receipts and warnings, never gate results | machine |
 | 9 | `reviewer`    | the **latest** pingfusi side-by-side round is reviewer-approved — the verdict is re-fetched from the API on every check (a cached approval is never trusted); a rejection surfaces the reviewer's flags as the fix list | machine |
 | 10 | `done`     | **default-FAIL final verification:** every earlier gate is **re-run** against the current artifacts (a recorded pass is not trusted — it must still hold), in order, and no phase may be forced | machine |
 
@@ -51,8 +51,196 @@ node harness/workflow.js gate    <name> <phase>    # run ONE gate read-only (exi
 node harness/workflow.js advance <name> <phase> [--evidence "…"] [--force]
 node harness/workflow.js ledger  <name>            # the audit trail (receipts)
 node harness/capture-build.js    <name> [domFile]  # the default build step: clone FROM the captured DOM
-node harness/review-qa.js file    <name> --draft <public-url> [--region "the header"]   # file the review round
+node harness/review-qa.js file    <name> --draft <public-url> [--region "the header"] [--results 1..20]   # file the review round (default 5)
 ```
+
+Review depth is explicit: a quick check targets 1 result, a standard round defaults to 5,
+and complex or high-confidence work can target 15–20. Each completed result costs 1 credit;
+filing and undelivered results are free.
+
+## Capability dispatch: one command, specialist utilities
+
+Run `pingfusi next <name>` whenever the next step is unclear, or
+`pingfusi next <name> --json` when another agent is consuming the result. The dispatcher
+uses workflow state and measured artifacts; it does not choose a utility from a vague
+prompt alone.
+
+| evidence category | utility | review contract |
+|---|---|---|
+| layout, typography, spacing, paint | `pingfusi diff …` / `pingfusi assist <name> --compare` | aligned side-by-side layout evidence |
+| interaction state, mount, hover/click content | `pingfusi behavior-capture <name>` | state/trigger evidence |
+| timing, easing, spring, stagger, scroll/pointer-driven, canvas/WebGL motion | the build motion pass + `pingfusi motion pass|sample|apply-sampled|verify-sampled|verify-introspected|capture|trace|gate|export|loop …` | none — machine receipts and warnings; the side-by-side compare round is the one reviewer channel for anything visual, motion included |
+| browser/auth/capture environment | `pingfusi doctor` or the gate's named remedy | no review spend |
+
+The categories are intentionally separate. The layout compare/align utility can diagnose
+where a box or glyph sits, but it cannot judge a temporal curve. Conversely, the motion
+engine isolates motion shape and should not replace the pixel gate for static geometry.
+An unknown category fails closed and asks for more evidence instead of filing the wrong
+review task.
+
+Motion is **default-on in the draft build** (the first-draft doctrine, owner decision
+2026-07-19): the product is the best machine-made FIRST DRAFT of any site, animations
+included. There is no declare ceremony, no typed motion review round, and no motion
+gate. `capture-run` records what the live page's animations ARE into
+`targets/<name>/motion-doc.json` (`pingfusi/motion-doc@1` — additive, never blocking a
+capture): the introspection readers and the GSAP probe fold in every DECLARED animation,
+and then a dense-recorder sweep probes every scroll depth for elements still moving on
+their own that no reader explained (a hand-rolled rAF belt declares nothing, and
+viewport-gated motion is invisible at y=0 — LEARNINGS #32); any such ongoing mover is
+sampled automatically under the stepped clock (the sampler's own `captureOnce`, one
+scroll-to-anchored run per viewport group, receipted in
+`targets/<name>/motion/auto-sample.json`). `capture-build` then runs the **motion pass**
+(`harness/motion-pass.js`)
+automatically after writing the clone. Everything the pass does or refuses is a receipt
+plus, at worst, a warning — **the build NEVER fails because of motion**.
+`--no-motion` skips the pass; `pingfusi motion pass <name>` re-runs it standalone
+(hand-built clones, re-captures).
+
+What the pass does per provenance tier (recorded on every doc track):
+
+- **`introspected-css` / `introspected-transition` → css-inherited.** A capture-built
+  clone self-hosts the very stylesheets that declare these animations, so the
+  reproduction shipped BY CONSTRUCTION. The pass verifies statically that the clone's
+  CSS still carries the declaration (`@keyframes` name / transition property — a failed
+  stylesheet download silently de-animates a clone while every pixel gate stays green)
+  and receipts pass/warn. The deep engine-level check stays an operator utility:
+  `pingfusi motion verify-introspected <name> <item>` reads the CLONE side's own engine
+  declarations over CDP (into `motion-doc-clone.json`) and diffs keyframes/timing/
+  timeline exactly (±1ms duration/delay, ±0.01 numeric).
+- **`introspected-gsap` / `introspected-waapi` → player-applied.** The clone has no GSAP
+  runtime and no page scripts (capture-build strips them), so the page's own engine
+  declarations are replayed as a small self-contained WAAPI player
+  (`clone/motion-replay.js`, schema `pingfusi/motion-replay@2`, wired into
+  `clone/index.html` through an idempotent marker block) with EXACT parameters —
+  keyframes, duration, delay, iterations (incl. infinite), direction, easing verbatim
+  from the doc. GSAP property channels (x/y/rotation/scale/…) are mapped to their CSS
+  transform forms and one tween's channels merge into ONE transform clip; a channel with
+  no CSS form is skipped by name.
+- **`sampled` → player-applied from the recorded evidence.** Finite (settling) tracks
+  replay as release-on-finish clips (fill `"none"` + an `onfinish` that commits the
+  final frame only when no other writer owns the element — never a permanent
+  `fill:"forwards"` squat). Ongoing tracks (no settle observed — the sampler's
+  `ongoing: true`) loop by their fitted marquee LAW: WAAPI `iterations: Infinity` at the
+  fit's velocity/direction, wrap distance measured from the element at RUNTIME — a clip
+  that stops is a fabricated ending, so an ongoing track with no periodic fit is skipped
+  WITH a warning instead. Sampled tracks normally arrive from capture-run's automatic
+  ongoing-motion stage; if a capture still didn't sample (detect found nothing, or the
+  sweep was refused), that is a receipted skip — the pass never launches a live-side
+  sampler from the build; acquire the record with `pingfusi motion sample` when the
+  draft needs it.
+- **`fitted` → receipt only** (model reconstructions stay engine-bundle machinery:
+  `pingfusi motion loop/export/serve`).
+- **Assets (Lottie/dotLottie/RIVE)** ripped by capture-run into
+  `targets/<name>/motion-assets/` are receipted; auto-embedding is a future item.
+
+**One owner still guards the players.** Before writing, the owner probe
+(harness/motion-apply.js) watches the target elements' inline style + computed transform
+in the served clone; a selector another implementation writes is skipped with a warning
+naming it, and two applied tracks never stack on one (selector, property) — for
+css-inherited properties the captured CSS is itself the writer and wins. A probe that
+cannot run here is receipted as unavailable (the players still apply — a silently
+motionless draft would be the dishonest outcome).
+
+**Receipts, all the way down:** `targets/<name>/motion-pass.json` (the pass receipt), a
+`motion-pass` event line in `workflow.jsonl`, and per-element bookkeeping in
+`targets/<name>/motion-items.json` (`pingfusi/motion-items@2` — auto-written, gates
+NOTHING):
+
+```json
+{
+  "schema": "pingfusi/motion-items@2",
+  "items": [
+    {
+      "id": "pass-css-6564ab92",
+      "selector": ".hero",
+      "scope": ".hero",
+      "tier": "introspected-css",
+      "action": "css-inherited",
+      "verify": "pass",
+      "receipt": "1 track(s) carried by the captured CSS; @keyframes fadeIn present …",
+      "source": "motion-pass",
+      "status": "pass"
+    }
+  ]
+}
+```
+
+`action` is what the pass did (`css-inherited` | `player-applied` | `skipped`), `verify`
+is its machine check result (`pass` | `warn` | `skipped`), and `status` mirrors verify —
+`pass` and a receipted `skipped` are terminal bookkeeping; anything else stays `pending`
+so `pingfusi next` can route the deep machine check (verify-introspected for engine
+declarations, sample → apply-sampled → verify-sampled for the sampled tier) from the
+item's `scope`. These routes are machine utilities that exit 0 or 1 — no review round
+exists anywhere in the motion path.
+
+**The reviewer channel for motion is the compare round — the same one as for
+everything visual.** The reviewer sees the draft side by side with the original
+(`pingfusi review <name> file`, or a scoped `pingfusi assist <name> --compare`
+diagnostic) and flags motion that is missing, different, or mistimed like any other
+observation; the fix loop is the pass's machine utilities, then a refile. There are no
+typed motion rounds, no spec/draft motion surfaces, and no 2AFC anywhere in the
+default path.
+
+The integrated temporal engine lives under `packages/motion/` and is invoked only
+through the root command (operator utilities — machine receipts, never gates):
+
+```sh
+pingfusi motion pass <name> [--no-probe]        # re-run the build motion pass standalone
+pingfusi motion verify-introspected <name> <item>
+pingfusi motion sample <name> <item> [--fps 60] [--frames 240]
+pingfusi motion apply-sampled <name> <item>
+pingfusi motion verify-sampled <name> <item>
+pingfusi motion capture <url> --trigger 'hover:.card' --out targets/<name>/motion/card-capture
+pingfusi motion trace <url> --trigger 'scroll-through:#stage/80/16' --out targets/<name>/motion/circle-trace
+pingfusi motion loop targets/<name>/motion/open-trace --out targets/<name>/motion/open-round
+pingfusi motion export targets/<name>/motion/circle-trace --out targets/<name>/motion/library
+```
+
+### The capture ladder: provenance decides the machine check
+
+Motion acquisition is a ladder of provenance tiers, recorded per track in
+`targets/<name>/motion-doc.json` — written by `capture-run` alongside the behavior
+artifacts. Each track records what moves (`target.selector` + `property`), how it moves
+(keyframes/timing/timeline), and how it was ACQUIRED (`provenance.tier`):
+`introspected-css` / `introspected-transition` / `introspected-waapi` are read verbatim
+from `document.getAnimations()`, `introspected-gsap` from the GSAP timeline API,
+`sampled` from virtual-time samples, and `fitted` from engine-fit models.
+
+The tier decides the deep machine check — an introspected track is never re-fit, and a
+fitted track is never certified by equality:
+
+- **`introspected-*` → exact diff.** `pingfusi motion verify-introspected` reads the
+  clone side's own engine declarations the same way and diffs live vs clone track:
+  keyframes (offset/value/easing normalized), timing, and timeline type — duration/delay
+  ±1ms, numeric values ±0.01. A match exits 0 and receipts `verified-introspected`; a
+  mismatch exits 1 naming the first differing keyframe. GSAP tweens are recorded
+  verbatim in GSAP semantics; an ease with no exact CSS form keeps its GSAP name — an
+  approximate curve under an exact-sounding name would be a dishonest receipt.
+- **`sampled` → deterministic replay + per-frame diff.** When a page declares nothing an
+  introspection reader can see but pixels still move (a hand-rolled rAF loop writing
+  inline styles), `pingfusi motion sample` steps a kit-owned clock over CDP
+  (`Emulation.setVirtualTimePolicy`, hooked-clock fallback — the mode is receipted) and
+  merges the record as sampled-tier tracks (keyframes at uniform offsets 0..1,
+  `timing.duration_ms` = frames × step, fps in `provenance.source`
+  `"virtual-time@<fps>fps"`). Frame-rate honesty: a site animating px-per-rAF-frame is
+  recorded exactly as it behaves at the declared fps, and the time-based replay
+  NORMALIZES that dependence — receipted in the doc and the player header, never hidden.
+  **Ongoing motion is detected, not assumed away**: a series still changing in its final
+  frames observed NO settle, the track is marked `ongoing: true`, and ongoing beats
+  finite in the fit tie-break (a full-window linear tween fits a forever-belt exactly as
+  well as a marquee on a short window — `ongoing` settles what the fitters only
+  estimate). `pingfusi motion verify-sampled` re-runs the IDENTICAL virtual-time
+  stimulus against the served clone and diffs every live track within the documented
+  tolerance (translate ±1px per frame, opacity ±0.02), finite tracks frame-by-frame,
+  ongoing tracks by their MOTION LAW, plus the POST-WINDOW check at the clip's edge
+  (live ongoing + clone frozen fails by name: "unterminated motion").
+- **`fitted` → the engine's own replay/convergence machinery** (`motion gate`,
+  `motion loop`, `motion export`) — model reconstructions of a trajectory, receipted,
+  never auto-applied by the pass and never a gate.
+
+Nothing on this ladder can block a clone: a missing or unreadable `motion-doc.json` is a
+receipted no-op for the pass, and every check above is receipts + warnings routed by
+`pingfusi next`.
 
 ### The `behavior` phase (tools/behavior-capture.js + the gate in harness/workflow.js)
 Statics are proven by `visual`/`coverage`/`strict` before this phase runs; `behavior` proves
@@ -66,7 +254,8 @@ see `docs/PLAYBOOK.md`'s behavior section for the full technique writeup. In sho
    `browser-capture.js`, RUNBOOK.md "Golden rules"): a static pass greps `@keyframes` +
    class/data-attribute markers for CANDIDATES, then a dynamic differential pass (a
    `MutationObserver` + per-element opacity/transform/filter snapshots across a scripted
-   scroll sweep and hover probes) confirms which candidates actually fire and MEASURES them
+   scroll sweep and hover probes) confirms which candidates actually fire and MEASURES them;
+   repeated mutations are sampled even without a static marker, including reversible motion
    (marquee px/sec, reveal end-states, hover-mount deltas). Save the result as
    `targets/<name>/behaviors-live.json`.
 2. **Reproduce** in one vanilla `clone/fixes.js` (no framework — `harness/capture-build.js
@@ -78,12 +267,11 @@ see `docs/PLAYBOOK.md`'s behavior section for the full technique writeup. In sho
    `targets/<name>/behaviors-clone.json`.
 4. The gate (`harness/workflow.js`, phase `behavior`) compares every live behavior against
    the clone's inventory by KEY (see "Behavior keys" below) and MEASURED value, within the
-   tolerances below. A behavior that's genuinely irreproducible statically (e.g. a WebGL
-   generative background) is documented in `targets/<name>/behavior-deviations.json` —
-   `{ "<key>": { "reason": "WebGL generative — irreproducible statically" } }` — the same
-   escape hatch `strict`'s `deviations.json` uses, with the same rule: a behavior that ALSO
-   changes what `--visual` would see (a frozen, still-mid-transition end state) is a paint
-   delta in spirit and should be fixed, not excused.
+   tolerances below. `behavior-deviations.json` is the honest disposition for unsupported
+   interaction/state inventory. Motion bookkeeping rides along as INFORMATIONAL receipt
+   lines on the gate's pass reason (first-draft doctrine): temporal candidates and motion
+   items without a green machine receipt surface as warnings plus a `pingfusi next`
+   route — never gate failures.
 
 **A hidden tab is not a measurement environment — and the kit can bring its own.** The gate
 refuses any snapshot whose `discovery.documentHidden` is `true` (throttled timers + a frozen
@@ -93,6 +281,7 @@ permanently, which would otherwise deadlock behavior → review → done — run
 `pingfusi behavior-capture <name>`: it executes the SAME `tools/behavior-capture.js` in a
 kit-owned Chrome (launched with throttling disabled, or attached via `--attach`), refuses its
 own environment unless a measured probe shows rAF and a known-rate CSS animation advancing,
+installs a pre-navigation recorder so short startup rAF motion is not lost during settle,
 and writes both `behaviors-*.json` files directly with a `discovery.runner` attestation that
 the gate cites in its pass reason (cited when present, never required — a genuinely
 foregrounded interactive tab remains a valid instrument).
@@ -139,6 +328,12 @@ key match between live and clone.
   floats from two independent captures can never agree, so comparing them would be fiction
   dressed as measurement. The contract is: the clone rotates too (key present, same trigger);
   its per-frame states are for the review round to judge.
+- **motion replay check (verbatim CSS/WAAPI captures — the `pingfusi motion gate` operator utility; a receipt, never a workflow gate):
+  overall diff ratio ≤ 0.02 (`maxRatio`), worst aligned-frame window ≤ 0.35
+  (`maxWindowRatio`), per-pixel threshold 0.1 (`pixelThreshold`).** Both sides are frozen
+  at the same animation fractions and diffed as stills inside the element's padded box,
+  so any delta is replay infidelity, not page noise (thresholds pinned in
+  `packages/motion/src/replay/gate.js`).
 
 ### The `reviewer` phase (harness/review-qa.js)
 One provider, one contract: every round goes to an INDEPENDENT reviewer on the pingfusi
@@ -153,12 +348,13 @@ The gates prove what the tool measures; a reviewer proves the measured set is wh
 actually *sees* (LEARNINGS "the gate vs your eyes"). The verdict is machine-checkable, so
 this is a **machine** gate: `review-qa.js verify` re-fetches the latest round's verdict from
 the pingfusi API (same authenticated JSON-RPC transport as `pingfusi wait`; the
-designer's existing cpyany login is reused) and exits 0 only on approval. The generated
-test is **scope-pinned** — the reviewer judges only the cloned region, per-leaf compare
-steps come from `coverage.json`, and JS behavior is marked *informational* in the reviewer
-template (the `behavior` phase gate is what PROVES dynamics now; the informational step is a
-reviewer backstop for taste/feel and anything intentionally excused in `behavior-deviations.json`,
-not a substitute for the gate) — encoding the lessons stripe's 8 unconverged rounds paid for.
+reviewer's existing review login is reused) and exits 0 only on approval. The generated
+test is **scope-pinned** — the reviewer judges only the cloned region and per-leaf compare
+steps come from `coverage.json`. Motion is not reviewed by a structured probe anymore
+(first-draft doctrine): animation reproduction is default-on in the draft build and the
+machine motion checks are build receipts, so the reviewer simply notes motion that looks
+missing, different, or mistimed like any other observation — the fix loop is the motion
+pass's machine utilities (`pingfusi next` routes them), then a refile.
 A rejection prints the reviewer's notes as the fix list (PLAYBOOK Phase 6), and after fixing you
 **refile**; verify always judges the latest round, so a stale approval can't carry a
 regressed clone. Rounds and verdicts live in `targets/<name>/review-qa.json` — the receipt
@@ -184,14 +380,14 @@ Or via the shim: `./bin/pingfusi status <name>` (symlink `bin/pingfusi` onto you
   accepts blocked phases and the round spec documents the gap automatically (a KNOWN GAP
   step). It is refused when the gate actually passes, is mutually exclusive with `--force`,
   and — like forced — the `done` gate refuses blocked phases until each is re-advanced with
-  a passing gate.
+  a passing gate. Motion never holds a round up: its receipts are informational.
 - **Refusals are receipted too.** A rejected advance (out of order, missing evidence, failing
   gate) appends a `gate:"refused"` line to the ledger, so probing the gates leaves a trace.
 - **Three failed advances on one phase print STALLED.** The streak is derived from the
   ledger's gate-failure refusals (nothing new is stored) and surfaces in `status`, failing
   `gate` probes, and the refusal itself, with the runnable escalation: `pingfusi assist
-  <name>` — a ~$0.05 reviewer question auto-composed from the failing gate's own artifacts
-  (`--compare` files a scoped diagnostic round instead). Advisory: nothing blocks. The
+  <name>` — a 1-result reviewer question auto-composed from the failing gate's own artifacts
+  (`--compare` files a 5-result scoped diagnostic round by default). Advisory: nothing blocks. The
   streak resets when an assist is FILED (the ledger `assist` receipt), not when it is
   answered — one ask buys more iterations while the answer arrives.
 
@@ -231,9 +427,16 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   dynamics on each page (from `tools/behavior-capture.js`'s `pxBehaviorDiscover()`), each
   including the discovery pass's own metadata (scroll sweep range, observer duration,
   elements scanned) as evidence the pass actually ran.
-- `behavior-deviations.json` — **you create this** to document behaviors that are
-  genuinely irreproducible statically, e.g.
-  `{ "mutation:div.hero-canvas": { "reason": "WebGL generative — irreproducible statically" } }`.
+- `behavior-deviations.json` — **you create this** for unsupported non-temporal
+  interaction/state rows. It cannot dispose strong temporal evidence.
+- `motion-doc.json` — the canonical motion record (`pingfusi/motion-doc@1`), written by
+  `capture-run` on the live side: one track per animated property with provenance tier,
+  plus ripped animation assets. Input to the build motion pass.
+- `motion-pass.json` — the motion pass's receipt (what was css-inherited, player-applied,
+  or skipped, the owner-probe verdict, every warning). Informational, never a gate.
+- `motion-items.json` — machine BOOKKEEPING (`pingfusi/motion-items@2`), auto-written by
+  the motion pass: one item per (selector, tier) with `action`/`verify`/`receipt`.
+  Statuses gate nothing; `pingfusi next` routes the deep machine checks from them.
 - `review-qa.json` — the review rounds (ping_id, approve verdicts, latest fetched
   result per round), written by `harness/review-qa.js`. Also holds `polls` (micro-polls,
   including assist asks with their `assist:{phase,…}` metadata) and `diagnostics`
@@ -254,7 +457,8 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   `live.json`/`clone.json` for fast fix-loop iteration, stamping `merged:{at,keys}`.
   The `done` gate refuses stamped snapshots — a fix can displace elements outside the
   re-captured subset, so one final full capture is always required.
-- **Micro-polls**: `review-qa.js poll` puts a ~$0.05 single question in front of a reviewer
+- **Micro-polls**: `review-qa.js poll` puts one question in front of a reviewer and targets
+  1 completed result (up to 1 credit)
   mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `reviewer`
   gate never reads polls; it requires an approving verdict on a full round.
 - **Assists**: `pingfusi assist <name>` is the stall escalation — it auto-composes the

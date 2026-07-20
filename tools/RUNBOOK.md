@@ -54,7 +54,7 @@ authored line-heights, and drawing primitives by construction).
    measurement — never fetch+eval), then let the page **settle mechanically** — do not
    hand-scroll and hope:
    ```js
-   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0, stable, sweeps, heights, imagesPending, pendingImageSrcs}
+   await pxScrollSettle()   // → {scrolledTo, frozenOpacity0, stable, sweeps, heights, imagesPending, lazyPromoted, lazyPromotedSrcs, pendingImageSrcs}
    ```
    It walks the full page **scrolling instantly** (a plain `scrollTo(0, y)` obeys the page's own
    `scroll-behavior: smooth` and becomes an rAF animation that never lands in a background tab —
@@ -72,6 +72,13 @@ authored line-heights, and drawing primitives by construction).
      shifted two app-store badges 90px). Locked by `harness/fixtures/32-settle-image-readiness.js`.
      A genuine 404 is `complete:true` and does **not** block: its zero box is the site's real
      rendering, and the clone must reproduce it.
+   - `lazyPromoted > 0` ⇒ the settle **intervened**: that many `loading="lazy"` images were still
+     in flight after the wait bound and were promoted to eager so they could load at all (a
+     zero-width lazy image never intersects, so its loader never fires — mindmarket's logo belt
+     deadlocked every capture this way; LEARNINGS #34). `lazyPromotedSrcs` names them. The
+     `loading` attribute is restored after the bytes land, so dom.html ships byte-identical —
+     but if a promoted src is content a visitor must *click* to reveal, exclude it deliberately.
+     Locked by `harness/fixtures/39-lazy-image-promotion.js`.
    - `frozenOpacity0 > 0` ⇒ some scroll-reveals still haven't fired — inspect them first.
 
    *Reaching the bottom is not the same as being settled* — a section that hydrates a beat after
@@ -134,7 +141,8 @@ stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(o
 > ```
 > It injects THIS SAME `behavior-capture.js` into a Chrome it launches with throttling
 > disabled (or attaches to with `--attach <port>`), PROVES the compositor is advancing
-> with a measured probe before any capture, and returns snapshots by value over CDP — no
+> with a measured probe before any capture, records repeated startup style changes from
+> before navigation (so an 800ms rAF effect survives the settle delay), and returns snapshots by value over CDP — no
 > sink, no CSP dance. Name marquees/hovers once in `targets/<name>/behavior-opts.json`
 > (string selectors — the same opts go to both sides mechanically). Steps 1/3 below stay
 > the interactive path for a tab you can genuinely foreground.
@@ -153,18 +161,30 @@ stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(o
    hoverTriggers: [["nav_product", "nav a[href*=product]"]] }` — then
    `await pxBehaviorSend('http://localhost:7799/behaviors-live.json', opts)`. The pass
    greps `@keyframes` + markers for candidates, then confirms and MEASURES what actually
-   fires across a scripted scroll sweep (a candidate that never moves is noise, not a
-   behavior). Its own sweep metadata is recorded — that's the gate's evidence discovery ran.
+   fires across a scripted scroll sweep. A candidate that never fires stays in declared
+   inventory until it is measured or explicitly dispositioned; its own sweep metadata is
+   recorded — that's the gate's evidence discovery ran.
 2. **Reproduce** each inventoried behavior in one vanilla `clone/fixes.js` (each in its own
    guarded `try`), using the MEASURED values. Rebuild: `pingfusi capture-build <name> --fixes`.
 3. **On the CLONE tab:** same discovery, same opts → `behaviors-clone.json`.
-4. `node harness/workflow.js gate <name> behavior` — misses are named with exact deltas;
-   irreproducible content goes in `behavior-deviations.json` with a reason, never silent.
-5. **The worksheet — the complete "supposed to move" list.** Discovery keeps
+4. Run `pingfusi next <name>`. Motion is DEFAULT-ON in the draft build (first-draft
+   doctrine): the build motion pass already reproduced what the capture recorded in
+   `motion-doc.json` (capture-run folds in introspected/GSAP declarations AND
+   auto-samples unexplained ongoing movers found by its scroll-depth detect sweep —
+   receipt: `targets/<name>/motion/auto-sample.json`), and its bookkeeping
+   (`motion-items.json@2`) plus temporal
+   candidates surface here as informational warnings with a routed machine check
+   (`motion verify-introspected` / `motion sample` → `apply-sampled` →
+   `verify-sampled`) — never gate failures, never review rounds. Temporal evidence
+   never goes in `behavior-deviations.json`; that file is only an honest disposition
+   for unsupported non-temporal interaction/state rows.
+5. `node harness/workflow.js gate <name> behavior` — misses are named with exact deltas;
+   motion receipts ride along as informational lines and never fail the gate.
+6. **The worksheet — the complete "supposed to move" list.** Discovery keeps
    declared-but-unfired candidates (markers, keyframes, transitions-from-hidden, videos)
    as `declared` inventory instead of discarding them — critical on sites that gate their
    choreography behind no-js/bot detection, where NOTHING fires for automation but
-   everything is still supposed to. `node tools/behavior-worksheet.js <name>` prints one
+   everything is still supposed to. `pingfusi behavior-worksheet <name>` prints one
    row per behavior (observed + declared) with its disposition; every UNRESOLVED row gets
    a ready-to-send one-sided poll question so the reviewer describes what live does before
    you engineer anything. Each behavior having an identity up front is what prevents two
@@ -333,7 +353,8 @@ Two tools that keep iteration at seconds/minutes instead of full-round scale:
   Gates re-run instantly on the merged file. The merge stamps the snapshot and **the done
   gate refuses stamped snapshots** — one final FULL capture is always required (a fix can
   displace things outside your subset: astryx's bento-height fix moved the footer).
-- **Micro-polls before full rounds.** With a responsive reviewer, ask the ~$0.05 question
+- **Micro-polls before full rounds.** With a responsive reviewer, ask a 1-result question
+  (up to 1 credit)
   mid-round instead of spending a whole test round discovering the answer:
   `node harness/review-qa.js poll <name> "do the 3 template tiles look right now?"
   --choices "Yes,No"` (draft+original urls auto-appended; blocks up to ~5 min; answers
@@ -343,7 +364,7 @@ Two tools that keep iteration at seconds/minutes instead of full-round scale:
   (3 iterations with no progress on one gate), run `pingfusi assist <name>` — it picks the
   worst failing mark from the gate's own artifacts and files the one-sided question a
   reviewer can answer in one look. `--compare` files a scoped side-by-side diagnostic
-  round instead (full credit — poll first; never satisfies the review gate). One open
+  round instead (5 results by default — poll first; never satisfies the review gate). One open
   assist per target; re-check answers free with the printed poll-result/assist-result
   command between iterations.
 

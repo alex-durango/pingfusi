@@ -1,0 +1,155 @@
+<!doctype html>
+<!-- Fixture: pointer-driven displacement field ("pixel distortion") with CLOSED-FORM
+     ground truth, asserted by harness/gl-gate.js. Mirrors the analyzed live specimen
+     (formal-salmon-595048.framer.app): a static full-screen quad; a small float data
+     texture holds the displacement grid; each rAF the grid decays by RELAX and the
+     cursor injects its velocity vector within RADIUS cells (linear falloff); ALL
+     uniforms are set once at init — per-frame the ONLY GL state change is a
+     texSubImage2D upload of the Float32Array grid.
+
+     Ground truth:
+       GRID 32×32, 2 channels (RG32F: displacement xy per cell)
+       RELAX 0.90 per frame (grid *= RELAX each rAF)
+       RADIUS 3.5 cells, linear falloff f = 1 − d/RADIUS
+       GAIN 0.008 per px of cursor travel per cell (energy per L1 px = GAIN·Σf)
+       uDisplacement 0.015, uAberration 0.15 (init-only constants — passthrough truth)
+
+     Closed-form energy model (what the fitter must recover):
+       sumAbs(grid)_t = sumAbs_{t−1} · RELAX + GAIN·Σf · (|Δx|+|Δy|)_t
+     Deterministic given the pointer path; no dependencies. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { margin: 0; overflow: hidden; background: #111; }
+      canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <script>
+      const GRID = 32;
+      const RELAX = 0.90;
+      const RADIUS = 3.5;
+      const GAIN = 0.008;
+      const U_DISPLACEMENT = 0.015;
+      const U_ABERRATION = 0.15;
+
+      const canvas = document.getElementById('c');
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+      const gl = canvas.getContext('webgl2', { antialias: false });
+
+      const sh = (type, src) => {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        return s;
+      };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `#version 300 es
+        in vec2 pos;
+        out vec2 vUv;
+        void main() { vUv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }`));
+      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `#version 300 es
+        precision highp float;
+        in vec2 vUv;
+        out vec4 color;
+        uniform sampler2D uImage;
+        uniform sampler2D uGrid;
+        uniform float uDisplacement;
+        uniform float uAberration;
+        void main() {
+          vec2 d = texture(uGrid, vUv).rg * uDisplacement;
+          float r = texture(uImage, vUv - d * (1.0 + uAberration)).r;
+          float g = texture(uImage, vUv - d).g;
+          float b = texture(uImage, vUv - d * (1.0 - uAberration)).b;
+          color = vec4(r, g, b, 1.0);
+        }`));
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      const pos = gl.getAttribLocation(prog, 'pos');
+      gl.enableVertexAttribArray(pos);
+      gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
+
+      // base image: procedural pattern (dependency-free; an init-only Uint8 upload —
+      // exercises the tap's identity-without-stats path for non-float textures)
+      const IMG = 256;
+      const img = new Uint8Array(IMG * IMG * 4);
+      for (let y = 0; y < IMG; y++) {
+        for (let x = 0; x < IMG; x++) {
+          const i = (y * IMG + x) * 4;
+          const checker = ((x >> 4) + (y >> 4)) % 2;
+          img[i] = checker ? 230 : 30 + x / 2;
+          img[i + 1] = 40 + ((x * y) % 160);
+          img[i + 2] = checker ? 60 : 200 - y / 2;
+          img[i + 3] = 255;
+        }
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      const imageTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, imageTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, IMG, IMG, 0, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      // displacement grid: RG32F data texture, updated via texSubImage2D every frame
+      const grid = new Float32Array(GRID * GRID * 2);
+      gl.activeTexture(gl.TEXTURE1);
+      const gridTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, gridTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, GRID, GRID, 0, gl.RG, gl.FLOAT, grid);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      // ALL uniforms set ONCE at init, like the live specimen — the tap must surface
+      // them from its last-value map, not from per-draw state
+      gl.uniform1i(gl.getUniformLocation(prog, 'uImage'), 0);
+      gl.uniform1i(gl.getUniformLocation(prog, 'uGrid'), 1);
+      gl.uniform1f(gl.getUniformLocation(prog, 'uDisplacement'), U_DISPLACEMENT);
+      gl.uniform1f(gl.getUniformLocation(prog, 'uAberration'), U_ABERRATION);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+
+      // pointer state: latest event position; injection uses per-FRAME deltas so the
+      // energy recurrence is exact per rAF tick
+      let cur = null;
+      let prev = null;
+      addEventListener('mousemove', (e) => { cur = { x: e.clientX, y: e.clientY }; }, { passive: true });
+
+      function frame() {
+        for (let i = 0; i < grid.length; i++) grid[i] *= RELAX;
+        if (cur && prev) {
+          const dx = cur.x - prev.x;
+          const dy = cur.y - prev.y;
+          if (dx !== 0 || dy !== 0) {
+            const gx = (cur.x / innerWidth) * GRID;
+            const gy = (cur.y / innerHeight) * GRID;
+            for (let y = 0; y < GRID; y++) {
+              for (let x = 0; x < GRID; x++) {
+                const d = Math.hypot(x + 0.5 - gx, y + 0.5 - gy);
+                if (d >= RADIUS) continue;
+                const f = 1 - d / RADIUS;
+                grid[(y * GRID + x) * 2] += dx * GAIN * f;
+                grid[(y * GRID + x) * 2 + 1] += dy * GAIN * f;
+              }
+            }
+          }
+        }
+        prev = cur;
+        // per-frame: the ONLY GL state change is this upload (TEXTURE1 is still active)
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, GRID, GRID, gl.RG, gl.FLOAT, grid);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #14101a; display: grid; place-items: center; height: 100vh; gap: 16px; }
+  .box { width: 110px; height: 110px; border-radius: 14px; }
+  #j1 { background: #f56d4f; } #j2 { background: #4f9df5; }
+  button { position: fixed; top: 12px; left: 12px; }
+</style>
+</head>
+<body>
+<button id="go">go</button>
+<div class="box" id="j1"></div>
+<div class="box" id="j2"></div>
+<script>
+  // Simulates how real engines hitch: the clock starts at play() but the first WRITE
+  // lands ~60ms later, so the recorded element visibly JUMPS mid-flight. The fitter must
+  // recover {stiffness, damping} plus the nonzero initial velocity at the jump point.
+  function springPos(t, k, c, from, to) {
+    const d = to - from, z = c / (2 * Math.sqrt(k)), w = Math.sqrt(k) / 1000, E = Math.exp(-z * w * t);
+    if (Math.abs(z - 1) < 1e-4) return to - E * (d + w * d * t);
+    if (z < 1) {
+      const wd = w * Math.sqrt(1 - z * z);
+      return to - E * (((z * w * d) / wd) * Math.sin(wd * t) + d * Math.cos(wd * t));
+    }
+    const wd = w * Math.sqrt(z * z - 1), f = Math.min(wd * t, 300);
+    return to - (E * ((z * w * d) * Math.sinh(f) + wd * d * Math.cosh(f))) / wd;
+  }
+  function springAnimJumped(el, k, c, from, to, skipMs) {
+    const t0 = performance.now(); // clock starts NOW, first write comes skipMs later
+    setTimeout(() => {
+      (function step() {
+        const t = performance.now() - t0;
+        el.style.transform = `translateX(${springPos(t, k, c, from, to)}px)`;
+        if (t < 3000) requestAnimationFrame(step);
+        else el.style.transform = `translateX(${to}px)`;
+      })();
+    }, skipMs);
+  }
+  document.getElementById('go').addEventListener('click', () => {
+    springAnimJumped(document.getElementById('j1'), 200, 10, 0, 200, 60); // bouncy, jumped
+    springAnimJumped(document.getElementById('j2'), 500, 25, 0, 240, 60); // stiff, jumped
+  });
+</script>
+</body>
+</html>

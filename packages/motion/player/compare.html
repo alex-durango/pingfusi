@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>motion compare</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: #0d0d12; color: #e8e8ee;
+    font: 15px/1.45 system-ui, -apple-system, sans-serif;
+  }
+  header { padding: 14px 20px 6px; text-align: center; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header p { margin: 4px 0 0; color: #9a9aa8; font-size: 13.5px; }
+  main {
+    flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    padding: 12px 20px; align-items: center; max-width: 1200px; margin: 0 auto; width: 100%;
+  }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  figure { margin: 0; }
+  figure video {
+    width: 100%; display: block; border-radius: 10px; background: #000;
+    outline: 1px solid #26262e;
+  }
+  figcaption {
+    text-align: center; padding: 6px 0 0; font-weight: 600; letter-spacing: .04em;
+    color: #b8b8c6; font-size: 13px;
+  }
+  .controls {
+    display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap;
+    padding: 6px 20px;
+  }
+  button {
+    border: 1px solid #33333e; background: #17171e; color: #e8e8ee;
+    border-radius: 8px; padding: 7px 14px; font: inherit; font-size: 13.5px; cursor: pointer;
+  }
+  button:hover { background: #20202a; }
+  button.active { background: #2e2e69; border-color: #4a4ab8; }
+  input[type=range] { width: min(420px, 60vw); accent-color: #6a6af0; }
+  .question {
+    padding: 10px 20px 20px; text-align: center;
+  }
+  .question .opts { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+  .question button { padding: 9px 16px; }
+  #verdict { margin-top: 12px; color: #8fe38f; font-weight: 600; min-height: 1.4em; }
+  #verdict:empty { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Compare the two animations</h1>
+  <p id="subtitle">They loop continuously. Use the speed buttons if it goes by too fast.</p>
+</header>
+<main>
+  <figure><video id="vidL" muted loop playsinline preload="auto"></video><figcaption>LEFT</figcaption></figure>
+  <figure><video id="vidR" muted loop playsinline preload="auto"></video><figcaption>RIGHT</figcaption></figure>
+</main>
+<div class="controls">
+  <button id="playpause">Pause</button>
+  <button id="restart">Restart</button>
+  <span style="color:#9a9aa8;font-size:13px">speed</span>
+  <button class="speed active" data-rate="1">1×</button>
+  <button class="speed" data-rate="0.5">½×</button>
+  <button class="speed" data-rate="0.25">¼×</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="scrub timeline">
+  <span id="clock" style="color:#9a9aa8;font-size:13px;font-variant-numeric:tabular-nums;min-width:8ch"></span>
+</div>
+<div class="question">
+  <div id="prompt" style="color:#c9c9d6"></div>
+  <div class="opts" id="opts"></div>
+  <div id="verdict"></div>
+</div>
+<script>
+(() => {
+  // Config via query params — the page stays dumb about transport (the surrounding task
+  // UI owns answer submission; this page only shows the videos and echoes the choice).
+  //   a=<url>        original / reference video
+  //   b=<url>        candidate / replay video
+  //   seed=<int>     deterministic side randomization: seed%2===1 swaps sides. The task
+  //                  author knows the seed, so they can decode "LEFT/RIGHT" answers;
+  //                  the viewer can't tell which side is which.
+  //   mode=view|2afc|diagnose   (default view)
+  const q = new URLSearchParams(location.search);
+  const seed = parseInt(q.get('seed') ?? String(Math.floor(Math.random() * 1e6)), 10);
+  const swap = seed % 2 === 1;
+  const mode = q.get('mode') || 'view';
+  const urlA = q.get('a') || '';
+  const urlB = q.get('b') || '';
+
+  const vidL = document.getElementById('vidL');
+  const vidR = document.getElementById('vidR');
+  // a/b may be comma-separated format alternatives (mp4 for iOS/Safari, webm for
+  // codec-free Chromium builds) — offered as <source>s so the browser picks what it
+  // can actually decode
+  const MIME = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+  function setSources(video, urls) {
+    const list = String(urls).split(',').filter(Boolean);
+    if (list.length === 1) { video.src = list[0]; return; }
+    for (const u of list) {
+      const s = document.createElement('source');
+      s.src = u;
+      const ext = u.split('.').pop().toLowerCase();
+      if (MIME[ext]) s.type = MIME[ext];
+      video.appendChild(s);
+    }
+    video.load();
+  }
+  setSources(vidL, swap ? urlB : urlA);
+  setSources(vidR, swap ? urlA : urlB);
+
+  // --- synchronized playback: LEFT is the clock; drift-correct RIGHT every frame
+  let scrubbing = false;
+  function tick() {
+    if (!scrubbing && !vidL.paused && vidR.readyState >= 2 && vidL.duration && vidR.duration) {
+      const t = vidL.currentTime % vidR.duration;
+      if (Math.abs(vidR.currentTime - t) > 0.06) vidR.currentTime = t;
+      const scrub = document.getElementById('scrub');
+      scrub.value = String(Math.round((vidL.currentTime / vidL.duration) * 1000));
+    }
+    if (vidL.duration) {
+      document.getElementById('clock').textContent =
+        vidL.currentTime.toFixed(2) + 's / ' + vidL.duration.toFixed(2) + 's';
+    }
+    requestAnimationFrame(tick);
+  }
+  // unfinalized (live-stream) videos report seekable [0,0]; seeks silently no-op there,
+  // so scrubbing would lie — hide the scrubber until both report a real seekable range
+  // (which can arrive after canplay as buffering progresses, hence the reactive check)
+  const scrubEl = document.getElementById('scrub');
+  function updateSeekable() {
+    const ok = [vidL, vidR].every((v) => v.seekable.length && v.seekable.end(0) > 0);
+    scrubEl.style.display = ok ? '' : 'none';
+  }
+  for (const v of [vidL, vidR]) {
+    for (const e of ['loadedmetadata', 'canplay', 'canplaythrough', 'progress', 'durationchange']) {
+      v.addEventListener(e, updateSeekable);
+    }
+  }
+  Promise.all([vidL, vidR].map((v) => new Promise((res) => {
+    if (v.readyState >= 3) res();
+    else v.addEventListener('canplay', res, { once: true });
+  }))).then(() => {
+    updateSeekable();
+    vidL.currentTime = 0;
+    vidR.currentTime = 0;
+    Promise.allSettled([vidL.play(), vidR.play()]).then(() => tick());
+  });
+
+  // --- controls
+  const playpause = document.getElementById('playpause');
+  playpause.addEventListener('click', () => {
+    if (vidL.paused) { vidL.play(); vidR.play(); playpause.textContent = 'Pause'; }
+    else { vidL.pause(); vidR.pause(); playpause.textContent = 'Play'; }
+  });
+  document.getElementById('restart').addEventListener('click', () => {
+    vidL.currentTime = 0; vidR.currentTime = 0;
+    vidL.play(); vidR.play(); playpause.textContent = 'Pause';
+  });
+  for (const btn of document.querySelectorAll('.speed')) {
+    btn.addEventListener('click', () => {
+      const rate = Number(btn.dataset.rate);
+      vidL.playbackRate = rate; vidR.playbackRate = rate;
+      document.querySelectorAll('.speed').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  }
+  const scrub = document.getElementById('scrub');
+  scrub.addEventListener('input', () => {
+    scrubbing = true;
+    vidL.pause(); vidR.pause(); playpause.textContent = 'Play';
+    if (vidL.duration) {
+      const t = (Number(scrub.value) / 1000) * vidL.duration;
+      vidL.currentTime = t;
+      if (vidR.duration) vidR.currentTime = t % vidR.duration;
+    }
+  });
+  scrub.addEventListener('change', () => { scrubbing = false; });
+
+  // --- question modes (answer transport is owned by the surrounding task UI)
+  const VOCAB = [
+    'too fast', 'too slow', 'too much bounce', 'no bounce', 'stops too hard',
+    'starts too late', 'starts too early', 'wrong direction', 'wrong distance',
+    'stagger off', 'other',
+  ];
+  const promptEl = document.getElementById('prompt');
+  const optsEl = document.getElementById('opts');
+  const verdictEl = document.getElementById('verdict');
+  // The reviewer PERCEIVES, the AI authors: options only ever DESCRIBE the animation.
+  // In diagnose mode the answer is time-anchored for free — picking a tag stamps it with
+  // the moment currently on screen ({tag, at}), which localizes the fix for the agent.
+  function addOption(label) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      optsEl.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
+      let answer = label;
+      if (mode === 'diagnose') {
+        const at = +(vidL.currentTime || 0).toFixed(2);
+        answer = label + ' @ ' + at + 's';
+        document.body.dataset.answerTag = label;
+        document.body.dataset.answerAt = String(at);
+      }
+      verdictEl.textContent = 'Your answer: "' + answer + '" — submit exactly this in the task response.';
+      document.body.dataset.answer = answer;
+    });
+    optsEl.appendChild(b);
+  }
+  if (mode === '2afc') {
+    document.getElementById('title').textContent = 'Which one is the ORIGINAL animation?';
+    promptEl.textContent = 'One side is the original; the other is a re-creation. Pick the original — if you truly can’t tell, that’s a valid answer.';
+    ['LEFT', 'RIGHT', "can't tell"].forEach(addOption);
+  } else if (mode === 'diagnose') {
+    document.getElementById('title').textContent = 'What’s different about the RIGHT animation?';
+    promptEl.textContent = 'LEFT is the original. RIGHT tries to copy it. Pause or scrub to the moment where the difference is most obvious, then pick what’s wrong — your pick is stamped with that moment:';
+    VOCAB.forEach(addOption);
+  }
+})();
+</script>
+</body>
+</html>

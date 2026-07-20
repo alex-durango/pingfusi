@@ -1,10 +1,9 @@
 {
   "name": "pingfusi",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "pingfusi: clone websites pixel-perfect and polish any AI-built draft, verified with review rounds. Enforced, gated workflow — a green check is a command that exits 0, never a screenshot.",
   "keywords": [
     "pingfusi",
-    "pinghumans",
     "pixel-perfect",
     "clone",
     "css",
@@ -25,10 +24,11 @@
     "tools/",
     "skill/",
     "vendor/",
-    "docs/"
+    "docs/",
+    "packages/motion/"
   ],
   "engines": {
-    "node": ">=18"
+    "node": "^20.17.0 || ^22.13.0 || >=23.5.0"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.5.2",
@@ -38,7 +38,8 @@
     "picocolors": "^1.1.1"
   },
   "scripts": {
-    "test": "node harness/regression.js"
+    "test": "node harness/regression.js",
+    "test:motion": "npm --prefix packages/motion test"
   },
   "homepage": "https://pingfusi.com",
   "repository": {

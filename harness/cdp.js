@@ -178,6 +178,7 @@ class CdpSession {
     this.nextId = 1;
     this.pending = new Map();   // id → {resolve, reject, method}
     this.eventWaiters = [];     // {event, resolve, timer}
+    this.eventHandlers = new Map(); // event → [handler] — persistent on() subscriptions
     this.closedErr = null;
     ws.onMessage = (text) => {
       let msg; try { msg = JSON.parse(text); } catch (e) { return; }
@@ -191,6 +192,9 @@ class CdpSession {
         if (matched.length) {
           this.eventWaiters = this.eventWaiters.filter((w) => w.event !== msg.method);
           for (const w of matched) { clearTimeout(w.timer); w.resolve(msg.params || {}); }
+        }
+        for (const handler of this.eventHandlers.get(msg.method) || []) {
+          try { handler(msg.params || {}); } catch (e) {} // a listener bug must not kill the socket dispatch
         }
       }
     };
@@ -224,6 +228,18 @@ class CdpSession {
       }, timeoutMs);
       this.eventWaiters.push(w);
     });
+  }
+  // Persistent subscription (waitFor is one-shot): every future occurrence of `event`
+  // calls `handler(params)`. Returns an unsubscribe function.
+  on(event, handler) {
+    const list = this.eventHandlers.get(event) || [];
+    list.push(handler);
+    this.eventHandlers.set(event, list);
+    return () => {
+      const current = this.eventHandlers.get(event) || [];
+      const at = current.indexOf(handler);
+      if (at >= 0) current.splice(at, 1);
+    };
   }
   close() { this.ws.close(); }
 }

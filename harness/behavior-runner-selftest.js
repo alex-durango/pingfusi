@@ -16,6 +16,7 @@ const http = require("http");
 const { execFile } = require("child_process");
 const { acceptKeyFor } = require("./cdp.js");
 const { resolveChrome } = require("./chrome.js");
+const { mergeEarlyMotion } = require("./behavior-runner.js");
 
 let failed = 0;
 const check = (label, ok, detail) => {
@@ -57,6 +58,27 @@ const GOOD_SNAP = {
   behaviors: { "marquee:belt": { trigger: "load", kind: "marquee", measured: { pxPerSec: 46.0, axis: "x", from: 0, to: -46, sampledMs: 1000 } } },
   declared: {},
 };
+const EARLY_MOTION = {
+  durationMs: 1500,
+  rows: [{ selector: "#startup-circle", samples: [
+    { t: 80, style: { opacity: "1", transform: "matrix(0.1, 0, 0, 0.1, 0, 0)", filter: "none" } },
+    { t: 240, style: { opacity: "1", transform: "matrix(0.6, 0, 0, 0.6, 0, 0)", filter: "none" } },
+    { t: 800, style: { opacity: "1", transform: "matrix(1, 0, 0, 1, 0, 0)", filter: "none" } },
+  ] }],
+};
+
+{
+  const merged = mergeEarlyMotion({ discovery: {}, behaviors: {} }, EARLY_MOTION);
+  const row = merged.behaviors["startup:#startup-circle"];
+  check("pre-navigation repeated style samples become strong load-motion evidence after the effect has finished",
+    row && row.trigger === "load" && row.selector === "#startup-circle" && row.temporal.candidate === "strong" && row.measured.sampleCount === 3);
+  const oneOff = mergeEarlyMotion({ discovery: {}, behaviors: {} }, { rows: [{ selector: "#toggle", samples: [
+    { t: 10, style: { opacity: "0", transform: "none", filter: "none" } },
+    { t: 20, style: { opacity: "1", transform: "none", filter: "none" } },
+  ] }] });
+  check("a one-off startup style/state toggle stays interaction evidence, not automatic motion ownership",
+    !oneOff.behaviors["startup:#toggle"] && oneOff.discovery.earlyMotionRecorder.strongRows === 0);
+}
 
 // script = { probe, snap } per tab-open order — lets one server serve clone-then-live runs.
 function fakeChrome(script) {
@@ -98,6 +120,7 @@ function fakeChrome(script) {
           if (e.includes("__ppkProbe")) value((acts.probes && acts.probes[Math.min(probeCalls++, acts.probes.length - 1)]) || acts.probe || GOOD_PROBE);
           else if (e === "document.title") value(acts.title || "Fake Page");
           else if (e.includes("iw: innerWidth")) value(acts.viewportRead || { iw: 1440, cw: 1440, ih: 982, dpr: 2 });
+          else if (e.includes("__pingfusiEarlyMotion")) value(acts.early || null);
           else if (e === "typeof pxBehaviorCapture") value("function");
           else if (e.startsWith("pxBehaviorCapture(")) value(JSON.stringify(acts.snap || GOOD_SNAP, null, 2));
           else reply({ result: { type: "undefined" } }); // injection, pxRegion, etc.
@@ -143,7 +166,7 @@ function makeTarget(work, name, extra = {}) {
   {
     const server = await fakeChrome([
       { snap: { ...GOOD_SNAP, discovery: { ...GOOD_SNAP.discovery, elementsScanned: 1180 } } }, // clone tab
-      { title: "Fake Live Page", snap: GOOD_SNAP },                                            // live tab
+      { title: "Fake Live Page", snap: GOOD_SNAP, early: EARLY_MOTION },                       // live tab
     ]);
     const port = server.address().port;
     const r = await run(["t1", "--side", "both", "--attach", `127.0.0.1:${port}`, "--clone-url", "http://fake-clone/"], work);
@@ -152,6 +175,7 @@ function makeTarget(work, name, extra = {}) {
     const live = JSON.parse(fs.readFileSync(path.join(work, "targets", "t1", "behaviors-live.json"), "utf8"));
     const clone = JSON.parse(fs.readFileSync(path.join(work, "targets", "t1", "behaviors-clone.json"), "utf8"));
     check("both artifacts written with behaviors intact", live.behaviors["marquee:belt"].measured.pxPerSec === 46.0 && clone.discovery.elementsScanned === 1180);
+    check("runner installs the pre-navigation recorder and merges completed startup motion", live.behaviors["startup:#startup-circle"] && live.discovery.earlyMotionRecorder.strongRows === 1);
     check("attestation spliced: mode + version + probe receipts", live.discovery.runner && live.discovery.runner.mode === "cdp-attached" && live.discovery.runner.chromeVersion === "FakeChrome/1.0" && live.discovery.runner.rafProbe.hz > 60 && live.discovery.runner.animProbe.measuredPxPerSec === 99.1);
     check("documentHidden recorded as measured (false)", live.discovery.documentHidden === false);
     check("next step printed", /gate t1 behavior/.test(r.out));

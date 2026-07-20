@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #fafafa; }
+  .spacer { height: 120vh; }
+  .reveal {
+    width: 60%; margin: 0 auto; height: 240px; border-radius: 20px; background: #12b886;
+    animation: fade-up linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 50%;
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(120px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+<div class="spacer"></div>
+<div class="reveal"></div>
+<div class="spacer"></div>
+</body>
+</html>

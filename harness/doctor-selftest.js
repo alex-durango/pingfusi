@@ -4,7 +4,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { checkNode, checkKitVersion, checkReviewToken, report } = require("./doctor.js");
+const { checkNode, checkMotionEngine, probeMotionBrowser, checkKitVersion, checkReviewToken, report } = require("./doctor.js");
 const { install } = require("./agent-setup.js");
 
 let failed = 0;
@@ -13,8 +13,50 @@ const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed
 console.log("doctor-selftest — onboarding preflight + agent skill install");
 
 // ── doctor checks (pure) ──────────────────────────────────────────────────────
-ok(checkNode("22.1.0").ok && checkNode("18.0.0").ok, "node 18/22 pass the version check");
-ok(!checkNode("16.20.0").ok && checkNode("16.20.0").fix.includes("18"), "node 16 fails with an actionable fix");
+ok(checkNode("20.17.0").ok && checkNode("22.13.0").ok && checkNode("23.5.0").ok && checkNode("24.0.0").ok, "supported Node boundary versions pass");
+ok(!checkNode("20.16.9").ok && !checkNode("21.9.0").ok && !checkNode("22.12.9").ok && !checkNode("23.4.9").ok, "unsupported gaps and early releases fail the exact dependency floor");
+ok(!checkNode("18.20.0").ok && checkNode("18.20.0").fix.includes("20.17"), "node 18 fails with an actionable fix");
+const motionPkg = path.join(__dirname, "..", "packages", "motion");
+const browserReady = () => ({ ok: true, source: "selftest" });
+ok(checkMotionEngine("22.13.0", motionPkg, browserReady).ok, "integrated motion package + dependencies pass on a supported Node with a browser");
+// motion is quarantined to declared items → its doctor row is WARNING-ONLY (like the
+// version-skew row): a non-motion user's preflight must never fail on it.
+ok(checkMotionEngine("22.13.0", motionPkg, browserReady).required === false, "the motion engine row is warning-only (required:false) — doctor never fails a non-motion user on it");
+const noMotionBrowser = checkMotionEngine("22.13.0", motionPkg, () => ({ ok: false, reason: "no browser" }));
+ok(!noMotionBrowser.ok && !noMotionBrowser.required && /pingfusi motion install-browser/.test(noMotionBrowser.fix), "a missing browser runtime is a warning with a package-location-independent remedy");
+const missingMotion = checkMotionEngine("22.13.0", path.join(os.tmpdir(), "definitely-missing-pingfusi-motion"), browserReady);
+ok(!missingMotion.ok && /npm i -g pingfusi@latest/.test(missingMotion.fix) && !/--prefix packages\/motion/.test(missingMotion.fix), "missing integrated package gets an installed-package repair, never a user-cwd-relative npm prefix");
+{
+  const incomplete = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-motion-incomplete-"));
+  fs.mkdirSync(path.join(incomplete, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(incomplete, "bin", "motion-kit.js"), "");
+  let lazyProbeCalled = false;
+  const result = checkMotionEngine("22.13.0", incomplete, () => { lazyProbeCalled = true; return browserReady(); });
+  ok(!result.ok && /pingfusi motion install\b/.test(result.fix) && !/--prefix packages\/motion/.test(result.fix), "a lazy (dependency-less) install points at `pingfusi motion install`, never a user-cwd-relative npm prefix");
+  ok(!lazyProbeCalled, "the Chromium video probe never launches while the npm dependencies are missing — doctor stays a read-only filesystem check");
+  fs.rmSync(incomplete, { recursive: true, force: true });
+}
+let oldNodeProbeCalled = false;
+const oldMotionNode = checkMotionEngine("18.20.0", motionPkg, () => { oldNodeProbeCalled = true; return browserReady(); });
+ok(!oldMotionNode.ok && !oldMotionNode.required && /Node 20\.17/.test(oldMotionNode.fix) && !oldNodeProbeCalled, "Node 18 fails fast with the precise Node remedy before launching the motion probe");
+{
+  let invocation = null;
+  const ready = probeMotionBrowser(motionPkg, (command, args, opts) => {
+    invocation = { command, args, opts };
+    return { status: 0, stdout: "", stderr: "" };
+  });
+  ok(ready.ok && ready.source === "recordVideo probe", "motion browser probe only passes after its video subprocess succeeds");
+  ok(invocation.command === process.execPath
+    && invocation.args.includes("--input-type=module")
+    && invocation.args.some((arg) => /launchSession\(\{ headless: true, videoDir \}\)/.test(arg))
+    && invocation.args.some((arg) => /\.webm/.test(arg)), "motion browser probe drives the real recording session and requires a webm artifact");
+  const noFfmpeg = probeMotionBrowser(motionPkg, () => ({
+    status: 1,
+    stdout: "",
+    stderr: "browserContext.newPage: Executable doesn't exist at /playwright/ffmpeg",
+  }));
+  ok(!noFfmpeg.ok && /ffmpeg/i.test(noFfmpeg.reason), "missing Playwright FFmpeg makes the honest video probe fail");
+}
 ok(checkReviewToken(() => "tok_abc").ok, "token resolver returning a token passes");
 const noTok = checkReviewToken(() => null);
 ok(!noTok.ok && /pingfusi setup/.test(noTok.fix), "missing token fails, fix names `pingfusi setup`");
@@ -58,6 +100,12 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
   const r2 = install(home, false);
   ok(!r2.ok && /--force/.test(r2.message), "refuses to overwrite an existing install without --force");
   ok(install(home, true).ok, "--force overwrites");
+  const codex = install(home, false, "codex");
+  const cursor = install(home, false, "cursor");
+  ok(codex.ok && cursor.ok &&
+    fs.existsSync(path.join(home, ".codex", "skills", "pixel-perfect-clone", "SKILL.md")) &&
+    fs.existsSync(path.join(home, ".cursor", "skills", "pixel-perfect-clone", "SKILL.md")),
+    "installs the same routing skills into Codex and Cursor native skill directories");
   fs.rmSync(home, { recursive: true, force: true });
 }
 

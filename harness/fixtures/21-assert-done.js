@@ -80,6 +80,52 @@ const writeState = (passUpTo, { forced = [] } = {}) => {
   check("CONTROL — plain `status` still exits 0 (it is a report, not a gate)", status(tmp, "t").code === 0);
 }
 
+// ---------- 5. FIRST-DRAFT DOCTRINE: motion receipts are informational, never a done blocker ----------
+// (owner decision 2026-07-19) motion-items.json is machine BOOKKEEPING — receipts of what
+// the build's motion pass did. An open item — even a legacy @1 row still carrying a
+// review-era status — degrades to an ADVISORY line: assert-done stays green and the plain
+// report keeps the earned verified claim, with the open receipt named beside it.
+{
+  writeState("done");
+  fs.writeFileSync(path.join(dir, "motion-items.json"), JSON.stringify({
+    schema: "pingfusi/motion-items@1",
+    items: [{ id: "hero-intro", kind: "spring", status: "needs-2afc" }],
+  }));
+  const asserted = status(tmp, "t", ["--assert-done"]);
+  check("assert-done PASSES with an open motion receipt (motion never blocks done)", asserted.code === 0);
+  check("  …and the advisory names the open item as informational", /hero-intro/.test(asserted.out) && /informational/.test(asserted.out));
+  const plain = status(tmp, "t");
+  check("  …and plain status keeps the earned verified claim beside the advisory", /verified pixel-perfect/.test(plain.out) && /motion advisory/.test(plain.out));
+  fs.rmSync(path.join(dir, "motion-items.json"));
+}
+
+// ---------- 6. Sweep-derived temporal candidates are advisory lines routed to the machine chain ----------
+// A strong temporal candidate the behavior sweep found surfaces as a warning that routes
+// `next` (capture → introspected diff / sample → apply → verify). There is no declare
+// ceremony and no review-round machinery in the motion path — the side-by-side compare
+// round is the one reviewer channel, and it is not motion's to offer here.
+{
+  writeState("done");
+  fs.writeFileSync(path.join(dir, "behaviors-live.json"), JSON.stringify({
+    url: "https://x.test/",
+    discovery: { elementsScanned: 40, scrollSweep: { from: 0, to: 800, steps: 4 }, observeMs: 1200, documentHidden: false },
+    behaviors: { "marquee:ticker": { trigger: "load", kind: "marquee", measured: { pxPerSec: 80 } } },
+  }));
+  const r = status(tmp, "t", ["--assert-done"]);
+  check("assert-done PASSES with an unreceipted sweep-derived motion candidate", r.code === 0);
+  check("  …and the advisory names the candidate and routes to `next`", /marquee:ticker/.test(r.out) && /next t\b/.test(r.out));
+  check("  …and offers no removed declare ceremony", !/motion declare/.test(r.out));
+  // a sweep-manufactured bookkeeping row is advisory the same way — receipts, never gates
+  fs.writeFileSync(path.join(dir, "motion-items.json"), JSON.stringify({
+    schema: "pingfusi/motion-items@1",
+    items: [{ id: "swept-marquee", kind: "marquee", status: "pending", source: "behavior-capture", sourceBehaviorKeys: ["marquee:ticker"] }],
+  }));
+  const r2 = status(tmp, "t", ["--assert-done"]);
+  check("  …and a sweep-manufactured bookkeeping row stays advisory too", r2.code === 0 && /swept-marquee/.test(r2.out));
+  fs.rmSync(path.join(dir, "motion-items.json"));
+  fs.rmSync(path.join(dir, "behaviors-live.json"));
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(bad ? `\n✗ ${bad} check(s) failed` : "\n✓ assert-done: an unfinished or forced iteration cannot be reported as green");
 process.exit(bad ? 1 : 0);

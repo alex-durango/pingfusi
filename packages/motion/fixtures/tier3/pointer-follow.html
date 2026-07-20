@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #101418; height: 100vh; overflow: hidden; }
+  .dot { position: fixed; left: 0; top: 0; border-radius: 50%; }
+  #f1 { width: 48px; height: 48px; background: #4fc3f5; }
+  #f2 { width: 28px; height: 28px; background: #f54fb0; }
+</style>
+</head>
+<body>
+<div class="dot" id="f1"></div>
+<div class="dot" id="f2"></div>
+<script>
+  // dt-corrected lerp cursor followers — closed-form ground truth for the pursuit
+  // fitter. Per-frame k is normalized to a 60fps frame (kdt = 1 − (1−k)^(dt/16.667)),
+  // so the continuous time constant is EXACTLY τ = −16.667/ln(1−k) at any display rate:
+  //   #f1 k = 0.12 → τ = 130.4ms      #f2 k = 0.25 → τ = 57.9ms
+  // The translate offset centers each dot under the cursor (−half size) — the fitter's
+  // trivially-identifiable `offset` param.
+  const H = 1000 / 60;
+  let mouse = null;
+  addEventListener('mousemove', (e) => { mouse = { x: e.clientX, y: e.clientY }; });
+  function follower(el, k, off) {
+    let px = 0, py = 0, last = performance.now();
+    function step(now) {
+      const dt = now - last;
+      last = now;
+      if (mouse && dt > 0) {
+        const tx = mouse.x - off, ty = mouse.y - off;
+        if (Math.abs(tx - px) > 1e-3 || Math.abs(ty - py) > 1e-3) { // quiet when settled
+          const kdt = 1 - Math.pow(1 - k, dt / H);
+          px += (tx - px) * kdt;
+          py += (ty - py) * kdt;
+          el.style.transform = `translate(${px}px, ${py}px)`;
+        }
+      }
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  follower(document.getElementById('f1'), 0.12, 24);
+  follower(document.getElementById('f2'), 0.25, 14);
+</script>
+</body>
+</html>

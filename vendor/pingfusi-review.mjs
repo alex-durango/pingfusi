@@ -96,6 +96,8 @@ const RULE_BODY = `Use the pingfusi MCP to get a review round on your work whene
 
 Do not use for: anything verifiable with code, tests, or a local browser; objective questions answerable from docs or search.
 
+Clone-target precedence: when the repository contains targets/<name>/workflow.json, the CLI owns orchestration. Start with pingfusi next <name> and follow what it prints. Never call the raw review MCP tools for that target: doing so bypasses the workflow gates. Animation reproduction is part of the draft build: motion checks are machine receipts and warnings surfaced by pingfusi next, never gate failures and never review rounds. File page/layout work through pingfusi review <name> ...; the side-by-side compare round (pingfusi assist <name> --compare) is the one reviewer channel for anything visual. The generic MCP steps below apply only outside a pingfusi clone workflow.
+
 ## Steps
 
 1. Built/changed a UI? Deploy or tunnel it to a PUBLICLY reachable URL (localhost won't work — a remote reviewer opens it), make sure \`<script src="https://pingfusi.com/qa-toolbar.js"></script>\` is in the preview build's HTML, then call \`request_review_test\` with structured \`steps\` — machine-verifiable \`check\` rules plus inline \`options\` (e.g. \`["Smooth","Janky"]\`) for qualitative steps
@@ -110,6 +112,10 @@ description: This skill should be used when the user has built or changed a UI a
 ---
 
 When you've built or changed something you can't verify yourself, use pingfusi to get it tested and return structured results — a verdict, pinned component comments with CSS selectors, a per-step proof-of-work report, and screenshots you can open.
+
+## Clone Targets: the CLI Owns Orchestration
+
+If the repository contains targets/<name>/workflow.json, begin with pingfusi next <name> and follow what it prints. Never call request_review_test, ping_review, or another raw review MCP tool for that target. A raw call bypasses the clone gates. Animation reproduction is default-on in the draft build: motion checks are machine receipts and warnings surfaced by pingfusi next — never gate failures, never review rounds. Use pingfusi review <name> ... for the final page round; the side-by-side compare round (pingfusi assist <name> --compare) is the one reviewer channel for anything visual, motion included. The generic filing workflow below is only for work that is not managed by a pingfusi clone target.
 
 ## When to Use This Skill
 
@@ -133,7 +139,7 @@ No per-task id needed — the reviewer's claim link carries the task token. \`re
 
 ### Step 2: File with verifiable steps
 
-Call \`request_review_test\` with a \`url\`, structured \`steps\`, and optional \`verdict_options\` / \`require_evidence\`. You wrote the code, so you know what "done" looks like — attach a \`check\` rule to every step you can:
+Call \`request_review_test\` with a \`url\`, structured \`steps\`, and optional \`verdict_options\` / \`require_evidence\`. Set \`n_target\` to match the work: 1 for a quick/low-risk check, 5 for a standard task, or 15–20 for complex work or higher confidence. You wrote the code, so you know what "done" looks like — attach a \`check\` rule to every step you can:
 
 - \`{type:"url", pattern:"/pricing"}\` — reviewer actually navigated there
 - \`{type:"click", selector:".checkout button"}\` — reviewer actually clicked it
@@ -162,7 +168,7 @@ Each result has a verdict, notes, pinned comments, per-step truth, and a screens
 
 ## Guidelines
 
-- **Pricing**: ~$0.05 per response received; filing is free, results are charged
+- **Credits**: 1 per completed result; quick checks target 1, standard tasks 5, and complex or high-confidence tasks 15–20. Filing and undelivered results are free
 - **Quick polls**: \`ping_review\` for taste questions blocks ~50s; poll \`get_ping(ping_id)\` for late arrivals
 - **Pending isn't dead**: "a reviewer has claimed the task and is reviewing right now" means results are imminent — keep waiting
 `;

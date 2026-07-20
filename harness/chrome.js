@@ -55,7 +55,7 @@ function resolveChrome({ env = process.env, exists = fs.existsSync, platform = p
 
 // Pure flag assembly (fixtured): the three --disable-background* flags are the point of
 // launching our own Chrome — timers and compositor must run even unfocused/occluded.
-function flagsFor({ userDataDir, width = 1440, height = 1050, headless = false }) {
+function flagsFor({ userDataDir, width = 1440, height = 1050, headless = false, extraFlags = [] }) {
   const flags = [
     `--user-data-dir=${userDataDir}`,
     "--remote-debugging-port=0", // Chrome picks a free port and writes DevToolsActivePort — no port races
@@ -72,6 +72,10 @@ function flagsFor({ userDataDir, width = 1440, height = 1050, headless = false }
     "--disable-renderer-backgrounding",
   ];
   if (headless) flags.push("--headless=new");
+  // Caller-specific launch capabilities (e.g. the virtual-time sampler's
+  // --enable-begin-frame-control, which makes compositor frames explicit) — appended
+  // last so a caller can see exactly what it asked for in `ps`.
+  for (const flag of extraFlags) flags.push(flag);
   return flags;
 }
 
@@ -82,12 +86,12 @@ function parseDevToolsActivePort(content) {
   return Number.isInteger(port) && port > 0 ? port : null;
 }
 
-async function launchChrome({ chromePath, width, height, headless, profileDir = null, timeoutMs = 15000 } = {}) {
+async function launchChrome({ chromePath, width, height, headless, profileDir = null, extraFlags = [], timeoutMs = 15000 } = {}) {
   // A persistent --profile dir survives runs (bot-wall logins, cleared challenges);
   // the default temp dir is created fresh and removed on teardown.
   const userDataDir = profileDir || fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-chrome-"));
   if (profileDir) fs.mkdirSync(profileDir, { recursive: true });
-  const child = spawn(chromePath, flagsFor({ userDataDir, width, height, headless }), { stdio: "ignore" });
+  const child = spawn(chromePath, flagsFor({ userDataDir, width, height, headless, extraFlags }), { stdio: "ignore" });
   const spawnErr = new Promise((_, rej) => child.on("error", (e) => rej(new Error(`could not start ${chromePath}: ${e.message}`))));
   spawnErr.catch(() => {}); // raced below during the poll; this handler keeps a late error from becoming an unhandled rejection
 
@@ -123,7 +127,7 @@ async function launchChrome({ chromePath, width, height, headless, profileDir = 
 // tabs in a browser it didn't launch (that browser is the USER's; popping tabs into it is
 // an interruption, and its frontmost-tab-only visibility makes concurrent runs fight).
 // Returns { mode, port, chromeVersion, headless, profile, cleanup }.
-async function acquire({ attach = null, chromePath = null, headless = false, profileDir = null, width, height, env = process.env } = {}) {
+async function acquire({ attach = null, chromePath = null, headless = false, profileDir = null, width, height, extraFlags = [], env = process.env } = {}) {
   const attachTo = attach || env.PPK_CDP_URL || null;
   if (attachTo) {
     if (/^wss?:\/\//.test(String(attachTo))) throw new Error(`--attach wants the HTTP debug port (e.g. 9222 or host:9222), not a ws:// url — the runner opens its own tab via /json/new`);
@@ -133,7 +137,7 @@ async function acquire({ attach = null, chromePath = null, headless = false, pro
   }
   const bin = resolveChrome({ env, cliPath: chromePath });
   if (bin.error) throw new Error(bin.error);
-  const launched = await launchChrome({ chromePath: bin.path, width, height, headless, profileDir });
+  const launched = await launchChrome({ chromePath: bin.path, width, height, headless, profileDir, extraFlags });
   const v = await cdp.version(launched.port);
   return { mode: "cdp-launched", host: "127.0.0.1", port: launched.port, chromeVersion: v.Browser, headless: !!headless, profile: profileDir ? "persistent" : "temp", cleanup: launched.cleanup };
 }

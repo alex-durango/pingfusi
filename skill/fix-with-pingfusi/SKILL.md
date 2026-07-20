@@ -21,7 +21,7 @@ own source, repeat until an approving verdict.
 4. **Publish**: `pingfusi tunnel <name> --url http://localhost:<port>` (byte-verified public
    URL for the reviewer).
 5. **The loop**: `pingfusi review <name> file [--region "…"] [--context "one line: what
-   this site/page is"]` → tell the user the round is
+   this site/page is"] [--results 1..20]` → tell the user the round is
    filed with an independent reviewer on the pingfusi service (the reviewer pins what's
    wrong + picks a verdict — the user does not review). Immediately after filing,
    start `pingfusi wait <ping_id>` as a BACKGROUND task — a parked agent is not resumed
@@ -33,7 +33,19 @@ own source, repeat until an approving verdict.
      idioms; derive fixes from the original site's real markup/CSS, never invent),
      verify the dev server picked them up, `pingfusi tunnel <name> --check`, refile with
      `--changelog "what changed since your last review"`, re-arm the waiter. Repeat —
-     the run is not complete until an approving verdict is recorded.
+     the run is not complete until an approving verdict is recorded. Full rounds default
+     to 5 results; use 1 for a quick/low-risk check and 15–20 only for complex work or when
+     higher confidence is worth it. Each completed result costs 1 credit; undelivered
+     results are not charged.
+   - If a pin is temporal (timing, easing, spring, stagger, scroll/pointer-driven,
+     canvas, or WebGL motion), run `pingfusi next <name>` and follow its
+     `pingfusi motion …` machine route (first-draft doctrine: the draft build reproduces
+     animations automatically; motion checks are build receipts and warnings — never
+     gates, never review rounds). Fix with the routed utility — `motion pass` to re-run
+     the build pass, `verify-introspected` for the exact engine-declaration diff, or the
+     sampled chain `sample` → `apply-sampled` → `verify-sampled` — then redeploy and
+     refile the page round. Motion never blocks filing or refiling; the reviewer's
+     side-by-side look IS the motion review.
 6. **Rules**: all review contact through `pingfusi review <name> …` (never any MCP
    directly); polls one-sided only; never submit or open a review yourself; screenshots
    for triage, never as proof of a match. No login? Stop and have the user run

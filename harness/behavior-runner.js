@@ -36,6 +36,7 @@ const path = require("path");
 const cdp = require("./cdp.js");
 const chrome = require("./chrome.js");
 const { serve } = require("./serve.js");
+const { syncMotionItemsFromBehaviors } = require("./motion-items.js");
 
 // same convention as workflow.js: hints must be RUNNABLE in the invoking context
 const VIA_PPK = process.env.PPK_ENTRY === "1";
@@ -57,6 +58,98 @@ const LADDER = `the live page looks like a bot-challenge wall. The ladder, in or
      Chrome 136+ refuses debugging on the default profile)
   3. no way through: the declared inventory + node tools/behavior-worksheet.js <name> routes each
      row to the reviewer as a poll question — the review round becomes the measurement instrument.`;
+
+// Injected BEFORE navigation, so load-time JS/rAF motion that finishes during the normal
+// settle/probe window is still evidence. It watches only repeated inline style changes to
+// temporal paint properties; a one-off class/state toggle remains interaction evidence.
+// The bounded recorder is deliberately tiny and dependency-free because it runs on the
+// original site before any kit capture code exists there.
+const EARLY_MOTION_RECORDER = [
+  "(() => {",
+  "  const rows = new Map();",
+  "  const startedAt = performance.now();",
+  "  const escapeCss = (value) => { try { return CSS.escape(value); } catch (_) { return String(value).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\\\' + c); } };",
+  "  const selectorOf = (el) => {",
+  "    if (!el || el.nodeType !== 1) return null;",
+  "    if (el.id) return '#' + escapeCss(el.id);",
+  "    const parts = []; let cur = el;",
+  "    while (cur && cur.nodeType === 1 && parts.length < 5) {",
+  "      let part = cur.tagName.toLowerCase();",
+  "      const parent = cur.parentElement;",
+  "      if (parent) { const peers = Array.from(parent.children).filter((x) => x.tagName === cur.tagName); if (peers.length > 1) part += ':nth-of-type(' + (peers.indexOf(cur) + 1) + ')'; }",
+  "      parts.unshift(part); cur = parent;",
+  "    }",
+  "    return parts.join('>');",
+  "  };",
+  "  const snapshot = (el) => { const s = getComputedStyle(el); return { opacity: s.opacity, transform: s.transform, filter: s.filter }; };",
+  "  const same = (a, b) => !!a && !!b && a.opacity === b.opacity && a.transform === b.transform && a.filter === b.filter;",
+  "  const record = (el) => {",
+  "    if (!el || !el.isConnected) return;",
+  "    const selector = selectorOf(el); if (!selector) return;",
+  "    let row = rows.get(selector);",
+  "    if (!row) { if (rows.size >= 128) return; row = { selector, samples: [] }; rows.set(selector, row); }",
+  "    const style = snapshot(el); const last = row.samples[row.samples.length - 1];",
+  "    if (last && same(last.style, style)) return;",
+  "    row.samples.push({ t: Math.round((performance.now() - startedAt) * 10) / 10, style });",
+  "    if (row.samples.length > 80) row.samples.shift();",
+  "  };",
+  "  const observer = new MutationObserver((records) => { for (const r of records) if (r.attributeName === 'style') record(r.target); });",
+  "  observer.observe(document, { subtree: true, attributes: true, attributeFilter: ['style'] });",
+  "  window.__pingfusiEarlyMotion = { collect() { observer.disconnect(); return { durationMs: Math.round((performance.now() - startedAt) * 10) / 10, rows: Array.from(rows.values()) }; } };",
+  "})();",
+].join("\n");
+
+const temporalStyleDelta = (a, b) => ["opacity", "transform", "filter"].reduce((n, key) => n + (String(a && a[key]) !== String(b && b[key]) ? 1 : 0), 0);
+
+function mergeEarlyMotion(snapshot, early) {
+  const snap = snapshot && typeof snapshot === "object" ? snapshot : {};
+  snap.behaviors = snap.behaviors && typeof snap.behaviors === "object" ? snap.behaviors : {};
+  snap.discovery = snap.discovery && typeof snap.discovery === "object" ? snap.discovery : {};
+  let accepted = 0;
+  for (const row of early && Array.isArray(early.rows) ? early.rows : []) {
+    const samples = Array.isArray(row.samples) ? row.samples.filter((s) => s && s.style) : [];
+    if (samples.length < 3) continue;
+    const first = samples[0], last = samples[samples.length - 1];
+    const durationMs = Number(last.t) - Number(first.t);
+    const distinct = new Set(samples.map((s) => JSON.stringify(s.style))).size;
+    if (!Number.isFinite(durationMs) || durationMs < 32 || distinct < 2) continue;
+    let representative = first;
+    for (const sample of samples) if (temporalStyleDelta(first.style, sample.style) > temporalStyleDelta(first.style, representative.style)) representative = sample;
+    if (!temporalStyleDelta(first.style, representative.style)) continue;
+    const selector = typeof row.selector === "string" && row.selector ? row.selector : null;
+    if (!selector) continue;
+    const key = `startup:${selector}`;
+    if (snap.behaviors[key]) continue;
+    snap.behaviors[key] = {
+      trigger: "load",
+      kind: "animation",
+      selector,
+      temporal: {
+        candidate: "strong",
+        kind: "raf-animation",
+        trigger: "load",
+        durationMs: Math.round(durationMs),
+        reason: "repeated temporal style changes were recorded from document start before the capture settle window",
+      },
+      measured: {
+        before: first.style,
+        after: last.style,
+        during: representative.style,
+        sampleCount: samples.length,
+        durationMs: Math.round(durationMs),
+        returnedToStart: temporalStyleDelta(first.style, last.style) === 0,
+      },
+    };
+    accepted++;
+  }
+  snap.discovery.earlyMotionRecorder = {
+    ran: !!early,
+    durationMs: early && Number.isFinite(Number(early.durationMs)) ? Number(early.durationMs) : null,
+    rowsObserved: early && Array.isArray(early.rows) ? early.rows.length : 0,
+    strongRows: accepted,
+  };
+  return snap;
+}
 
 function parseArgs(argv) {
   const a = { side: "both", navTimeout: 30000 };
@@ -109,6 +202,10 @@ async function captureSide(side, url, ctx) {
     // images, wrong fold). Setting it first means the initial render is already right.
     await chrome.normalizeViewport(session, ctx.viewport);
 
+    // Must land before Page.navigate: capture code injected after the normal settle delay
+    // cannot reconstruct a startup animation that has already completed.
+    await session.send("Page.addScriptToEvaluateOnNewDocument", { source: EARLY_MOTION_RECORDER });
+
     console.log(`· ${side}: ${url}`);
     await cdp.navigate(session, url, { timeoutMs: ctx.args.navTimeout, warn: (m) => console.log(`  ⚠ ${m}`) });
     await sleep(ctx.opts.settleMs != null ? ctx.opts.settleMs : 1500); // let load-time choreography arm before probing/sweeping
@@ -126,6 +223,12 @@ async function captureSide(side, url, ctx) {
     const title = String(await cdp.evaluate(session, "document.title", { awaitPromise: false }) || "");
     const wallTitle = side === "live" && /just a moment|attention required|access denied/i.test(title) ? title : null;
 
+    const earlyMotion = await cdp.evaluate(
+      session,
+      "window.__pingfusiEarlyMotion ? window.__pingfusiEarlyMotion.collect() : null",
+      { awaitPromise: false }
+    ).catch(() => null);
+
     await cdp.evaluate(session, ctx.captureSource, { awaitPromise: false });
     const shape = await cdp.evaluate(session, "typeof pxBehaviorCapture", { awaitPromise: false });
     if (shape !== "function") throw new Error(`injection landed but pxBehaviorCapture is ${shape} — tools/behavior-capture.js changed shape?`);
@@ -137,6 +240,7 @@ async function captureSide(side, url, ctx) {
     const raw = await cdp.evaluate(session, `pxBehaviorCapture(${JSON.stringify(discoverOpts)})`, { timeoutMs: 180000 });
     let snap;
     try { snap = JSON.parse(raw); } catch (e) { throw new Error(`pxBehaviorCapture returned non-JSON (${String(raw).slice(0, 120)}…)`); }
+    mergeEarlyMotion(snap, earlyMotion);
 
     // The attestation: what measured this, and the receipts that it could. Old-schema-safe —
     // the gate ignores unknown discovery fields; when present the pass reason can cite it.
@@ -239,7 +343,14 @@ async function main() {
     // clone first when capturing both: it always works (localhost, no wall), and its
     // elementsScanned gives the live side's wall heuristic a baseline to compare against.
     if (wantClone) { const c = await captureSide("clone", cloneUrl, ctx); ctx.cloneScanned = c.discovery.elementsScanned; }
-    if (args.side !== "clone") await captureSide("live", liveUrl, ctx);
+    if (args.side !== "clone") {
+      const liveBehavior = await captureSide("live", liveUrl, ctx);
+      const motion = syncMotionItemsFromBehaviors(path.join(WORK, "targets", args.name), liveBehavior, { name: args.name, url: liveUrl });
+      if (motion.created.length || motion.updated.length) {
+        console.log(`  ✓ motion ownership reconciled — ${motion.created.length} created, ${motion.updated.length} updated: ${motion.created.concat(motion.updated).join(", ")}`);
+        console.log(`    next specialist action: ${CMD} next ${args.name}`);
+      }
+    }
     console.log(`\n✓ behavior capture done — next: ${CMD} gate ${args.name} behavior`);
   } catch (e) {
     // The default headless launch is probe-gated, not trusted — if THIS Chrome's headless
@@ -255,4 +366,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { parseArgs, loadOpts, LADDER };
+module.exports = { EARLY_MOTION_RECORDER, temporalStyleDelta, mergeEarlyMotion, parseArgs, loadOpts, LADDER };

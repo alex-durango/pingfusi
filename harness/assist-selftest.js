@@ -84,6 +84,7 @@ ok(/STALLED — 3 consecutive/.test(runWf(["status", NAME]).out), "an out-of-ord
 
 // ── composeAssist: one-sided by construction, refuses what a reviewer can't fix ──
 const { composeAssist, comparisonShaped } = require(HQ);
+const { stallHint } = require(WF);
 const cv = composeAssist(NAME, "visual");
 ok(cv.ok && /nav first/.test(cv.question) && /exact color/.test(cv.question), "visual assist names the worst failing leaf (slug→words) with a color-shaped hint for font.color");
 ok(!comparisonShaped(cv.question), "the composed question is one-sided (passes the poll comparison guard)");
@@ -91,6 +92,27 @@ ok(composeAssist(NAME, "measure").ok === false && /mechanically|cannot supply/.t
 ok(composeAssist(NAME, "review").ok === false && /wait/.test(composeAssist(NAME, "review").reason), "review phase refuses — the filed round already carries the ask");
 const cb = composeAssist(NAME, "behavior"); // no behaviors-live.json → environment-shaped
 ok(cb.ok === false && /behavior-capture/.test(cb.reason), "environment-shaped behavior failure steers to behavior-capture, not a reviewer");
+const behaviorStall = stallHint(NAME, 3, "behavior");
+ok(/\bnext\b/.test(behaviorStall) && /pingfusi motion/.test(behaviorStall) && !/--compare/.test(behaviorStall), "behavior STALLED guidance routes evidence before any specialist review");
+
+// Temporal behavior is a DIFFERENT specialist contract. Both auto-composed and custom
+// --ask/--compare paths must refuse before they can spend a layout review credit.
+const MOTION_NAME = `${NAME}_motion`;
+const motionDir = path.join(KIT, "targets", MOTION_NAME);
+fs.mkdirSync(motionDir, { recursive: true });
+fs.writeFileSync(path.join(motionDir, "target.json"), JSON.stringify({ name: MOTION_NAME, url: "https://example.com/", width: 1728 }));
+const discovery = { elementsScanned: 4, scrollSweep: { from: 0, to: 900, steps: 3 }, observeMs: 1200, documentHidden: false };
+fs.writeFileSync(path.join(motionDir, "behaviors-live.json"), JSON.stringify({ discovery, behaviors: {
+  "marquee:hero": { kind: "marquee", trigger: "load", measured: { pxPerSec: 120, durationMs: 1000 } },
+} }));
+fs.writeFileSync(path.join(motionDir, "behaviors-clone.json"), JSON.stringify({ discovery, behaviors: {
+  "marquee:hero": { kind: "marquee", trigger: "load", measured: { pxPerSec: 40, durationMs: 2600 } },
+} }));
+const cm = composeAssist(MOTION_NAME, "behavior");
+ok(cm.ok === false && /pingfusi motion/.test(cm.reason) && /machine checks/.test(cm.reason) && !/--mode |motion review/.test(cm.reason), "temporal behavior composition routes to the motion engine's machine checks — no review-round machinery is named");
+const customMotion = runHq(["assist", MOTION_NAME, "--phase", "behavior", "--ask", "compare the animation", "--compare"]);
+ok(customMotion.code === 1 && /machine checks/.test(customMotion.out) && /pingfusi motion/.test(customMotion.out) && !/--mode |motion review/.test(customMotion.out), "custom temporal --ask cannot bypass the machine-check guard, and the remedy prints no review-round machinery");
+fs.rmSync(motionDir, { recursive: true, force: true });
 
 // ── assist files a poll, receipts it, and the receipt resets the streak ──────────
 const PING_POLL = "00000000-0000-4000-8000-00000000a011";
@@ -117,12 +139,17 @@ mockJson("request_review.json", { ping_id: PING_DIAG });
 const as3 = runHq(["assist", NAME, "--compare"]);
 ok(as3.code === 0 && /diagnostic round filed/.test(as3.out) && /never the review gate/.test(as3.out), "assist --compare files a diagnostic round and says it is advisory");
 const hq2 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-ok((hq2.diagnostics || []).length === 1 && hq2.diagnostics[0].assist.phase === "visual" && /nav first/.test(hq2.diagnostics[0].region), "the diagnostic is recorded in hq.diagnostics, scoped to the worst failing leaf");
+ok((hq2.diagnostics || []).length === 1 && hq2.diagnostics[0].assist.phase === "visual" && hq2.diagnostics[0].n_target === 5 && /nav first/.test(hq2.diagnostics[0].region), "the diagnostic is recorded at standard 5-result depth, scoped to the worst failing leaf");
 ok(assistEvents().length === 2, "the diagnostic assist is receipted in the ledger too");
 ok(runHq(["verify", NAME]).code === 1 && /no review round recorded/.test(runHq(["verify", NAME]).out), "verify ignores diagnostics — the review gate is untouched");
-mockJson(`get_test_results-${PING_DIAG}.json`, { status: "complete", n_received: 1, responses: [{ choice: "Described the differences", free_text: "the nav link is a heavier red weight" }], comments: [] });
+mockJson(`get_test_results-${PING_DIAG}.json`, { status: "pending", n_received: 1, n_target: 5, responses: [{ choice: "Described the differences", free_text: "the nav link is a heavier red weight" }], comments: [] });
+const partialAr = runHq(["assist-result", NAME, PING_DIAG]);
+ok(partialAr.code === 1 && /diagnostic collecting — 1\/5/.test(partialAr.out), "a partial diagnostic stays collecting until its requested depth resolves");
+ok(/assist pending \(phase visual, ping .*1\/5 results/.test(runWf(["status", NAME]).out), "workflow status shows partial diagnostic progress instead of calling it answered early");
+ok(runHq(["assist", NAME]).code === 1 && /already open/.test(runHq(["assist", NAME]).out), "a partially answered diagnostic still counts as the one open assist");
+mockJson(`get_test_results-${PING_DIAG}.json`, { status: "complete", n_received: 1, n_target: 5, responses: [{ choice: "Described the differences", free_text: "the nav link is a heavier red weight" }], comments: [] });
 const ar = runHq(["assist-result", NAME, PING_DIAG]);
-ok(ar.code === 0 && /heavier red/.test(ar.out), "assist-result fetches the diagnostic's description");
+ok(ar.code === 0 && /heavier red/.test(ar.out), "a terminal diagnostic returns delivered results even if credit exhaustion ended it below target");
 
 // ── failed filings leave NO receipt (the receipt is what resets the streak) ──────
 const asOffline = runHq(["assist", NAME, "--phase", "visual"], { PPK_PINGHUMANS_URL: "https://selftest-invalid.example", PPK_PINGHUMANS_TOKEN: "" });

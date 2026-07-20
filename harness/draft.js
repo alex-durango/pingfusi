@@ -40,6 +40,10 @@ const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex").slice
 const MAX_FILES = 300;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+// Service-minted slugs are 9 random bytes base64url (12 chars) — "-" and "_" can LEAD.
+// The charset must stay closed (slugs are spliced into /d/<slug>/ urls and the rewrite
+// below); the length bounds are loose so a service-side length change is not an outage.
+const SLUG_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
 // Walk the clone dir into the upload manifest: [{ path: "assets/css/x.css", bytes }].
 // Dotfiles (.DS_Store) are workspace noise, never part of the clone — skipped.
@@ -127,7 +131,7 @@ async function push(name) {
   console.log(`pushing ${files.length} file(s), ${total} bytes …`);
   const created = await api("/api/draft", { method: "POST", body: { name, files } });
   const slug = created.slug;
-  if (!slug || !Array.isArray(created.uploads)) throw new Error("draft create returned no slug/uploads");
+  if (!SLUG_RE.test(String(slug || "")) || !Array.isArray(created.uploads)) throw new Error("draft create returned no valid slug/uploads");
 
   for (const u of created.uploads) {
     const buf = fs.readFileSync(path.join(dir, u.path));
@@ -175,4 +179,6 @@ async function main() {
 }
 
 if (require.main === module) main().catch((e) => { console.error(`draft: ${e.message}`); process.exit(1); });
-module.exports = { buildManifest, rewriteAssetRefs, verifyDraftServes };
+// Other publishers can reuse this same client so the byte-critical
+// rewrite regex, the service caps, and the slug contract exist exactly once kit-side.
+module.exports = { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE };

@@ -36,14 +36,14 @@ minutes, so the agent is the bottleneck, not the reviewer:**
   `node tools/merge-snapshot.js` — full N-target re-captures are for the final
   pass only (the done gate enforces one clean full capture at the end).
 - When a fix's acceptability is uncertain (contested content, blur quality,
-  "is this what they meant?"), spend a ~$0.05 micro-poll —
+  "is this what they meant?"), use a 1-result micro-poll (up to 1 credit) —
   `pingfusi review {{NAME}} poll "…" --choices "Yes,No"` — BEFORE burning a full test
   round on it. Polls advise; only full rounds satisfy the review gate.
 - Stalled on a gate (score/status print STALLED after 3 no-progress iterations)?
   `pingfusi assist {{NAME}}` composes the poll question FOR you from the failing gate's
   own artifacts — a reviewer names in one look what costs you three blind iterations.
   `--compare` files a scoped side-by-side diagnostic round instead when a one-sided
-  description won't do (full credit, slower — poll first). Keep iterating while the
+  description won't do (5 results by default, slower — poll first). Keep iterating while the
   ask is pending; never open a second one.
 - **On every REFILE, pass `--changelog "what changed since the last review"`** —
   a reviewer who isn't told what changed reviews blind ("did you fix
@@ -62,6 +62,10 @@ minutes, so the agent is the bottleneck, not the reviewer:**
 - Before every `reviewer file`: self-QA the dynamics (overlay/flicker-compare the
   clone vs live at 2–3 rotation/reveal states) — a defect you catch yourself
   costs seconds; one the reviewer catches costs a round.
+
+Full review rounds default to 5 results. Use `--results 1` for a quick/low-risk check and
+`--results 15` to `--results 20` only for complex work or higher confidence. Each completed
+result costs 1 credit; filing and undelivered results are free.
 
 **The sequence (each step's gate must pass before the next — `pingfusi status {{NAME}}`
 always tells you what's next):**
@@ -101,9 +105,16 @@ always tells you what's next):**
    inventoried behavior in one vanilla `clone/fixes.js` (values from the
    measurements, never eyeballed), rebuild with `pingfusi capture-build {{NAME}}
    --fixes`, run the same discovery on the clone (`behaviors-clone.json`), and loop
-   until `pingfusi gate {{NAME}} behavior` passes. Genuinely irreproducible content
-   (WebGL/canvas generative) is documented in `behavior-deviations.json` — never
-   silently frozen. Re-run the pixel gates after: `done` re-verifies everything.
+   through `pingfusi next {{NAME}}` until `pingfusi gate {{NAME}} behavior` passes.
+   Animations are DEFAULT-ON in the draft build: the build motion pass already
+   reproduced what `capture-run` recorded in `motion-doc.json` (captured CSS carries the
+   css/transition tiers; engine/sampled tiers get the generated WAAPI player), with
+   receipts in `motion-pass.json` + `motion-items.json` and warnings that never fail a
+   gate. `pingfusi next {{NAME}}` routes the deep machine checks
+   (verify-introspected / sample → apply-sampled → verify-sampled) from those receipts.
+   Temporal evidence never goes in `behavior-deviations.json` (that file is for
+   unsupported non-temporal interaction/state rows). Re-run the pixel gates after:
+   `done` re-verifies everything.
 
 6. **Review rounds — driven by you.** `pingfusi draft {{NAME}} push` (uploads the
    clone as a hosted draft — stable public url, byte-verified before it's recorded,
@@ -124,6 +135,7 @@ always tells you what's next):**
    `pingfusi advance {{NAME}} <phase> --blocked "what you tried and why it failed"` —
    and file the round anyway: the spec documents the gap to the reviewer automatically,
    and a reviewer look at a partial clone catches what the gates structurally can't.
+   Motion never holds a round up — its receipts are informational.
    `done` still refuses the blocked phase until it is genuinely earned — a filed round
    with a named gap is progress; a stopped session ships nothing.
 
@@ -133,11 +145,12 @@ always tells you what's next):**
    verified-inventory line, and the approving round from
    `targets/{{NAME}}/review-qa.json` in your report.
 
-**Dynamics honesty:** the captured HTML/CSS stay byte-exact; `fixes.js` is the ONLY
-script and only re-drives what discovery measured. Anything excused in
-`behavior-deviations.json` must also be noted in NOTES.md — the review round template
-marks behavior steps INFORMATIONAL as a backstop for taste/feel and documented
-deviations, not as a substitute for the behavior gate.
+**Dynamics honesty:** the captured HTML/CSS stay byte-exact; the only scripts are
+`fixes.js` (re-driving what discovery measured) and the generated `motion-replay.js`
+(the motion pass's WAAPI player, parameters verbatim from `motion-doc.json`).
+Non-temporal interaction/state rows excused in `behavior-deviations.json` must also be
+noted in NOTES.md. Reviewers flag motion in the page round like any other observation —
+fix through the routed motion utilities and refile.
 
 **Keep `targets/{{NAME}}/NOTES.md` current** (iteration-log table: what was
 flagged, whether the gate caught it, the fix, the kit-change candidate). A miss

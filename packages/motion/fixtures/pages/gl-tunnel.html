@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- Fixture: OffscreenCanvas worker tunnel (ground truth in gl-tunnel.worker.js).
+     The page mirrors the floema.com shape: transferControlToOffscreen + a worker rAF
+     loop, with quantized scroll progress posted to the Web Worker. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { margin: 0; height: 400vh; background: #f2f0eb; }
+      canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <script>
+      const c = document.getElementById('c');
+      const off = c.transferControlToOffscreen();
+      const w = new Worker('gl-tunnel.worker.js');
+      w.postMessage({ type: 'init', canvas: off, width: innerWidth, height: innerHeight }, [off]);
+      addEventListener('scroll', () => {
+        const progress = Math.round((scrollY / (document.body.scrollHeight - innerHeight)) * 5) / 5;
+        w.postMessage({ type: 'scroll', progress });
+      });
+    </script>
+  </body>
+</html>

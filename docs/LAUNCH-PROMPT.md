@@ -79,6 +79,11 @@ Rules the kit ENFORCES — don't fight the refusals, they are the method:
   honest static frame beats fabricated motion). When a behavior's mechanism is
   unknowable from artifacts, the worksheet prints the question to ask the reviewer —
   ask it before you build.
+- Run `pingfusi next {{NAME}}` after behavior capture: the draft build reproduces
+  animations automatically (the motion pass), and its receipts surface here as
+  informational warnings with a routed machine check (verify-introspected / the sampled
+  chain) — never gate failures, never review rounds. Fix what a warning names, then
+  keep following `next`.
 - Screenshots triage and smoke-check; they never certify a match. Numbers certify what
   numbers reach; the reviewer certifies the rest — through the platform, never out of
   band.

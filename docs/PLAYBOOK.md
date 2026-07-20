@@ -160,9 +160,12 @@ reinvention:
 2. **Dynamic differential pass on LIVE (authoritative):** attach a `MutationObserver`
    (watching `class`/`style`/`data-*`) across the region, snapshot each candidate's computed
    `opacity`/`transform`/`filter` before, then **scripted-scroll** the page in increments
-   (dwelling at each stop) and dispatch synthetic hover events on each trigger. Record what
+   (dwelling and sampling at each stop) and dispatch synthetic hover events on each trigger.
+   Keep repeated temporal-style samples for mutated non-candidates too, so reversible
+   scroll/GSAP motion and marker-free rAF effects cannot disappear into the reset frame. Record what
    changed, from what to what, and by what trigger (load/scroll/hover/mutation). A candidate
-   frozen in its start state after the sweep is presentational noise, not a behavior.
+   that does not fire remains declared inventory until it is measured, reproduced, or given
+   an explicit non-temporal disposition; a weak marker alone does not auto-create motion.
    `pxBehaviorDiscover()` runs this pass and writes the result — save it as
    `targets/<name>/behaviors-live.json`.
 3. **Measure, never eyeball.** A marquee's speed is a real px/sec sampled over a real
@@ -189,17 +192,20 @@ reinvention:
    same settle procedure as live (so end-states genuinely match, not just at t=0) →
    `targets/<name>/behaviors-clone.json`.
 6. **Gate:** `node harness/workflow.js gate <name> behavior` compares every live behavior to
-   the clone's by key and measured value within a documented tolerance (docs/WORKFLOW.md). A
-   behavior that's genuinely irreproducible statically (WebGL/canvas generative content) is
-   documented in `targets/<name>/behavior-deviations.json` with a reason — never silently
-   dropped. An empty/absent live inventory does not pass unless the discovery pass's own
+   the clone's by key and measured value within a documented tolerance (docs/WORKFLOW.md).
+   Run `pingfusi next <name>` first: it surfaces sweep-derived temporal candidates as
+   advisory warnings plus a declare suggestion — declare the real ones, and a DECLARED
+   motion item must then converge before the gate passes;
+   `behavior-deviations.json` cannot excuse a declared item's CSS, marquee, scroll/pointer,
+   canvas, or WebGL motion. Undeclared candidates warn without failing the gate. An
+   empty/absent live inventory does not pass unless the discovery pass's own
    metadata proves it actually ran (scroll sweep range, observer duration, elements scanned).
 
 ## Phase 6 — The reviewer-flagged fix loop (detection → measure → fix → verify)
 Detection stays with a reviewer (or a vision reviewer) — they're the best perceptual
 detector. **The workflow enforces this as the `reviewer` phase**: `node harness/review-qa.js
 file <name> --draft <public-url>` files a scope-pinned pingfusi side-by-side (per-leaf
-steps from coverage.json; JS behavior marked informational), and the gate passes only on
+steps from coverage.json; one structured temporal answer reroutes to motion declaration), and the gate passes only on
 a fetched approving verdict — a rejection's notes are your flag list for the loop below,
 then refile. But once a reviewer points, **stop guessing the property.** Measure the whole
 element:

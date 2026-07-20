@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; min-height: 350vh; background: #11170f; }
+  #stage { height: 300vh; pointer-events: none; }
+  .sticky { position: sticky; top: 0; height: 100vh; display: grid; place-items: center; }
+  #circle { width: 180px; height: 180px; border-radius: 50%; background: #d8ff53; transform: scale(0); opacity: .1; }
+  #noise { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+</style>
+</head>
+<body>
+<div id="noise"></div>
+<section id="stage"><div class="sticky"><div id="circle"></div></div></section>
+<script>
+  // Fill an unscoped sampler's pre-start budget with unrelated mutations. A scoped
+  // trace must ignore these rather than merely raising the global cap.
+  const noise = document.getElementById('noise');
+  for (let i = 0; i < 80; i++) {
+    const el = document.createElement('i');
+    noise.appendChild(el);
+    el.style.transform = `translateX(${i}px)`;
+    el.style.opacity = String((i % 10) / 10);
+  }
+  const circle = document.getElementById('circle');
+  function update() {
+    circle.style.transform = `scale(${scrollY * 0.0005})`;
+    circle.style.opacity = String(0.1 + scrollY * 0.0004);
+  }
+  addEventListener('scroll', update, { passive: true });
+  update();
+</script>
+</body>
+</html>

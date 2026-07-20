@@ -65,7 +65,7 @@ console.log(`\nrecorded to targets/${name}/scores.jsonl  (${prevLines.length + 1
 
 // Stall detection (advisory): 3 consecutive runs where visualFails didn't drop is the
 // documented shape of a blind loop — an underline wrong three rounds in a row, 93 fails
-// chasing a font — mechanisms a reviewer names in ONE look for ~$0.05. Derived from the
+// chasing a font — mechanisms a reviewer names in ONE look with a 1-result poll. Derived from the
 // trailing runs of scores.jsonl (no new state); runs with a width/height mismatch don't
 // count in either direction — their numbers are not trustworthy. Advisory only: the
 // banner is loud, nothing blocks.
@@ -80,7 +80,7 @@ if (!v.ok && score.visualFails > 0 && !widthMismatch && !heightMismatch) {
     streak++;
   }
   if (streak >= STALL_RUNS) {
-    console.log(`\n⚠ STALLED — visual fails stuck at ${score.visualFails} for ${streak} runs. A reviewer often names the mechanism in one look (~$0.05):`);
+    console.log(`\n⚠ STALLED — visual fails stuck at ${score.visualFails} for ${streak} runs. A reviewer often names the mechanism in one look (1-result poll, up to 1 credit):`);
     console.log(`    pingfusi assist ${name}              (question auto-composed from the worst failing mark)`);
     console.log(`    pingfusi assist ${name} --compare    (scoped side-by-side diagnostic round instead)`);
   }

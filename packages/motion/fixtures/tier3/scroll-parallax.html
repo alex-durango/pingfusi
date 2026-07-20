@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #0f1410; }
+  .spacer { height: 250vh; }
+  #hero { position: fixed; top: 30vh; left: 10vw; width: 200px; height: 200px; border-radius: 20px; background: #4fd5f5; }
+  #fader { position: fixed; top: 30vh; right: 10vw; width: 200px; height: 200px; border-radius: 20px; background: #f54fd5; }
+</style>
+</head>
+<body>
+<div id="hero"></div>
+<div id="fader"></div>
+<div class="spacer"></div>
+<script>
+  // scroll-linked inline-style writes (the shape ScrollTrigger/Lenis sites produce):
+  // hero: translateY = -0.3 * scrollY ; fader: opacity = 1 - scrollY/2000
+  const hero = document.getElementById('hero');
+  const fader = document.getElementById('fader');
+  function update() {
+    hero.style.transform = `translateY(${-0.3 * scrollY}px)`;
+    fader.style.opacity = String(Math.max(0, Math.min(1, 1 - scrollY / 2000)));
+  }
+  addEventListener('scroll', update, { passive: true });
+  update();
+</script>
+</body>
+</html>

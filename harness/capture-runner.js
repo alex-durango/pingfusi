@@ -16,19 +16,36 @@
 //
 // usage: pingfusi capture-run <name> [--side auto|both|live|clone]
 //          [--attach <port|host:port>] [--chrome <path>] [--headful] [--profile]
-//          [--live-url <url>] [--clone-url <url>] [--no-dom]
+//          [--live-url <url>] [--clone-url <url>] [--no-dom] [--no-motion]
 //          [--nav-timeout <ms>] [--capture-timeout <ms>] [--keep-open] [--dry-run]
 //
 // --side auto (default): live only until targets/<name>/clone exists, then both.
 // Artifacts land exactly where the interactive path puts them: targets/<name>/live.json,
 // coverage.json, dom.html (live side), clone.json (clone side) — plus capture-run.json,
 // the run receipt (kit version, viewport + sources, probe numbers, per-file byte counts).
+//
+// Motion (DEFAULT-ON, first-draft doctrine 2026-07-19): after the live capture succeeds,
+// the injected source's animation readers (pxIntrospectAnimations / pxProbeGsap) are asked
+// for their records, folded — together with any engine-fitted trace artifacts under
+// targets/<name>/motion/*/trace/fits.json — into targets/<name>/motion-doc.json
+// (harness/motion-doc.js, pingfusi/motion-doc@1), and animation bodies seen on the wire
+// (Lottie JSON, .lottie zips, RIVE binaries) are ripped into targets/<name>/motion-assets/
+// under sha-DERIVED names. Then the capture LOOKS for what no reader could explain: a
+// dense-recorder sweep probes every scroll depth for elements still moving on their own
+// (a hand-rolled rAF belt is invisible to introspection, and viewport-gated motion is
+// invisible at y=0 — LEARNINGS #32), and any unexplained ongoing mover is SAMPLED under
+// the stepped clock (harness/motion-sampler.js captureOnce, scroll-to trigger) so the
+// draft build's motion pass can replay it. Every motion problem is a receipted WARNING on
+// the run — never a capture failure (--no-motion switches the whole phase off).
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const cdp = require("./cdp.js");
 const chrome = require("./chrome.js");
+const motionDoc = require("./motion-doc.js");
+const sampler = require("./motion-sampler.js");
 const { serve } = require("./serve.js");
 
 const VIA_PPK = process.env.PPK_ENTRY === "1";
@@ -36,6 +53,7 @@ const CMD = VIA_PPK ? "pingfusi" : "node harness/workflow.js";
 const WORK = process.cwd();
 const KIT_VERSION = require(path.join(__dirname, "..", "package.json")).version;
 const die = (msg) => { console.error(`✗ ${msg}`); process.exit(1); };
+const firstLine = (e) => String((e && e.message) || e).split("\n")[0];
 
 // The way out when THIS path can't see the real page — never a dead end (the whole
 // point of shipping a second capture path is that either one can carry a run).
@@ -65,6 +83,7 @@ function parseArgs(argv) {
     else if (v === "--live-url") a.liveUrl = argv[++i];
     else if (v === "--clone-url") a.cloneUrl = argv[++i];
     else if (v === "--no-dom") a.noDom = true;
+    else if (v === "--no-motion") a.noMotion = true;
     else if (v === "--nav-timeout") a.navTimeout = +argv[++i];
     else if (v === "--capture-timeout") a.captureTimeout = +argv[++i];
     else if (v === "--keep-open") a.keepOpen = true;
@@ -84,6 +103,16 @@ async function captureSide(side, url, ctx) {
     let probe = await chrome.probeEnvironment(session);
     if (!probe.verdict.ok) throw new Error(`environment refused before any capture (${side}, about:blank): ${probe.verdict.reason}`);
     await chrome.normalizeViewport(session, ctx.viewport);
+
+    // Motion setup must precede navigation so the asset rip sees every response the page
+    // loads. A refusal here is a receipted warning — quarantine, never a capture failure.
+    const motionWanted = side === "live" && !ctx.args.noMotion;
+    const motionWarnings = [];
+    let networkLog = null;
+    if (motionWanted) {
+      try { networkLog = watchNetwork(session); await session.send("Network.enable"); }
+      catch (e) { networkLog = null; motionWarnings.push(`Network.enable refused — asset rip skipped: ${firstLine(e)}`); }
+    }
 
     console.log(`· ${side}: ${url}`);
     const t0 = Date.now();
@@ -133,7 +162,7 @@ async function captureSide(side, url, ctx) {
     }
     if (refusedNames.length) console.log(`  ⚠ refused ${refusedNames.length} unexpected payload name(s) from the page (${refusedNames.map((n) => JSON.stringify(n)).join(", ")}) — only ${allowed.join(" / ")} are written on the ${side} side`);
     if (!written.length) throw new Error(`every payload name was refused (${refusedNames.join(", ")}) — the page is not running the kit's pxCaptureAll`);
-    const settle = report.settle && typeof report.settle === "object" ? { stable: report.settle.stable, scrolledTo: report.settle.scrolledTo, imagesPending: report.settle.imagesPending } : report.settle;
+    const settle = report.settle && typeof report.settle === "object" ? { stable: report.settle.stable, scrolledTo: report.settle.scrolledTo, imagesPending: report.settle.imagesPending, ...(report.settle.lazyPromoted ? { lazyPromoted: report.settle.lazyPromoted, lazyPromotedSrcs: report.settle.lazyPromotedSrcs } : {}) } : report.settle;
     console.log(`  ✓ ${written.map((w) => `${w.file} (${(w.bytes / 1024).toFixed(0)}KB)`).join(", ")} — ${report.leaves} leaves, settle ${JSON.stringify(settle)}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
     // A wall is an ERROR, not a warning — the docs promise "fall back when capture-run's
@@ -144,15 +173,387 @@ async function captureSide(side, url, ctx) {
     if (wallTitle || leafCollapse)
       throw new Error(`the live page looks like a bot-challenge wall (${wallTitle ? `title ${JSON.stringify(wallTitle)}` : `only ${report.leaves} leaves vs the clone's ${ctx.cloneLeaves}`}) — artifacts were written as EVIDENCE of the wall, not the site; do not capture-build from them. ${LADDER}`);
 
+    // Motion doc + asset rip — strictly AFTER this side's capture fully succeeded (a wall
+    // or settle failure above never reaches this line), and unable to fail it:
+    // captureMotion never throws, every problem lands in the warnings it receipts.
+    const motion = motionWanted ? await captureMotion(session, ctx, { url, networkLog, warnings: motionWarnings }) : null;
+
     return {
       side, url, leaves: report.leaves, byKind: report.byKind, settle,
       files: written, tookMs: Date.now() - t0, viewportRead: got,
       probe: { rafHz: probe.verdict.rafHz, anim: probe.sample.anim },
+      ...(motion ? { motion } : {}),
     };
   } finally {
     session.close();
     await cdp.closeTab(ctx.acq.port, targetId, { host: ctx.acq.host });
   }
+}
+
+// ── motion (additive, quarantine-scoped) ────────────────────────────────────────────────
+// Everything below feeds targets/<name>/motion-doc.json + motion-assets/ AFTER a live
+// capture already succeeded. Doctrine: a motion failure is a receipted WARNING on the run,
+// never a capture failure — an ordinary clone must be able to ignore this entire phase.
+
+const READER_TIMEOUT_MS = 15000;         // per-reader evaluate bound (Node-side watchdog in cdp.evaluate)
+const BODY_TIMEOUT_MS = 5000;            // per-body Network.getResponseBody bound
+const MAX_READER_RECORDS = 500;          // page-controlled arrays get a ceiling, receipted
+const MAX_ASSETS = 20;                   // saved assets per run, receipted beyond
+const MAX_ASSET_BYTES = 5 * 1024 * 1024; // per-asset size cap, receipted skips beyond
+const MAX_SNIFF_FETCHES = 32;            // candidate bodies pulled for sniffing per run
+
+// Passive response log for the asset rip. CdpSession has no persistent event subscription
+// (waitFor is one-shot, and re-arming loses events that burst in one chunk), so wrap the
+// socket's message hook: the original dispatch runs first, then Network events are parsed
+// here. The includes() pre-filter keeps the multi-MB capture-result message from being
+// JSON-parsed a second time.
+function watchNetwork(session) {
+  const responses = new Map(); // requestId → { url, mimeType, finished, encodedDataLength }
+  const prev = session.ws.onMessage;
+  session.ws.onMessage = (text) => {
+    prev(text);
+    if (!text.includes('"Network.responseReceived"') && !text.includes('"Network.loadingFinished"')) return;
+    let msg; try { msg = JSON.parse(text); } catch (e) { return; }
+    if (!msg.params || !msg.params.requestId) return;
+    if (msg.method === "Network.responseReceived") {
+      const r = msg.params.response || {};
+      responses.set(String(msg.params.requestId), { url: String(r.url || ""), mimeType: String(r.mimeType || ""), finished: false, encodedDataLength: 0 });
+    } else if (msg.method === "Network.loadingFinished") {
+      const entry = responses.get(String(msg.params.requestId));
+      if (entry) { entry.finished = true; entry.encodedDataLength = +msg.params.encodedDataLength || 0; }
+    }
+  };
+  return responses;
+}
+
+// session.send has no timeout of its own; the anti-stall rule is every remote call gets one.
+function withTimeout(promise, ms, what) {
+  promise.catch(() => {}); // the losing branch must not become an unhandled rejection
+  let timer;
+  const watchdog = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} exceeded ${ms}ms`)), ms); });
+  return Promise.race([promise, watchdog]).finally(() => clearTimeout(timer));
+}
+
+function urlExt(url) {
+  try { const m = /\.([a-z0-9]{1,8})$/i.exec(new URL(url).pathname); return m ? m[1].toLowerCase() : ""; } catch (e) { return ""; }
+}
+
+// Cheap pre-filter for which responses are worth pulling a body for; sniffing decides truth.
+function isAssetCandidate(ext, mimeType) {
+  return ext === "json" || ext === "lottie" || ext === "riv" || /json|lottie|riv/i.test(mimeType || "");
+}
+
+// Content sniffing — the BYTES decide what a body is, never the remote name or mime alone:
+// RIVE magic, zip magic under a .lottie hint (a dotLottie is a zip), or Lottie JSON
+// ("v" + "layers"). Returns { kind, ext } with the FIXED extension the on-disk name carries.
+function sniffAsset(bytes, ext, mimeType) {
+  if (bytes.length >= 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x56 && bytes[3] === 0x45) return { kind: "riv", ext: "riv" }; // "RIVE"
+  const zipMagic = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04; // PK\x03\x04
+  if (zipMagic && (ext === "lottie" || /lottie/i.test(mimeType || ""))) return { kind: "dotlottie", ext: "lottie" };
+  if (bytes.length && /^\s*\{/.test(bytes.toString("utf8", 0, Math.min(bytes.length, 16)))) {
+    try {
+      const o = JSON.parse(bytes.toString("utf8"));
+      if (o && typeof o === "object" && !Array.isArray(o) && o.v !== undefined && Array.isArray(o.layers)) return { kind: "lottie", ext: "json" };
+    } catch (e) {}
+  }
+  return null;
+}
+
+// Pull candidate bodies, sniff, save the real animation assets. Caps are receipted, never
+// silent: MAX_ASSETS saved per run, MAX_ASSET_BYTES each, MAX_SNIFF_FETCHES bodies inspected.
+async function ripAssets(session, responses, targetDir, warnings) {
+  const assets = [], seen = new Set();
+  let fetched = 0, capSkipped = 0;
+  for (const [requestId, r] of responses) {
+    if (!r.finished) continue;
+    const ext = urlExt(r.url);
+    if (!isAssetCandidate(ext, r.mimeType)) continue;
+    if (assets.length >= MAX_ASSETS) { capSkipped++; continue; }
+    if (r.encodedDataLength > MAX_ASSET_BYTES) {
+      warnings.push(`asset skipped (over the ${MAX_ASSET_BYTES / 1048576}MB cap): ${r.url.slice(0, 120)} — ${(r.encodedDataLength / 1048576).toFixed(1)}MB on the wire`);
+      continue;
+    }
+    if (fetched >= MAX_SNIFF_FETCHES) { warnings.push(`asset sniffing stopped after ${MAX_SNIFF_FETCHES} candidate bodies — later candidates were not inspected`); break; }
+    fetched++;
+    let body;
+    try { body = await withTimeout(session.send("Network.getResponseBody", { requestId }), BODY_TIMEOUT_MS, "Network.getResponseBody"); }
+    catch (e) { continue; } // body evicted from Chrome's buffer, or slow — nothing rippable
+    const bytes = Buffer.from(String((body && body.body) || ""), body && body.base64Encoded ? "base64" : "utf8");
+    if (bytes.length > MAX_ASSET_BYTES) {
+      warnings.push(`asset skipped (over the ${MAX_ASSET_BYTES / 1048576}MB cap): ${r.url.slice(0, 120)} — ${(bytes.length / 1048576).toFixed(1)}MB decoded`);
+      continue;
+    }
+    const sniffed = sniffAsset(bytes, ext, r.mimeType);
+    if (!sniffed) continue;
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    if (seen.has(sha256)) continue;
+    seen.add(sha256);
+    // The remote name is REMOTE-CONTROLLED (same rule as payload names, 296b59f): the
+    // on-disk name is DERIVED — sha prefix + the fixed extension for the sniffed kind.
+    // The real source URL lives in the doc's assets array, as data.
+    const file = `motion-assets/${sha256.slice(0, 16)}.${sniffed.ext}`;
+    fs.mkdirSync(path.join(targetDir, "motion-assets"), { recursive: true });
+    fs.writeFileSync(path.join(targetDir, file), bytes);
+    assets.push({ kind: sniffed.kind, url: r.url, sha256, bytes: bytes.length, file });
+  }
+  if (capSkipped) warnings.push(`asset cap reached (${MAX_ASSETS} saved) — ${capSkipped} further candidate(s) not ripped`);
+  return assets;
+}
+
+// The readers return an envelope around the CONTRACT record shapes (motion-doc.js JSDoc).
+// Unwrap it without binding to reader internals: a bare array also passes, "no engine on
+// this page" is an empty result (not a warning), everything else unexpected is receipted.
+function readerRecords(fn, ret, warnings) {
+  if (ret == null) { warnings.push(`${fn} returned ${ret === null ? "null" : "undefined"} — reader missing from the injected capture source?`); return null; }
+  if (Array.isArray(ret)) return ret;
+  if (typeof ret === "object") {
+    if (ret.supported === false) { warnings.push(`${fn}: document.getAnimations is not supported on this page`); return null; }
+    if (ret.present === false) return []; // the engine is simply not on the page — nothing to record
+    if (ret.unsupported) { warnings.push(`${fn}: engine version ${String(ret.unsupported).slice(0, 40)} is not supported — records not read`); return null; }
+    if (Array.isArray(ret.records)) {
+      if (ret.truncated) warnings.push(`${fn}: reader truncated its record list (total ${ret.total != null ? ret.total : ret.tweens})`);
+      return ret.records;
+    }
+  }
+  warnings.push(`${fn} returned ${typeof ret} without a records array — reader shape drift?`);
+  return null;
+}
+
+const MOTION_READERS = [
+  { fn: "pxIntrospectAnimations", convert: motionDoc.fromIntrospection },
+  { fn: "pxProbeGsap", convert: motionDoc.fromGsap },
+];
+
+// ── the AUTO-SAMPLE stage: unexplained ongoing motion becomes sampled tracks ────────────
+// The readers above only see DECLARED animation (CSS/WAAPI objects, GSAP timelines). A
+// hand-rolled rAF loop writing inline styles declares nothing — and on real pages it is
+// often viewport-gated (an IntersectionObserver pauses the belt offscreen; at y=0 it
+// samples 0 px/s — LEARNINGS #32). So detection SWEEPS: at each scroll depth the in-page
+// dense recorder (pxDenseRecordStart, body-wide) takes a few wall-time samples, and an
+// element whose transform/opacity moved in EVERY interval — motion that never pauses,
+// not a transition finishing — is an ongoing mover. Movers no reader explained are then
+// sampled for real: one virtual-time capture per viewport group (the sampler's own
+// captureOnce, scroll-to trigger anchored on the group's topmost mover), sampled tracks +
+// tier-3 fits folded into the same doc the readers built. Warnings, never failures.
+const DETECT_INTERVAL_MS = 350;  // per-interval wall dwell; 3 intervals ≈ 1s per depth
+const DETECT_INTERVALS = 3;      // ALL intervals must move — a reveal transition settles out
+const DETECT_MAX_DEPTHS = 24;    // sweep cap, receipted (24 × ~1s ≈ 25s worst case)
+const AUTO_SAMPLE_MAX_RUNS = 3;  // sampled captures per capture-run, receipted beyond
+const AUTO_SAMPLE_FPS = 60;      // the WAAPI replay is time-based; 60fps is the record's grid
+const AUTO_SAMPLE_FRAMES = 240;  // 4s virtual — long enough for the marquee class to win
+
+function detectProbeExpr(scrollY) {
+  return `(async () => {
+    if (typeof pxDenseRecordStart !== "function") return { unsupported: true };
+    window.scrollTo({ top: ${scrollY}, left: 0, behavior: "instant" });
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    pxDenseRecordStart({ scopes: ["body"], props: ["transform", "opacity"] });
+    pxDenseRecordStep(0);
+    for (let i = 1; i <= ${DETECT_INTERVALS}; i++) {
+      await new Promise((r) => setTimeout(r, ${DETECT_INTERVAL_MS}));
+      pxDenseRecordStep(i * ${DETECT_INTERVAL_MS});
+    }
+    return { record: pxDenseRecordStop() };
+  })()`;
+}
+
+// Pure classifier over one depth's probe record: a mover is an element whose transform or
+// opacity moved in EVERY interval (sampler.sampledValueDelta > 1 — the same noise floors
+// the ongoing gate uses). Elements a reader already explained (covered selectors) are the
+// readers' business, not this stage's.
+function moversFromDetectRecord(record, coveredSelectors) {
+  const movers = [];
+  for (const el of (record && record.elements) || []) {
+    if (!el || typeof el.selector !== "string" || !el.selector.trim()) continue;
+    if (!Array.isArray(el.samples) || el.samples.length < DETECT_INTERVALS + 1) continue;
+    if (coveredSelectors.has(el.selector)) continue;
+    for (const property of ["transform", "opacity"]) {
+      const values = el.samples.map((s) => (s && s.values ? s.values[property] : null));
+      let moving = true;
+      for (let i = 1; i < values.length; i++) {
+        if (!(sampler.sampledValueDelta(property, values[i - 1], values[i]) > 1)) { moving = false; break; }
+      }
+      if (moving) { movers.push({ selector: el.selector, property }); break; }
+    }
+  }
+  return movers;
+}
+
+async function detectOngoingMotion(session, ctx, coveredSelectors, warnings) {
+  const scrollMax = await cdp.evaluate(session, "Math.max((document.documentElement.scrollHeight || 0) - innerHeight, 0)", { awaitPromise: false, timeoutMs: READER_TIMEOUT_MS });
+  if (typeof scrollMax !== "number" || !isFinite(scrollMax)) return { movers: [], note: "scroll extent unreadable — ongoing-motion detection skipped" };
+  const step = Math.max(200, Math.floor(ctx.viewport.height * 0.8));
+  const depths = [];
+  for (let y = 0; y <= scrollMax && depths.length < DETECT_MAX_DEPTHS; y += step) depths.push(y);
+  const truncatedSweep = scrollMax > (depths[depths.length - 1] || 0) + step;
+  const movers = new Map(); // selector → { selector, property, depth } (first depth seen wins)
+  let truncatedRecord = false;
+  for (const y of depths) {
+    const ret = await cdp.evaluate(session, detectProbeExpr(y), { timeoutMs: READER_TIMEOUT_MS + (DETECT_INTERVALS + 2) * DETECT_INTERVAL_MS });
+    if (!ret || typeof ret !== "object" || ret.unsupported || !ret.record || !Array.isArray(ret.record.elements)) {
+      return { movers: [], note: "in-page dense recorder unavailable on this page — ongoing-motion detection skipped" };
+    }
+    if (ret.record.truncated && !truncatedRecord) {
+      truncatedRecord = true;
+      warnings.push(`ongoing-motion detect hit the recorder's 200-element cap at depth ${y}px — movers past the cap were not probed`);
+    }
+    for (const mover of moversFromDetectRecord(ret.record, coveredSelectors)) {
+      if (!movers.has(mover.selector)) movers.set(mover.selector, { ...mover, depth: y });
+    }
+  }
+  return { movers: [...movers.values()], depthsProbed: depths.length, ...(truncatedSweep ? { truncatedSweep } : {}) };
+}
+
+// Group movers into viewports: sorted by document top, a group spans at most 0.8×viewport
+// from its topmost member (every member provably in view when the topmost sits at the
+// viewport's top edge — the scroll-to trigger's anchor).
+function groupMoversByViewport(movers, tops, viewportHeight) {
+  const positioned = movers
+    .map((m) => ({ ...m, top: typeof tops[m.selector] === "number" ? tops[m.selector] : null }))
+    .filter((m) => m.top !== null)
+    .sort((a, b) => a.top - b.top);
+  const dropped = movers.length - positioned.length;
+  const groups = [];
+  for (const mover of positioned) {
+    const group = groups[groups.length - 1];
+    if (group && mover.top - group.anchorTop <= viewportHeight * 0.8) group.movers.push(mover);
+    else groups.push({ anchorTop: mover.top, anchor: mover.selector, movers: [mover] });
+  }
+  return { groups, dropped };
+}
+
+// One sampled capture per group, the sampler's own core (never a duplicate implementation).
+// Returns the per-run receipt entry; merged tracks land in `doc` (addTrack-deduped).
+async function autoSampleGroup(ctx, url, group, doc, warnings) {
+  const scopes = [...new Set(group.movers.map((m) => m.selector))];
+  const trigger = group.anchorTop > 0 ? `scroll-to:${group.anchor}` : "load";
+  const sctx = {
+    args: { fps: AUTO_SAMPLE_FPS, frames: AUTO_SAMPLE_FRAMES, navTimeout: Math.max(ctx.args.navTimeout, 60000), headful: !!ctx.args.headful },
+    acq: ctx.acq, viewport: ctx.viewport, url,
+    trigger: sampler.parseTrigger(trigger), scopes,
+    stepMs: 1000 / AUTO_SAMPLE_FPS, props: sampler.DENSE_PROPS,
+    captureSource: ctx.captureSource,
+  };
+  const run = await sampler.captureOnce(sctx);
+  const sampledDoc = motionDoc.fromSampled(run.record, { url, viewport: ctx.viewport, fps: AUTO_SAMPLE_FPS });
+  const sampling = sampledDoc.sampling;
+  sampling.ongoing = sampler.markOngoing(sampledDoc);
+  const lift = sampler.liftTier3Fits(sampledDoc, run.record);
+  for (const line of lift.log) console.log(`    ${line}`);
+  const sampledTrackIds = [];
+  for (const track of sampledDoc.tracks) {
+    const canonical = motionDoc.addTrack(doc, track);
+    // Additive, except the tie-break: a marquee on an ongoing track beats a finite fit
+    // (ongoing beats finite when ongoing:true — same rule as the sampler CLI).
+    const marqueeWins = track.fit && track.fit.kind === "marquee" && track.ongoing === true &&
+      canonical.fit && canonical.fit.kind !== "marquee";
+    if (track.fit && (!canonical.fit || marqueeWins)) canonical.fit = track.fit;
+    if (track.ongoing === true && canonical.ongoing !== true) canonical.ongoing = true;
+    sampledTrackIds.push(canonical.id);
+  }
+  console.log(`    ✓ sampled ${run.record.frames} frame(s) (${run.vtReceipt.mode}) — ${sampledTrackIds.length} track(s) merged, ${sampling.ongoing} ongoing${lift.receipt.reclassified.length ? `, ${lift.receipt.reclassified.length} re-classified marquee` : ""}`);
+  if (run.record.truncated) warnings.push(`auto-sample ${trigger}: the recorder hit a cap (200 elements / 2000 frames / 5000 writes) — the record is explicitly truncated`);
+  return {
+    trigger, scopes, fps: AUTO_SAMPLE_FPS, frames: run.record.frames, stepMs: sctx.stepMs,
+    virtualTime: run.vtReceipt, settle: run.settle,
+    recorder: { tracking: run.startInfo.tracking, truncated: !!run.record.truncated, writes: (run.record.writes || []).length },
+    sampling, determinism: { runs: 1 }, fit: lift.receipt, sampledTrackIds,
+  };
+}
+
+async function autoSampleOngoing(session, ctx, doc, warnings) {
+  const covered = new Set(doc.tracks.map((t) => t.target && t.target.selector).filter(Boolean));
+  const detect = await detectOngoingMotion(session, ctx, covered, warnings);
+  if (detect.note) { console.log(`  · ongoing-motion detect: ${detect.note}`); return { note: detect.note }; }
+  if (!detect.movers.length) {
+    console.log(`  · no unexplained ongoing motion (${detect.depthsProbed} scroll depth(s) probed)`);
+    return { detected: 0, depthsProbed: detect.depthsProbed };
+  }
+  if (detect.truncatedSweep) warnings.push(`ongoing-motion sweep stopped at ${DETECT_MAX_DEPTHS} depth(s) — deeper page regions were not probed`);
+  const selectors = detect.movers.map((m) => m.selector);
+  const tops = await cdp.evaluate(session, `(() => { const out = {}; for (const sel of ${JSON.stringify(selectors)}) { try { const el = document.querySelector(sel); if (el) out[sel] = Math.round(el.getBoundingClientRect().top + (window.scrollY || 0)); } catch (e) {} } return out; })()`, { awaitPromise: false, timeoutMs: READER_TIMEOUT_MS }) || {};
+  const { groups, dropped } = groupMoversByViewport(detect.movers, tops, ctx.viewport.height);
+  if (dropped) warnings.push(`${dropped} ongoing mover(s) vanished between detect and position read — not sampled`);
+  console.log(`  · ongoing motion no reader explains: ${detect.movers.length} element(s) in ${groups.length} viewport group(s) — sampling under the stepped clock (this adds minutes, receipted)`);
+  const runs = [];
+  const summary = { detected: detect.movers.length, depthsProbed: detect.depthsProbed, groups: groups.length, runs };
+  for (const group of groups.slice(0, AUTO_SAMPLE_MAX_RUNS)) {
+    try { runs.push(await autoSampleGroup(ctx, doc.url, group, doc, warnings)); }
+    catch (e) { warnings.push(`auto-sample of ${group.movers.length} mover(s) at ~${group.anchorTop}px failed (capture unaffected): ${firstLine(e)}`); }
+  }
+  if (groups.length > AUTO_SAMPLE_MAX_RUNS) warnings.push(`auto-sample capped at ${AUTO_SAMPLE_MAX_RUNS} run(s) — ${groups.length - AUTO_SAMPLE_MAX_RUNS} viewport group(s) not sampled this run`);
+  const receiptFile = path.join(WORK, "targets", ctx.args.name, "motion", "auto-sample.json");
+  fs.mkdirSync(path.dirname(receiptFile), { recursive: true });
+  fs.writeFileSync(receiptFile, JSON.stringify({
+    schema: "pingfusi/motion-sample@1", at: new Date().toISOString(),
+    target: ctx.args.name, item: "auto (capture-run)", url: doc.url, viewport: ctx.viewport,
+    detected: detect.movers, depthsProbed: detect.depthsProbed, runs,
+  }, null, 2) + "\n");
+  summary.receipt = `targets/${ctx.args.name}/motion/auto-sample.json`;
+  summary.tracks = runs.reduce((n, r) => n + r.sampledTrackIds.length, 0);
+  return summary;
+}
+
+// The whole motion phase. NEVER throws: any failure lands in `warnings` (receipted on the
+// side's entry in capture-run.json and printed), and the capture that already succeeded
+// stays succeeded. The doc itself is BUILT node-side from evaluated returns — page-supplied
+// strings only ever become JSON data, never filenames.
+async function captureMotion(session, ctx, { url, networkLog, warnings }) {
+  const summary = { warnings };
+  try {
+    const meta = { url, viewport: ctx.viewport };
+    const doc = motionDoc.emptyDoc(meta);
+
+    for (const reader of MOTION_READERS) {
+      let ret;
+      try { ret = await cdp.evaluate(session, `${reader.fn}()`, { timeoutMs: READER_TIMEOUT_MS }); }
+      catch (e) { warnings.push(`${reader.fn} failed (capture unaffected): ${firstLine(e)}`); continue; }
+      let records = readerRecords(reader.fn, ret, warnings);
+      if (!records) continue;
+      if (records.length > MAX_READER_RECORDS) {
+        warnings.push(`${reader.fn}: ${records.length} records capped at ${MAX_READER_RECORDS}`);
+        records = records.slice(0, MAX_READER_RECORDS);
+      }
+      // Records are page-derived data: converted one at a time so a single malformed
+      // record costs itself, not the whole source — refusals are receipted, never fatal.
+      let refused = 0, lastReason = "";
+      for (const record of records) {
+        try { for (const track of reader.convert([record], meta).tracks) motionDoc.addTrack(doc, track); }
+        catch (e) { refused++; lastReason = firstLine(e); }
+      }
+      if (refused) warnings.push(`${reader.fn}: ${refused}/${records.length} record(s) refused — last: ${lastReason}`);
+    }
+
+    // Engine-fitted traces, when a motion run already produced them: folded in as "fitted".
+    const motionRoot = path.join(WORK, "targets", ctx.args.name, "motion");
+    if (fs.existsSync(motionRoot)) {
+      for (const entry of fs.readdirSync(motionRoot).sort()) {
+        const fitsPath = path.join(motionRoot, entry, "trace", "fits.json");
+        if (!fs.existsSync(fitsPath)) continue;
+        try {
+          for (const track of motionDoc.fromEngineFit(JSON.parse(fs.readFileSync(fitsPath, "utf8")), meta).tracks) motionDoc.addTrack(doc, track);
+        } catch (e) { warnings.push(`engine-fit motion/${entry}/trace/fits.json refused: ${firstLine(e)}`); }
+      }
+    }
+
+    if (networkLog) doc.assets.push(...await ripAssets(session, networkLog, path.join(WORK, "targets", ctx.args.name), warnings));
+
+    // Unexplained ongoing motion → sampled tracks, in the same doc (its own try: a
+    // sampling failure costs the sampled tier, never the readers' tracks or the assets).
+    try { summary.sampled = await autoSampleOngoing(session, ctx, doc, warnings); }
+    catch (e) { warnings.push(`ongoing-motion auto-sample failed (capture unaffected): ${firstLine(e)}`); }
+
+    motionDoc.validateMotionDoc(doc); // belt over braces: converters + addTrack pre-validate
+    fs.writeFileSync(path.join(WORK, "targets", ctx.args.name, "motion-doc.json"), JSON.stringify(doc, null, 2));
+    summary.file = "motion-doc.json";
+    summary.tracks = doc.tracks.length;
+    summary.assets = doc.assets.length;
+    console.log(`  ✓ motion-doc.json (${doc.tracks.length} track(s), ${doc.assets.length} asset(s))`);
+  } catch (e) {
+    warnings.push(`motion capture failed — motion-doc.json not written: ${firstLine(e)}`);
+  }
+  for (const w of warnings) console.log(`  ⚠ motion: ${w}`);
+  return summary;
 }
 
 async function main() {
@@ -240,4 +641,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { parseArgs, FALLBACK, LADDER };
+module.exports = { parseArgs, FALLBACK, LADDER, moversFromDetectRecord, groupMoversByViewport };

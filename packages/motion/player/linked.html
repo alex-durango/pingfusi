@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synchronized motion comparison</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0d0d12; color: #e8e8ee; font: 15px/1.45 system-ui, sans-serif; }
+  header { padding: 16px 20px 6px; text-align: center; }
+  h1 { margin: 0; font-size: 18px; }
+  header p { margin: 5px 0 0; color: #a0a0ae; font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 1280px; margin: 0 auto; padding: 14px 20px; }
+  figure { margin: 0; min-width: 0; }
+  img { display: block; width: 100%; aspect-ratio: var(--aspect, auto); object-fit: contain; background: #000; border-radius: 10px; outline: 1px solid #292932; }
+  figcaption { padding-top: 7px; text-align: center; color: #c2c2cf; font-size: 13px; font-weight: 650; letter-spacing: .05em; }
+  .controls, .answers { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 6px 20px; }
+  button { border: 1px solid #383844; border-radius: 8px; padding: 8px 13px; background: #191920; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover, button.active { background: #30306e; border-color: #5555ba; }
+  input { width: min(520px, 60vw); accent-color: #7373f2; }
+  #clock { min-width: 10ch; color: #a0a0ae; font-variant-numeric: tabular-nums; font-size: 13px; }
+  .question { padding: 10px 20px 22px; text-align: center; }
+  #verdict { min-height: 1.4em; margin-top: 10px; color: #91e291; font-weight: 600; }
+  #error { margin: 16px auto; max-width: 720px; padding: 12px; color: #ff9d9d; text-align: center; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Which one is the TARGET motion?</h1>
+  <p>Both sides receive the same captured scroll input. One scrubber always advances them together.</p>
+</header>
+<main>
+  <figure><img id="left" alt="LEFT synchronized motion frame"><figcaption id="left-label">LEFT</figcaption></figure>
+  <figure><img id="right" alt="RIGHT synchronized motion frame"><figcaption id="right-label">RIGHT</figcaption></figure>
+</main>
+<div class="controls">
+  <button id="play">Pause</button>
+  <button id="restart">Restart</button>
+  <button class="speed active" data-speed="1">1×</button>
+  <button class="speed" data-speed="0.5">½×</button>
+  <button class="speed" data-speed="0.25">¼×</button>
+  <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="synchronized frame">
+  <span id="clock"></span>
+</div>
+<section class="question">
+  <div id="prompt"></div>
+  <div class="answers" id="answers"></div>
+  <div id="verdict"></div>
+</section>
+<div id="error" hidden></div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode') || '2afc';
+  const left = document.getElementById('left');
+  const right = document.getElementById('right');
+  const scrub = document.getElementById('scrub');
+  const clock = document.getElementById('clock');
+  const playButton = document.getElementById('play');
+  const restartButton = document.getElementById('restart');
+  const answers = document.getElementById('answers');
+  const verdict = document.getElementById('verdict');
+  let index = 0;
+  let playing = true;
+  let speed = 1;
+  let last = performance.now();
+  let carry = 0;
+  let task;
+  let activeSides;
+  let loading = false;
+  const pairCache = new Map();
+
+  function choose(label) {
+    for (const button of answers.querySelectorAll('button')) button.classList.toggle('active', button.textContent === label);
+    const answer = mode === 'diagnose' ? `${label} @ frame ${index + 1}` : label;
+    document.body.dataset.answer = answer;
+    document.body.dataset.answerFrame = String(index);
+    verdict.textContent = `Your answer: "${answer}" — submit exactly this in the task response.`;
+  }
+  function addAnswers(labels) {
+    answers.replaceChildren();
+    for (const label of labels) {
+      const button = document.createElement('button');
+      button.textContent = label;
+      button.addEventListener('click', () => choose(label));
+      answers.append(button);
+    }
+  }
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.decoding = 'async';
+      image.onload = async () => {
+        try {
+          if (typeof image.decode === 'function') await image.decode();
+          resolve(image);
+        } catch (error) {
+          reject(new Error(`could not decode ${url}: ${error.message}`));
+        }
+      };
+      image.onerror = () => reject(new Error(`could not load ${url}`));
+      image.src = url;
+    });
+  }
+  function loadPair(next) {
+    if (!pairCache.has(next)) {
+      const pending = Promise.all([
+        loadImage(activeSides.LEFT[next]),
+        loadImage(activeSides.RIGHT[next]),
+      ]).then(([leftImage, rightImage]) => ({ leftImage, rightImage })).catch((error) => {
+        pairCache.delete(next);
+        throw error;
+      });
+      pairCache.set(next, pending);
+    }
+    return pairCache.get(next);
+  }
+  function setLoading(next, value) {
+    loading = value;
+    scrub.disabled = value;
+    restartButton.disabled = value;
+    if (value) document.body.dataset.loadingFrame = String(next);
+    else delete document.body.dataset.loadingFrame;
+  }
+  function fail(error) {
+    const box = document.getElementById('error');
+    box.hidden = false;
+    box.textContent = `Could not load synchronized comparison: ${error.message}`;
+    playing = false;
+    playButton.textContent = 'Play';
+  }
+  async function show(next) {
+    if (!task || loading) return false;
+    const count = task.linked.frameCount;
+    const requested = ((next % count) + count) % count;
+    setLoading(requested, true);
+    carry = 0;
+    try {
+      const pair = await loadPair(requested);
+      // Both resources are fully loaded and decoded before either visible source
+      // changes. These synchronous DOM writes commit as one browser paint.
+      left.src = pair.leftImage.currentSrc || pair.leftImage.src;
+      right.src = pair.rightImage.currentSrc || pair.rightImage.src;
+      index = requested;
+      scrub.value = String(index);
+      clock.textContent = `${index + 1} / ${count}`;
+      document.body.dataset.frame = String(index);
+      return true;
+    } catch (error) {
+      fail(error);
+      return false;
+    } finally {
+      setLoading(requested, false);
+    }
+  }
+  function tick(now) {
+    if (playing && task && !loading) {
+      carry += now - last;
+      const interval = task.linked.frameMs / speed;
+      if (carry >= interval) {
+        carry = 0;
+        void show(index + 1);
+      }
+    } else if (loading) {
+      // A slow side must not create a catch-up burst once its pair is ready.
+      carry = 0;
+    }
+    last = now;
+    requestAnimationFrame(tick);
+  }
+
+  fetch('review-task.json', { cache: 'no-store' }).then((response) => {
+    if (!response.ok) throw new Error(`task returned HTTP ${response.status}`);
+    return response.json();
+  }).then((value) => {
+    if (value?.schema !== 'motion-kit/linked-task@1' || value?.linked?.schema !== 'motion-kit/linked-frames@1') {
+      throw new Error('this player needs a motion-kit/linked-task@1 bundle');
+    }
+    if (!Array.isArray(value.linked.sides?.LEFT) || value.linked.sides.LEFT.length !== value.linked.frameCount ||
+        !Array.isArray(value.linked.sides?.RIGHT) || value.linked.sides.RIGHT.length !== value.linked.frameCount) {
+      throw new Error('linked task has incomplete synchronized frame sides');
+    }
+    task = value;
+    activeSides = task.linked.sides;
+    scrub.max = String(task.linked.frameCount - 1);
+    const clip = task.linked.clip;
+    document.documentElement.style.setProperty('--aspect', `${clip.width} / ${clip.height}`);
+    if (mode === 'diagnose') {
+      // Orientation is deliberately absent from public task bytes. The filing wrapper
+      // reads private loop-state.json and adds this query only for a diagnosis round;
+      // the already-published 2AFC bundle therefore remains blind.
+      const targetSide = q.get('target-side');
+      if (targetSide !== 'LEFT' && targetSide !== 'RIGHT') {
+        throw new Error('diagnosis needs target-side=LEFT|RIGHT from the private filing wrapper');
+      }
+      activeSides = targetSide === 'LEFT'
+        ? task.linked.sides
+        : { LEFT: task.linked.sides.RIGHT, RIGHT: task.linked.sides.LEFT };
+      document.getElementById('left-label').textContent = 'TARGET';
+      document.getElementById('right-label').textContent = 'RE-CREATION';
+      document.getElementById('title').textContent = 'What differs in the RE-CREATION?';
+      document.getElementById('prompt').textContent = 'TARGET is the captured motion. Scrub to the clearest frame, then describe the RE-CREATION.';
+      addAnswers(task.vocabulary || ['other']);
+    } else {
+      document.getElementById('prompt').textContent = 'Choose the target motion. “can’t tell” is valid when the two sides are perceptually indistinguishable.';
+      addAnswers(['LEFT', 'RIGHT', "can't tell"]);
+    }
+    void show(0);
+    requestAnimationFrame(tick);
+  }).catch((error) => {
+    fail(error);
+  });
+
+  playButton.addEventListener('click', () => {
+    playing = !playing;
+    playButton.textContent = playing ? 'Pause' : 'Play';
+  });
+  restartButton.addEventListener('click', () => { carry = 0; void show(0); });
+  scrub.addEventListener('input', () => {
+    playing = false;
+    playButton.textContent = 'Play';
+    void show(Number(scrub.value));
+  });
+  for (const button of document.querySelectorAll('.speed')) {
+    button.addEventListener('click', () => {
+      speed = Number(button.dataset.speed);
+      document.querySelectorAll('.speed').forEach((item) => item.classList.toggle('active', item === button));
+    });
+  }
+})();
+</script>
+</body>
+</html>

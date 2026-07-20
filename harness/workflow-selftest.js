@@ -117,9 +117,16 @@ ok(run(["advance", NAME, "done"]).code === 1, "done refused while review phase i
 ok(runHq(["record", NAME, PING, "--approve", "Region identical"]).code === 0, "review-qa record adopts a filed ping");
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING}.json`), JSON.stringify({ status: "pending", n_received: 0, n_target: 1, responses: [] }));
 ok(run(["gate", NAME, "review"]).code === 1, "review gate blocks while the round is pending");
-fs.writeFileSync(path.join(MOCK, `get_test_results-${PING}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ verdict: "Region clearly different", notes: "logo sits low" }] }));
+fs.writeFileSync(path.join(MOCK, `get_test_results-${PING}.json`), JSON.stringify({
+  status: "complete", n_received: 1, n_target: 1,
+  responses: [{ verdict: "Region clearly different", notes: "logo sits low" }],
+  comments: [{ step_index: 0, text: "logo sits low", side: "draft", selector: "img.logo", target: "<img> logo" }],
+}));
 const rej = run(["gate", NAME, "review"]);
 ok(rej.code === 1 && /logo sits low/.test(rej.out), "review gate blocks on rejection and surfaces the reviewer's flag");
+// The gate reason is the FULL verify output, not just the first line — the reviewer's
+// structured ⌖ marks below the verdict line must reach an agent driving via gates.
+ok(/⌖ DRAFT · <img> logo \[img\.logo\]/.test(rej.out), "the gate passes verify's per-comment ⌖ blocks through, not only the verdict line");
 fs.writeFileSync(path.join(MOCK, `get_test_results-${PING}.json`), JSON.stringify({ status: "complete", n_received: 1, n_target: 1, responses: [{ verdict: "Region identical" }] }));
 ok(run(["advance", NAME, "review"]).code === 0, "reviewer advances on an approving verdict");
 
@@ -178,6 +185,34 @@ ok(run(["advance", NAME, "assets", "--evidence", "--force"]).code === 2, "--evid
   ok(run(["gate", NAME, "done"]).code === 1, "done gate honestly fails for a migrated workflow until review re-passes");
   fs.writeFileSync(statePath, saved);
   ok(run(["gate", NAME, "done"]).code === 0, "restored state passes done again");
+}
+
+// ── first-draft doctrine: motion receipts are informational — they NEVER block done ─────
+// (runs while the workflow is fully green; the manifest is removed after so later blocks
+// keep their baseline)
+{
+  const motionPath = path.join(dir, "motion-items.json");
+  writeJson("motion-items.json", {
+    schema: "pingfusi/motion-items@1",
+    items: [{ id: "belt", kind: "raf", status: "pending", declaredBy: "manual" }],
+  });
+  const withActive = run(["gate", NAME, "done"]);
+  ok(withActive.code === 0 && /belt \(pending\)/.test(withActive.out),
+    "an open (pending) motion receipt cannot block done — it rides along as an informational line");
+  const st = run(["status", NAME]);
+  ok(st.code === 0 && /motion advisory/.test(st.out) && /belt \(pending\)/.test(st.out),
+    "status surfaces the open motion receipt as an advisory line, not a blocker");
+  ok(run(["status", NAME, "--assert-done"]).code === 0,
+    "assert-done ignores motion receipts — motion checks are build receipts, never gates");
+  writeJson("motion-items.json", {
+    schema: "pingfusi/motion-items@1",
+    items: [{ id: "belt", kind: "raf", status: "verified-sampled", declaredBy: "manual" }],
+  });
+  const cited = run(["gate", NAME, "done"]);
+  ok(cited.code === 0 && /machine-verified/.test(cited.out),
+    "done's terminal receipt cites the machine-verified motion receipts informationally");
+  fs.rmSync(motionPath);
+  ok(run(["gate", NAME, "done"]).code === 0, "removing the manifest restores the green baseline");
 }
 
 // ── init never silently wipes state; resets are receipted; corruption recovers cleanly ──
