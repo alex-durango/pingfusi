@@ -7,7 +7,11 @@
 const fs = require("fs"), path = require("path");
 const [, , name, url, widthArg] = process.argv;
 if (!name || !url) { console.error("usage: node harness/new-target.js <name> <url> [width=1728]"); process.exit(1); }
-const width = +(widthArg || 1728);
+// Never let a malformed width into target.json: `+"default"` is NaN, and a NaN width
+// silently poisons every downstream gate that compares against it. The pingfusi
+// dispatcher refuses this too — this guard covers direct `node harness/new-target.js` runs.
+const width = widthArg === undefined || widthArg === "" ? 1728 : +widthArg;
+if (!Number.isFinite(width) || width <= 0) { console.error(`width must be a positive number of pixels, got "${widthArg}" — usage: node harness/new-target.js <name> <url> [width=1728]`); process.exit(1); }
 // targets/ live in the USER's current directory (WORK), not inside the installed kit (PKG).
 const WORK = process.cwd();
 const dir = path.join(WORK, "targets", name);

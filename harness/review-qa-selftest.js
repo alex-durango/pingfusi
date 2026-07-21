@@ -58,7 +58,7 @@ ok(spec.steps.every((s) => s.text.length <= 300), "every step honours the 300-ch
 // the build; the reviewer notes motion issues like any other observation.
 ok(!spec.review_contract && !spec.steps.some((s) => /ROUTING ONLY|Temporal difference observed/.test(s.text || "")), "the page round carries no motion routing probe and no review contract");
 ok(spec.steps.some((s) => /including motion that is missing, different, or mistimed/.test(s.text || "")), "the describe step invites motion observations as ordinary notes");
-ok(spec.n_target === 5, "full review templates default to the standard 5-result depth");
+ok(spec.n_target === 1, "full review templates default to one reviewer");
 {
   const quick = JSON.parse(run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--results", "1"]).out);
   const deep = JSON.parse(run(["template", NAME, "--draft", "https://x.trycloudflare.com", "--results", "20"]).out);
@@ -214,10 +214,10 @@ ok(staticMovedFiling.code === 0 && /filed diagnostic round/.test(staticMovedFili
 const layoutDiagnostic = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--diagnostic", "--region", "the header grid", "--ask", "Are the margins and column alignment correct?"]);
 ok(layoutDiagnostic.code === 0 && /filed diagnostic round/.test(layoutDiagnostic.out) && !/⚠ the requested/.test(layoutDiagnostic.out), "a layout-only scoped diagnostic files without any temporal warning");
 fs.writeFileSync(path.join(MOCK, "request_review.json"), JSON.stringify({ ping_id: PING1, status: "pending" }));
-const f = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the header"]);
+const f = run(["file", NAME, "--draft", "https://x.trycloudflare.com", "--region", "the header", "--results", "5"]);
 ok(f.code === 0 && f.out.includes(PING1), "file records round 1 with the returned ping_id");
 const hq1 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-ok(hq1.rounds.length === 1 && hq1.rounds[0].ping_id === PING1 && hq1.rounds[0].n_target === 5 && hq1.rounds[0].approve_verdicts.length === 1, "review-qa.json round 1 persists its 5-result target");
+ok(hq1.rounds.length === 1 && hq1.rounds[0].ping_id === PING1 && hq1.rounds[0].n_target === 5 && hq1.rounds[0].approve_verdicts.length === 1, "review-qa.json round 1 persists its explicit 5-result target");
 
 // ── verify: pending → 1, comment-only → 1, rejected → 1 with flag, approved → 0 ──
 // Mocks use the REAL pingfusi response schema (verified empirically 2026-07-02):

@@ -196,7 +196,7 @@ function report(checks) {
     return 1;
   }
   console.log(`\n✓ ready. Teach your agent next (once): pingfusi agent-setup
-  then just ask it: "Clone https://example.com pixel-perfect."`);
+  then ask it to clone, fix, or beautify a page — or review a video — with pingfusi.`);
   return 0;
 }
 

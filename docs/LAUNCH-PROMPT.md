@@ -13,7 +13,7 @@ the CURRENT working directory (`targets/<name>/`).
 
 Your task: follow the kit's one-shot template at <KIT>/docs/CLONE-ANY-SITE.md with these values:
 - {{URL}} = <the page to replicate>
-- {{WIDTH}} = <fixed measurement viewport width, e.g. 1512>
+- {{WIDTH}} = <fixed measurement viewport width, e.g. 1728 (the kit default)>
 - {{NAME}} = <target name, e.g. acme>
 
 The template names the docs to read first (docs/PLAYBOOK.md, tools/RUNBOOK.md, docs/LEARNINGS.md,

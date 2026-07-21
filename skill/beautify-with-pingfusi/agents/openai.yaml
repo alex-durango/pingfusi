@@ -1,0 +1,4 @@
+interface:
+  display_name: "Beautify with pingfusi"
+  short_description: "Polish websites through human review loops"
+  default_prompt: "Use $beautify-with-pingfusi to turn this plain page into a polished, review-approved design."

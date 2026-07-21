@@ -44,15 +44,19 @@
 //       urls are appended automatically when tunnel.json/target.json exist.
 //   node harness/review-qa.js poll-result <name> <ping_id>
 //       free re-fetch of a pending poll's answers
-//   node harness/review-qa.js assist   <name> [--phase <key>] [--ask "…"] [--compare [--results 1..20]]
+//   node harness/review-qa.js assist   <name> --compare [--phase <key>] [--ask "…"] [--results 1..20]
 //       the STALL escalation (`pingfusi assist`): composes a reviewer question FROM the
 //       failing phase's own artifacts (worst failing diff row, uncovered leaf, behavior
-//       row) and files it — a 1-result one-sided micro-poll by default, or with --compare a
-//       SCOPED DIAGNOSTIC ROUND (side-by-side compare UI; 5 results by default; recorded in
-//       hq.diagnostics so it can never satisfy the review gate). At most ONE open assist
-//       per target; filing appends an `assist` receipt to workflow.jsonl, which is what
-//       resets the stall streak. Refuses phases a reviewer can't help with (mechanical
-//       artifacts, environment-shaped behavior failures → pingfusi behavior-capture).
+//       row) and files a SCOPED DIAGNOSTIC ROUND (side-by-side compare UI; 1 result by
+//       default; recorded in hq.diagnostics so it can never satisfy the review gate).
+//       --compare is REQUIRED: the text-only micro-poll format is retired (2026-07-20) —
+//       a live reviewer's reply to one was "I don't understand. Send a comparison"; bare
+//       assist refuses with that nudge. The RECORDED draft.json is reused after its served
+//       bytes re-verify — a re-push is demanded only when no draft exists or it went stale.
+//       At most ONE open assist per target; filing appends an `assist` receipt to
+//       workflow.jsonl, which is what resets the stall streak. Refuses phases a reviewer
+//       can't help with (mechanical artifacts, environment-shaped behavior failures →
+//       pingfusi behavior-capture).
 //   node harness/review-qa.js assist-result <name> <ping_id>
 //       free re-fetch of a diagnostic round's answers (poll assists use poll-result)
 //   node harness/review-qa.js file <name> --diagnostic --region "the …" [--ask "…"] [--results 1..20]
@@ -67,19 +71,22 @@
 "use strict";
 
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
-const crypto = require("crypto");
-const { fileURLToPath } = require("url");
 const { activeMotionItems, readMotionItems, unownedMotionCandidates } = require("./motion-items.js");
+// The generic service verbs live in packages/core (2026-07-20 core extraction):
+// wire.js owns the transport (rpc/resolveToken/BASE + the cpyany_* wire remap + the
+// service caps), rounds.js owns round records + the comment envelope + verdict
+// handling, ping.js the one-question poll verb. This file keeps the CLONING pipeline
+// pieces — spec generation from coverage/receipts, gate integration, motion routing,
+// and the CLI — and re-exports the shared names so existing importers stay put.
+const { rpc, resolveToken, BASE, DEFAULT_REVIEW_RESULTS, MAX_REVIEW_RESULTS } = require("../packages/core/wire.js");
+const core = require("../packages/core/rounds.js");
+const { ping: corePing, pingResult: corePingResult } = require("../packages/core/ping.js");
 
 const WORK = process.cwd();
 const targetDir = (name) => path.join(WORK, "targets", name);
 const hqPath = (name) => path.join(targetDir(name), "review-qa.json");
 const readJson = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
-const BASE = process.env.PPK_PINGHUMANS_URL || process.env.PINGFUSI_APP_URL || process.env.PINGHUMANS_APP_URL || "https://pingfusi.com";
-const DEFAULT_REVIEW_RESULTS = 5;
-const MAX_REVIEW_RESULTS = 20;
 
 function parseReviewResults(args) {
   const i = args.indexOf("--results");
@@ -99,69 +106,8 @@ function parseReviewResults(args) {
   return n;
 }
 
-function resolveToken() {
-  // explicit empty = "behave as if no login exists" (selftests; deliberate opt-out)
-  if (process.env.PINGFUSI_TOKEN === "" || process.env.PPK_PINGHUMANS_TOKEN === "") return null;
-  if (process.env.PINGFUSI_TOKEN) return process.env.PINGFUSI_TOKEN;
-  if (process.env.PPK_PINGHUMANS_TOKEN) return process.env.PPK_PINGHUMANS_TOKEN;
-  // login writes {token}; read the current dir first, legacy dirs after (no re-login on upgrade)
-  for (const dir of ["pingfusi", "pinghumans", "cpyany"]) {
-    try {
-      const t = readJson(path.join(os.homedir(), ".config", dir, "credentials.json")).token;
-      if (t) return t;
-    } catch (e) {}
-  }
-  try {
-    const cfg = readJson(path.join(os.homedir(), ".claude.json"));
-    const s = cfg.mcpServers || {};
-    const entry = s.pingfusi || s.cpyany || s.pinghumans;
-    const m = /Bearer\s+(\S+)/.exec((entry && entry.headers && (entry.headers.Authorization || entry.headers.authorization)) || "");
-    if (m) return m[1];
-  } catch (e) {}
-  return null;
-}
-
-// One JSON-RPC tools/call against the review MCP-over-HTTP endpoint (the same transport
-// `pingfusi wait` uses). file:// base → canned responses from disk:
-//   get_test_results-<ping_id>.json / request_review.json
-//
-// The LIVE api/mcp endpoint's tools/list exposes these under the service's own namespace
-// (`cpyany_test`, `cpyany_test_results`), not the generic names this file uses
-// internally — confirmed empirically: a live call with the generic name fails with
-// "Tool not found" even with a valid token, while `tools/list` on the same endpoint
-// returns `cpyany_test`/`cpyany_test_results`/`cpyany_poll`/`cpyany_poll_results`/
-// `cpyany_wait`/`cpyany_check_source`. Kept the internal names (and the file:// fixture
-// filenames / selftest) unchanged — only the wire method name sent to the LIVE endpoint
-// is remapped, right before the fetch.
-const LIVE_TOOL_NAME = { request_review: "cpyany_test", get_test_results: "cpyany_test_results", quick_poll: "cpyany_poll", get_ping: "cpyany_poll_results" };
-async function rpc(name, args, timeoutMs) {
-  if (BASE.startsWith("file://")) {
-    const dir = fileURLToPath(BASE);
-    const f = name === "get_test_results" ? `get_test_results-${args.ping_id}.json`
-      : name === "get_ping" ? `get_ping-${args.ping_id}.json`
-      : `${name}.json`;
-    return readJson(path.join(dir, f));
-  }
-  const token = resolveToken();
-  if (!token) throw new Error("no review login — run `pingfusi setup`, or set PINGFUSI_TOKEN");
-  const wireName = LIVE_TOOL_NAME[name] || name;
-  const res = await fetch(`${BASE}/api/mcp`, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: wireName, arguments: args } }),
-    // quick_poll blocks server-side while a reviewer answers (up to ~300s) — callers pass a
-    // matching timeout; everything else keeps the snappy default.
-    signal: AbortSignal.timeout(timeoutMs || 20_000),
-  });
-  const raw = await res.text();
-  const m = raw.match(/data: (.*)/);
-  const payload = JSON.parse(m ? m[1] : raw);
-  if (payload.error) throw new Error(payload.error.message || "MCP error");
-  const r = payload.result || {};
-  if (r.isError) throw new Error((r.content && r.content[0] && r.content[0].text) || "the review service returned an error");
-  if (r.structuredContent) return r.structuredContent;
-  try { return JSON.parse(r.content[0].text); } catch (e) { throw new Error("unexpected RPC response shape"); }
-}
+// resolveToken() and rpc() (with the cpyany_* LIVE wire remap and the file:// canned
+// transport) moved verbatim to packages/core/wire.js — imported and re-exported above.
 
 // ── the scope-pinned review template ─────────────────────────────────────────
 const slugToWords = (s) => s.replace(/[_-]+/g, " ").trim();
@@ -348,26 +294,11 @@ function buildSpec(name, draftUrl, region, changelog, context, nTarget = DEFAULT
 }
 
 // ── round state ───────────────────────────────────────────────────────────────
-const loadHq = (name) => (fs.existsSync(hqPath(name)) ? readJson(hqPath(name)) : { rounds: [] });
-const saveHq = (name, hq) => fs.writeFileSync(hqPath(name), JSON.stringify(hq, null, 2) + "\n");
-
-function pushRound(name, ping_id, spec, approve) {
-  const hq = loadHq(name);
-  hq.rounds.push({
-    ping_id,
-    draft_url: (spec && spec.draft_url) || null,
-    region: (spec && spec.title) || null,
-    n_target: (spec && spec.n_target) || null,
-    approve_verdicts: approve,
-    verdict_options: (spec && spec.verdict_options) || null,
-    review_contract: (spec && spec.review_contract) || null,
-    filed_at: new Date().toISOString(),
-    last: null,
-    checked_at: null,
-  });
-  saveHq(name, hq);
-  return hq.rounds.length;
-}
+// Record shape + primitives live in packages/core/rounds.js; the kit binds them to
+// targets/<name>/review-qa.json here — core never knows about targets/.
+const loadHq = (name) => core.loadRounds(hqPath(name));
+const saveHq = (name, hq) => core.saveRounds(hqPath(name), hq);
+const pushRound = (name, ping_id, spec, approve) => core.pushRound(hqPath(name), ping_id, spec, approve);
 
 // INFORMATIONAL ONLY (first-draft doctrine): motion bookkeeping never blocks a review
 // round. This summarizes the motion receipts into a warning string the filing path
@@ -392,122 +323,19 @@ function reviewMotionRequirement(name) {
   return { ok: true, advisory: advisories.join("; ") || null };
 }
 
-function sha256Json(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
+const sha256Json = core.sha256Json;
 
 // ── align-delta parsing ───────────────────────────────────────────────────────
-// An alignment "move" comment carries its numbers ONLY inside the app's alignText
-// prose ("Alignment (measured at 1512px-wide viewport; element is 200×48px): this
-// element should move -4px right, 12px down and scale ×1.05 to match the original.").
-// Parse them back out, tolerantly: right/down are the canonical signed axes, but
-// left/up variants negate; scale accepts × or x. NEVER guess — a field that doesn't
-// parse is null, and if none of tx/ty/scale parse the whole result is null (the
-// verbatim prose is still shown to the agent either way).
-function parseAlignDeltas(text) {
-  const s = String(text || "");
-  const mx = /(-?\d+(?:\.\d+)?)\s*px\s+(right|left)\b/i.exec(s);
-  const my = /(-?\d+(?:\.\d+)?)\s*px\s+(down|up)\b/i.exec(s);
-  const ms = /scale\s*[×x]\s*(-?\d+(?:\.\d+)?)/i.exec(s);
-  const mv = /measured\s+at\s+(\d+(?:\.\d+)?)\s*px[- ]wide\s+viewport/i.exec(s);
-  const tx = mx ? parseFloat(mx[1]) * (/left/i.test(mx[2]) ? -1 : 1) : null;
-  const ty = my ? parseFloat(my[1]) * (/up/i.test(my[2]) ? -1 : 1) : null;
-  const scale = ms ? parseFloat(ms[1]) : null;
-  if (tx === null && ty === null && scale === null) return null;
-  return { tx, ty, scale, viewportW: mv ? parseFloat(mv[1]) : null };
-}
+// parseAlignDeltas moved verbatim to packages/core/rounds.js (tolerant, direction-
+// aware, never guessing — the full contract lives with the code); re-exported below.
+const parseAlignDeltas = core.parseAlignDeltas;
 
 // ── the per-comment readback ──────────────────────────────────────────────────
-// The verdict line says WHETHER the round passed; these blocks say WHAT the reviewer
-// actually marked. The compare tools post rich structured marks (side, selector,
-// target label, op, a drawn annotation whose points are 0..1 fractions of the anchor
-// element's box, the measuring viewport, the element rect, the dual-anchor `other`
-// element) — printing only the verdict threw all of that away and the agent flew
-// blind on exactly the feedback it paid a round for. Printed on ALL THREE response
-// outcomes — approval (approved rounds still carry notes worth reading), rejection,
-// AND the no-verdict-pick failure (the comments are the ONLY feedback that state
-// has). One block per comment:
-//   ⌖ DRAFT · <target> [<selector>] — <op/shape hint> — "<text>" (step N)
-//      region: x[10%–48%] y[5%–20%] of the element (viewport 1512×982)
-//      align: move 4px left, 12px down, scale ×1.05 (measured at 1512px)
-//      other side: <label>
-//      measured elements under the mark: <slug>, <slug>
-// The last line is a pure read of the existing snapshots (live.json for a mark on the
-// original, clone.json for one on the draft): leaves whose measured boxes intersect
-// the comment's rect, most-covered first — it names the kit's own slugs for the spot
-// the reviewer marked, so the agent can jump straight to the diff rows.
-function printCommentBlocks(name, comments, log) {
-  if (!Array.isArray(comments) || !comments.length) return;
-  const snapshots = {};
-  const snapshotFor = (side) => {
-    const file = side === "original" ? "live.json" : side === "draft" ? "clone.json" : null;
-    if (!file) return null;
-    if (!(file in snapshots)) {
-      try { snapshots[file] = readJson(path.join(targetDir(name), file)); } catch (e) { snapshots[file] = null; }
-    }
-    return snapshots[file];
-  };
-  const finiteRect = (r) => r && ["x", "y", "w", "h"].every((k) => Number.isFinite(r[k]));
-  const overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) *
-    Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-  for (const c of comments) {
-    if (!c || typeof c !== "object") continue;
-    const hint = [];
-    if (c.op) hint.push(String(c.op));
-    if (c.kind && c.kind !== c.op) hint.push(String(c.kind));
-    const points = (c.annotation && Array.isArray(c.annotation.points))
-      ? c.annotation.points.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]))
-      : [];
-    if (c.annotation && c.annotation.shape) hint.push(`drawn ${c.annotation.shape}`);
-    else if (points.length) hint.push("drawn mark");
-    let head = `  ⌖ ${c.side ? String(c.side).toUpperCase() : "NOTE"} · ${c.target || c.selector || "(unanchored)"}`;
-    if (c.selector) head += ` [${c.selector}]`;
-    head += ` — ${hint.join(" + ") || "note"} — "${c.text || ""}"`;
-    if (c.step_index != null) head += ` (step ${c.step_index})`;
-    log(head);
-    if (points.length) {
-      // annotation points are 0..1 fractions of the anchored element's box — the bbox
-      // says WHICH SUB-REGION of the element the reviewer marked.
-      const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
-      const pct = (v) => `${Math.round(v * 100)}%`;
-      let line = `     region: x[${pct(Math.min(...xs))}–${pct(Math.max(...xs))}] y[${pct(Math.min(...ys))}–${pct(Math.max(...ys))}] of the element`;
-      if (c.viewport && Number.isFinite(c.viewport.w) && Number.isFinite(c.viewport.h)) line += ` (viewport ${c.viewport.w}×${c.viewport.h})`;
-      log(line);
-    }
-    if (c.alignDeltas) {
-      const d = c.alignDeltas;
-      const dir = (v, pos, neg) => `${Math.abs(v)}px ${v < 0 ? neg : pos}`;
-      const parts = [];
-      const move = [];
-      if (d.tx !== null && d.tx !== undefined) move.push(dir(d.tx, "right", "left"));
-      if (d.ty !== null && d.ty !== undefined) move.push(dir(d.ty, "down", "up"));
-      if (move.length) parts.push(`move ${move.join(", ")}`);
-      if (d.scale !== null && d.scale !== undefined) parts.push(`scale ×${d.scale}`);
-      log(`     align: ${parts.join(", ")}${d.viewportW ? ` (measured at ${d.viewportW}px)` : ""}`);
-    }
-    if (c.other && (c.other.label || c.other.selector)) {
-      log(`     other side: ${c.other.label || "(unlabeled)"}${c.other.selector ? ` [${c.other.selector}]` : ""}`);
-    }
-    // Element cross-check — a pure read of the existing snapshot for the comment's
-    // side. Only when the geometry is actually comparable: same viewport width the
-    // capture was measured at, else the px coordinates mean different layouts.
-    if (c.selector && finiteRect(c.rect) && c.viewport && Number.isFinite(c.viewport.w)) {
-      const snap = snapshotFor(c.side);
-      if (snap && snap.elements && snap.viewport && Number.isFinite(snap.viewport.width)) {
-        if (snap.viewport.width !== c.viewport.w) {
-          log(`     (viewport differs from capture width — skipping element match)`);
-        } else {
-          const hits = Object.entries(snap.elements)
-            .filter(([, e]) => e && e.present && finiteRect(e.rect) && overlap(e.rect, c.rect) > 0)
-            .map(([slug, e]) => ({ slug, share: overlap(e.rect, c.rect) / Math.max(1, e.rect.w * e.rect.h) }))
-            .sort((a, b) => b.share - a.share)
-            .slice(0, 5);
-          if (hits.length) log(`     measured elements under the mark: ${hits.map((h) => h.slug).join(", ")}`);
-        }
-      }
-    }
-  }
-}
+// The ⌖ blocks moved verbatim to packages/core/rounds.js (printed on ALL THREE
+// response outcomes — approval, rejection, AND no-verdict-pick; the full WHY lives
+// with the code). The kit binds the snapshot cross-check to targets/<name>/ here:
+// core reads live.json/clone.json from whatever directory the caller passes.
+const printCommentBlocks = (name, comments, log) => core.printCommentBlocks(targetDir(name), comments, log);
 
 // ── diagnostic rounds — a scoped "what differs here?" compare, mid-pipeline ────
 // A diagnostic round exists to surface the UNKNOWN flag while gates are still red — the
@@ -545,13 +373,7 @@ function buildDiagnosticSpec(name, draftUrl, region, ask, nTarget = DEFAULT_REVI
   };
 }
 
-function pushDiagnostic(name, ping_id, spec, region, assistMeta) {
-  const hq = loadHq(name);
-  hq.diagnostics = hq.diagnostics || [];
-  hq.diagnostics.push({ ping_id, kind: "diagnostic", region, draft_url: (spec && spec.draft_url) || null, n_target: (spec && spec.n_target) || null, filed_at: new Date().toISOString(), deadline_seconds: (spec && spec.deadline_seconds) || 86400, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) });
-  saveHq(name, hq);
-  return hq.diagnostics.length;
-}
+const pushDiagnostic = (name, ping_id, spec, region, assistMeta) => core.pushDiagnostic(hqPath(name), ping_id, spec, region, assistMeta);
 
 // ── assist — compose the reviewer question FROM the failing phase's artifacts ──
 // The stall detector (workflow.js) says WHEN to ask; this says WHAT. Every composed
@@ -733,10 +555,9 @@ function pollReport(name, hq, sc, entry) {
 
 // File one micro-poll (shared by `poll` and `assist`): targets 1 completed result (up to
 // 1 credit); the server blocks up to ~300s, so an answer often arrives inside the call.
+// The wire verb is packages/core/ping.js; the kit adds the draft/original url context.
 async function fileMicroPoll(name, hq, question, choices, assistMeta) {
-  const args_ = { question: question + pollContext(name), n_target: 1, deadline_seconds: 3600 };
-  if (choices && choices.length) args_.choices = choices;
-  const sc = await rpc("quick_poll", args_, 320_000);
+  const sc = await corePing(question + pollContext(name), { choices });
   const entry = { ping_id: sc.ping_id || null, question, n_target: 1, asked_at: new Date().toISOString(), deadline_seconds: 3600, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) };
   hq.polls = hq.polls || [];
   hq.polls.push(entry);
@@ -825,6 +646,28 @@ async function main() {
     } else if (cmd === "file" && diagnostic) {
       console.error("⚠ --diagnostic: scoped diagnostic round — advisory; it buys a description, never the review gate");
     }
+    // PAINT GUARD (BLACK-PAGE GREEN — LEARNINGS #37): never burn a reviewer round on a
+    // draft that paints nothing. capture-run's paint probe screenshots BOTH sides and
+    // receipts a warning on the run when the clone is near-uniform while live is rich
+    // (bizar.ro: the DOM skeleton passed visual 1236/1236, the published draft rendered
+    // SOLID BLACK, and the round's one answer was "cannot see any draft"). This guard
+    // reads that RECEIPT — no re-measurement here — and applies to diagnostic rounds too:
+    // a reviewer who can see nothing can describe nothing. --anyway overrides WITH a
+    // receipt on the round (a deliberate call, e.g. a scoped region the canvas never
+    // covered); no capture-run.json (adopted/interactive builds) means nothing to guard on.
+    let paintOverride = null;
+    if (cmd === "file") {
+      let paintWarning = null;
+      try { paintWarning = readJson(path.join(targetDir(name), "capture-run.json")).paint.warning; } catch (e) {}
+      if (paintWarning) {
+        if (!args.includes("--anyway")) {
+          console.error(`❌ refusing to file — the capture receipt says ${paintWarning}\n   A reviewer opening this round sees a blank page and the round is burned. Fix the draft's rendering and re-run: pingfusi capture-run ${name}. For a canvas-painted site the honest moves are scoping the round to a region the canvas doesn't cover, or accepting the capability limit. Deliberately filing anyway: --anyway (receipted on the round).`);
+          process.exit(1);
+        }
+        paintOverride = { warning: paintWarning, at: new Date().toISOString() };
+        console.error("⚠ --anyway: filing over the paint probe's near-blank receipt — recorded on the round as paint_override");
+      }
+    }
     // Local review mode is GONE (removed 2026-07-10): the independent reviewer on the
     // review service is the only path — an operator-trusted local verdict was a forgeable
     // downgrade and confused the product story. A round is always answered by a reviewer
@@ -834,13 +677,14 @@ async function main() {
       process.exit(1);
     }
     let draft = opt("--draft");
+    let tunnelDraft = null;
     // Default --draft to the HOSTED draft this target RECORDED (harness/draft.js push
     // writes it only after byte-verifying the served bytes), then to a verified tunnel
     // (adopted builds — a live dev server can't be pushed as static files).
     const dp = path.join(targetDir(name), "draft.json");
     const tp = path.join(targetDir(name), "tunnel.json");
     if (!draft && fs.existsSync(dp)) draft = readJson(dp).url;
-    if (!draft && fs.existsSync(tp)) draft = readJson(tp).url;
+    if (!draft && fs.existsSync(tp)) { tunnelDraft = readJson(tp); draft = tunnelDraft.url; }
     if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
       console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.");
       process.exit(1);
@@ -863,17 +707,33 @@ async function main() {
         : await require("./tunnel.js").verifyServes(draft, idx);
       if (!v.ok && /unreachable|HTTP \d+/.test(v.reason)) { console.error(`❌ refusing to file — draft url is not serving: ${v.reason}`); process.exit(1); }
       if (!v.ok) console.error(`⚠ ${v.reason} — filing anyway (expected only when the draft is not the standalone clone)`);
+    } else if (tunnelDraft) {
+      // Adopted builds have no clone/index.html to byte-compare. Their tunnel record is
+      // still only a historical fact, so repeat the same non-trivial-page reachability
+      // probe used at tunnel creation before spending a review round.
+      const v = await require("./tunnel.js").probeUrl(draft);
+      if (!v.ok) { console.error(`❌ refusing to file — adopted draft url is not serving: ${v.reason}`); process.exit(1); }
     }
     const { approve_verdicts, review_contract, ...toolArgs } = spec;
     void review_contract; // local routing contract; the existing backend schema is unchanged
     const r = await rpc("request_review", toolArgs);
     if (!r.ping_id) throw new Error("filing returned no ping_id");
+    // The paint-override receipt lands ON the round it excused — anyone reading
+    // review-qa.json later sees the round was filed over a near-blank draft on purpose.
+    const receiptPaintOverride = () => {
+      if (!paintOverride) return;
+      const hq2 = loadHq(name);
+      const list = diagnostic ? hq2.diagnostics : hq2.rounds;
+      if (list && list.length) { list[list.length - 1].paint_override = paintOverride; saveHq(name, hq2); }
+    };
     if (diagnostic) {
       pushDiagnostic(name, r.ping_id, spec, opt("--region"), null);
+      receiptPaintOverride();
       console.log(`✓ filed diagnostic round — ping ${r.ping_id} (scoped to ${opt("--region")}; target ${nTarget} result${nTarget === 1 ? "" : "s"}, up to ${nTarget} credit${nTarget === 1 ? "" : "s"})\n  advisory: it buys a description, never the review gate.\n  check (free): node harness/review-qa.js assist-result ${name} ${r.ping_id}`);
       return;
     }
     const round = pushRound(name, r.ping_id, spec, approve_verdicts);
+    receiptPaintOverride();
     console.log(`✓ filed round ${round} — ping ${r.ping_id} (target ${nTarget} result${nTarget === 1 ? "" : "s"}, up to ${nTarget} credit${nTarget === 1 ? "" : "s"})\n  approve verdict: "${approve_verdicts[0]}"\n  gate: node harness/workflow.js gate ${name} review   (or: node harness/review-qa.js verify ${name})\n  wake on result: pingfusi wait ${r.ping_id}`);
     return;
   }
@@ -898,34 +758,13 @@ async function main() {
       process.exit(1);
     }
     const sc = await rpc("get_test_results", { ping_id: round.ping_id });
-    // Real response schema (verified empirically): the verdict pick is `choice`, prose is
-    // `free_text`; older/other shapes may use `verdict`/`notes` — accept both.
+    // The semantic response/comment envelope (choice/free_text schema tolerance; the
+    // WHOLE structured compare-tool envelope persisted VERBATIM, alignDeltas derived)
+    // moved verbatim to packages/core/rounds.js — a field dropped there is a
+    // reviewer's mark the agent never sees.
     const requestedTarget = round.n_target || sc.n_target || 1;
-    const semanticResponses = (sc.responses || []).map((r) => ({
-      verdict: r.choice != null ? r.choice : (r.verdict != null ? r.verdict : null),
-      notes: r.free_text || r.notes || r.comment || null,
-      steps_result: Array.isArray(r.steps_result) ? r.steps_result : [],
-    }));
-    // Persist the WHOLE structured envelope the compare tools post (side, selector,
-    // target label, op move/delete, the drawn annotation with its 0..1 points kept
-    // VERBATIM, viewport, rect, dual-anchor other, kind/position from newer app
-    // builds) — every field absent-tolerant, because older rounds carry text-only
-    // comments. A field dropped here is a reviewer's mark the agent never sees.
-    // `alignDeltas` is derived: the tx/ty/scale a "move" comment carries only inside
-    // its prose, parsed by parseAlignDeltas (null when unparseable — never guessed).
-    const semanticComments = (Array.isArray(sc.comments) ? sc.comments : []).map((comment) => {
-      const kept = {
-        step_index: comment.step_index,
-        text: comment.text || null,
-        text_sha256: comment.text ? crypto.createHash("sha256").update(String(comment.text)).digest("hex") : null,
-      };
-      for (const key of ["side", "selector", "target", "op", "kind", "annotation", "viewport", "rect", "other", "position"]) {
-        if (comment[key] !== undefined && comment[key] !== null) kept[key] = comment[key];
-      }
-      const alignDeltas = parseAlignDeltas(comment.text);
-      if (alignDeltas) kept.alignDeltas = alignDeltas;
-      return kept;
-    });
+    const semanticResponses = core.semanticResponsesOf(sc);
+    const semanticComments = core.semanticCommentsOf(sc);
     round.last = {
       status: sc.status,
       n_received: sc.n_received,
@@ -979,8 +818,6 @@ async function main() {
     // ITSELF (the last step, the one that asks for the pick), and equal a declared approve verdict
     // exactly. A comment anywhere else, or prose that merely sounds approving ("looks good"),
     // still fails — as it must.
-    const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
-    const verdictStepIndex = Math.max(0, ((sc.responses || [])[0]?.steps_result || []).length - 1);
     // A verdict TAPPED on the verdict step: the step carries the verdict strings as
     // `options` precisely because option-bearing STEPS render as pickers in today's app
     // while the round-level button does not (update pending). A tapped option is the
@@ -988,30 +825,17 @@ async function main() {
     // "clearly different" is a verdict, not a missing one), matched exactly against the
     // round's own declared list, receipted as verdict_step_answer so it is never mistaken
     // for a round-level pick. Remove with the free-text bridge below once the real button
-    // ships.
+    // ships. (Both exact-match mechanisms live in packages/core/rounds.js.)
+    const verdictStepIndex = core.verdictStepIndexOf(sc);
     const allVerdicts = round.verdict_options || round.approve_verdicts || [];
-    let answerMatched = 0;
-    (sc.responses || []).forEach((raw, i) => {
-      const r = resp[i];
-      if (!r || r.verdict != null) return;
-      const ans = norm((((raw || {}).steps_result || [])[verdictStepIndex] || {}).answer);
-      if (!ans) return;
-      const hit = allVerdicts.find((v) => norm(v) === ans);
-      if (hit) { r.verdict = hit; r.verdict_source = "verdict_step_answer"; answerMatched++; }
-    });
+    const answerMatched = core.applyVerdictStepAnswers(sc, resp, allVerdicts, verdictStepIndex);
     if (answerMatched) {
       round.verdict_source = "verdict_step_answer";
       saveHq(name, hq);
       console.log(`⚠ round ${n}: ${answerMatched} verdict(s) came from the verdict STEP's option pick — the round-level button still doesn't render (app update pending); receipted as verdict_step_answer, never as a real pick.`);
     }
     const comments = Array.isArray(sc.comments) ? sc.comments : [];
-    let freeTextMatched = 0;
-    for (const r of resp) {
-      if (r.verdict != null) continue;
-      const onVerdictStep = comments.filter((c) => c.step_index === verdictStepIndex).map((c) => norm(c.text));
-      const hit = (round.approve_verdicts || []).find((v) => onVerdictStep.includes(norm(v)));
-      if (hit) { r.verdict = hit; r.verdict_source = "free_text_exact_match"; freeTextMatched++; }
-    }
+    const freeTextMatched = core.applyFreeTextVerdicts(resp, comments, round.approve_verdicts, verdictStepIndex);
     if (freeTextMatched) {
       round.verdict_source = "free_text_exact_match";
       saveHq(name, hq);
@@ -1054,7 +878,7 @@ async function main() {
     if (cmd === "poll-result") {
       if (!extra) { console.error("usage: review-qa.js poll-result <name> <ping_id>"); process.exit(2); }
       const entry = hq.polls.find((p) => p.ping_id === extra) || (() => { const e = { ping_id: extra, question: null, asked_at: null }; hq.polls.push(e); return e; })();
-      process.exit(pollReport(name, hq, await rpc("get_ping", { ping_id: extra }), entry));
+      process.exit(pollReport(name, hq, await corePingResult(extra), entry));
     }
     const question = extra;
     if (!question) { console.error('usage: review-qa.js poll <name> "question" [--choices "A,B,C"]'); process.exit(2); }
@@ -1097,10 +921,9 @@ async function main() {
 
   if (cmd === "assist") {
     // The stall escalation: the STALLED banner (workflow.js/score.js) says WHEN, this
-    // composes WHAT from the failing phase's own artifacts and files the cheapest channel
-    // that answers it — a 1-result one-sided micro-poll by default, a scoped diagnostic
-    // round with --compare when the question is inherently two-sided. Advisory only:
-    // neither channel ever satisfies the review gate.
+    // composes WHAT from the failing phase's own artifacts and files a scoped diagnostic
+    // round on the side-by-side compare surface (--compare, required). Advisory only:
+    // it never satisfies the review gate.
     const wf = require("./workflow.js");
     const hq = loadHq(name);
     // ONE open assist per target — the queue-thrash cap.
@@ -1134,22 +957,24 @@ async function main() {
       }
     }
 
+    // The TEXT-ONLY assist format is RETIRED (2026-07-20). A reviewer handed a bare
+    // element question with no side-by-side in front of them cannot act on it — the
+    // live reviewer's actual answer to one was "I dont understand. Send a comparison",
+    // a whole round burned on the FORMAT. The compare round is the one reviewer channel
+    // (first-draft doctrine); refuse-with-nudge instead of filing an unanswerable ask.
+    if (!args.includes("--compare")) {
+      console.error(`❌ the text-only assist question format is retired — a reviewer cannot answer an element question without seeing both pages side by side.\n   use: pingfusi assist ${name} --compare   (scoped side-by-side diagnostic round, auto-composed from the failing gate; --ask "…" overrides the question)`);
+      process.exit(2);
+    }
     const ask = opt("--ask");
     const composed = ask
       ? { ok: true, question: ask, subject: "the flagged area" }
       : composeAssist(name, phaseKey);
     if (!composed.ok) { console.error(`❌ assist refused for "${phaseKey}": ${composed.reason}`); process.exit(1); }
-    const wantCompare = args.includes("--compare");
     // Lexical check only → warning only (same rule as `file`): static asks legitimately
     // use movement words; the evidence-based route above is the real motion guard.
-    if (wantCompare && temporalReviewShaped(`${composed.subject || ""} ${composed.question || ""}`)) {
+    if (temporalReviewShaped(`${composed.subject || ""} ${composed.question || ""}`)) {
       console.error(`⚠ this ask uses temporal wording — the layout side-by-side surface cannot establish timing/playback truth. If it really is motion work, route it instead: pingfusi next ${name}. Filing the scoped diagnostic anyway.`);
-    }
-    // Safety net for hand-written --ask text (composed questions are one-sided by
-    // construction): a two-sided question through the poll channel strips the compare UI.
-    if (!wantCompare && comparisonShaped(composed.question)) {
-      console.error(`❌ this question names BOTH the clone and the live page — a comparison needs the side-by-side compare UI. Re-run with --compare to file a scoped diagnostic round instead.`);
-      process.exit(1);
     }
     // Login check BEFORE any receipt — a failed filing must leave no ledger event (the
     // assist receipt is what resets the stall streak; an unfiled ask must not reset it).
@@ -1159,39 +984,43 @@ async function main() {
     }
     const assistMeta = { phase: phaseKey, streakAtAsk: wf.stallInfo(name, phaseKey).fails };
 
-    if (wantCompare) {
-      // Two-sided question → scoped DIAGNOSTIC round (5 results by default, review queue —
-      // the poll is cheaper and faster; this is for when a one-sided description won't do).
-      let draft = null;
-      try { draft = readJson(path.join(targetDir(name), "draft.json")).url; } catch (e) {}
-      if (!draft) { try { draft = readJson(path.join(targetDir(name), "tunnel.json")).url; } catch (e) {} }
-      if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
-        console.error(`❌ assist --compare files a round, and a remote reviewer must open the draft — push one first: node harness/draft.js push ${name}`);
+    // Scoped DIAGNOSTIC round on the side-by-side compare surface (1 result by default,
+    // review queue). Draft resolution REUSES what this target already recorded: an
+    // existing valid draft.json is re-verified byte-for-byte and used — never re-pushed
+    // ritually (the observed miss: a valid hosted draft on disk, and the tool still
+    // demanded a fresh push). Stale is refused BY NAME; only a missing/local draft
+    // demands a push.
+    let draft = null, draftSlug = null;
+    try { const d = readJson(path.join(targetDir(name), "draft.json")); draft = d.url; draftSlug = d.slug || null; } catch (e) {}
+    if (!draft) { try { draft = readJson(path.join(targetDir(name), "tunnel.json")).url; draftSlug = null; } catch (e) {} }
+    if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
+      console.error(`❌ assist --compare files a round, and a remote reviewer must open the draft — push one first: node harness/draft.js push ${name}`);
+      process.exit(1);
+    }
+    // Re-verify the recorded hosted draft's SERVED BYTES at ask time (same rewrite-aware
+    // compare as `file`): a reviewer sent to a stale/expired draft burns the whole round.
+    const slugM = /\/d\/([A-Za-z0-9_-]{8,64})\/?$/.exec(draft);
+    const slug = draftSlug || (slugM && slugM[1]) || null;
+    const idxPath = path.join(targetDir(name), "clone", "index.html");
+    if (slug && fs.existsSync(idxPath)) {
+      const v = await require("./draft.js").verifyDraftServes(draft, idxPath, slug);
+      if (!v.ok) {
+        console.error(`❌ the recorded draft (targets/${name}/draft.json) is STALE — ${v.reason}\n   the clone changed since the push, or the draft expired — re-push: node harness/draft.js push ${name}`);
         process.exit(1);
       }
-      const region = /^the /i.test(composed.subject) ? composed.subject : `the ${composed.subject}`;
-      const nTarget = parseReviewResults(args);
-      const spec = buildDiagnosticSpec(name, draft, region, ask || composed.question, nTarget);
-      const { approve_verdicts, ...toolArgs } = spec;
-      void approve_verdicts;
-      const r = await rpc("request_review", toolArgs);
-      if (!r.ping_id) throw new Error("diagnostic filing returned no ping_id");
-      pushDiagnostic(name, r.ping_id, spec, region, assistMeta);
-      try { wf.appendLedger(name, { ts: new Date().toISOString(), event: "assist", phase: phaseKey, runId: wf.runId(), gate: null, forced: false, ping_id: r.ping_id, reason: `assist diagnostic round filed: ${region}` }); } catch (e) {}
-      console.log(`✓ diagnostic round filed — ping ${r.ping_id} (scoped to ${region}; target ${nTarget} result${nTarget === 1 ? "" : "s"}, up to ${nTarget} credit${nTarget === 1 ? "" : "s"}; enters the review queue)\n  advisory: it buys a description, never the review gate.\n  keep iterating; check between iterations (free): node harness/review-qa.js assist-result ${name} ${r.ping_id}`);
-      return;
+      console.error(`✓ reusing the recorded hosted draft — ${v.reason}`);
     }
-
-    console.error(`assist (phase ${phaseKey}${assistMeta.streakAtAsk ? `, after ${assistMeta.streakAtAsk} failed advances` : ""}): ${composed.question}`);
-    const { sc, entry } = await fileMicroPoll(name, hq, composed.question, null, assistMeta);
-    if (entry.ping_id) {
-      try { wf.appendLedger(name, { ts: new Date().toISOString(), event: "assist", phase: phaseKey, runId: wf.runId(), gate: null, forced: false, ping_id: entry.ping_id, reason: `assist poll filed: ${composed.question.slice(0, 80)}` }); } catch (e) {}
-    }
-    const answered = pollReport(name, hq, sc, entry) === 0;
-    // Filing IS the success condition — the ask is in front of a reviewer either way.
-    // Pending just means: keep iterating, re-check between iterations (free).
-    if (!answered) console.error(`assist filed — keep iterating while it waits; the stall streak resets on the FILED receipt, not the answer.`);
-    process.exit(entry.ping_id ? 0 : 1);
+    const region = /^the /i.test(composed.subject) ? composed.subject : `the ${composed.subject}`;
+    const nTarget = parseReviewResults(args);
+    const spec = buildDiagnosticSpec(name, draft, region, ask || composed.question, nTarget);
+    const { approve_verdicts, ...toolArgs } = spec;
+    void approve_verdicts;
+    const r = await rpc("request_review", toolArgs);
+    if (!r.ping_id) throw new Error("diagnostic filing returned no ping_id");
+    pushDiagnostic(name, r.ping_id, spec, region, assistMeta);
+    try { wf.appendLedger(name, { ts: new Date().toISOString(), event: "assist", phase: phaseKey, runId: wf.runId(), gate: null, forced: false, ping_id: r.ping_id, reason: `assist diagnostic round filed: ${region}` }); } catch (e) {}
+    console.log(`✓ diagnostic round filed — ping ${r.ping_id} (scoped to ${region}; target ${nTarget} result${nTarget === 1 ? "" : "s"}, up to ${nTarget} credit${nTarget === 1 ? "" : "s"}; enters the review queue)\n  advisory: it buys a description, never the review gate.\n  keep iterating; check between iterations (free): node harness/review-qa.js assist-result ${name} ${r.ping_id}`);
+    return;
   }
 
   console.error(`unknown command "${cmd}" — template | file | record | verify | poll | poll-result | assist | assist-result`);
@@ -1199,8 +1028,10 @@ async function main() {
 }
 
 // Exports BEFORE the main() call: main()'s synchronous prefix requires draft.js
-// (hosted-draft verify), and draft.js requires this module back — with exports
+// (hosted-draft verify), and draft.js used to require this module back — with exports
 // assigned last, that circular require captured undefined resolveToken/BASE and
 // node printed circular-dependency warnings in the real `pingfusi review file` flow.
+// The core extraction broke the cycle (draft.js now gets resolveToken/BASE from
+// packages/core/wire.js), but the ordering stays — it is the cheap half of the fix.
 module.exports = { buildSpec, buildDiagnosticSpec, composeAssist, comparisonShaped, temporalReviewShaped, behaviorMotionRoute, reviewMotionRequirement, parseAlignDeltas, printCommentBlocks, resolveToken, rpc, BASE, DEFAULT_REVIEW_RESULTS, MAX_REVIEW_RESULTS };
 if (require.main === module) main().catch((e) => { console.error(`review-qa: ${e.message}`); process.exit(e.usage ? 2 : 1); });

@@ -13,7 +13,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { pathToFileURL } = require("url");
-const { parseTunnelUrl, verifyServes, looksLikeSink } = require("./tunnel.js");
+const { parseTunnelUrl, publicUrlForLocal, verifyServes, looksLikeSink } = require("./tunnel.js");
 
 let failed = 0;
 const check = (label, ok, detail) => {
@@ -29,6 +29,13 @@ const LOG = `2026-07-02T20:00:01Z INF Thank you for trying Cloudflare Tunnel.
 2026-07-02T20:00:02Z INF +--------------------------------------------------------------+`;
 check("parses the quick-tunnel url out of log noise", parseTunnelUrl(LOG) === "https://engines-pad-firewire-investing.trycloudflare.com");
 check("no url in log → null (keeps waiting, no garbage match)", parseTunnelUrl("INF Starting tunnel connection...") === null);
+check(
+  "adopted dev-server tunnel preserves the requested path, query, and hash",
+  publicUrlForLocal(
+    "https://engines-pad-firewire-investing.trycloudflare.com",
+    "http://localhost:3000/design/review?mode=full#hero"
+  ) === "https://engines-pad-firewire-investing.trycloudflare.com/design/review?mode=full#hero"
+);
 
 // ── the sink signature (--sink mode verifies delivery through the tunnel by provoking the
 //    sink's distinctive empty-POST reply — not by GET/byte-compare, the sink serves nothing) ──
@@ -69,6 +76,35 @@ fs.writeFileSync(other, "<html><body>something else entirely</body></html>");
   try { out = execFileSync("node", [path.join(__dirname, "review-qa.js"), "file", "t1"], { cwd: work, stdio: "pipe" }).toString(); }
   catch (e) { status = e.status; out = (e.stdout || "").toString() + (e.stderr || "").toString(); }
   check("review-qa file refuses when the recorded tunnel no longer serves (hn round 1)", status === 1 && /refusing to file/.test(out));
+
+  // Adopted builds deliberately have no clone/index.html. Their weaker reachability-only
+  // tunnel record must still be checked again at file time: stale refuses; live files.
+  const adoptedDir = path.join(work, "targets", "adopted");
+  fs.mkdirSync(adoptedDir, { recursive: true });
+  fs.writeFileSync(path.join(adoptedDir, "target.json"), JSON.stringify({ name: "adopted", url: "https://example.com/design", width: 1280, adopted: true }));
+  fs.writeFileSync(path.join(adoptedDir, "tunnel.json"), JSON.stringify({ url: pathToFileURL(path.join(work, "missing-adopted.html")).href, verified: "reachable" }));
+  const fixtures = path.join(work, "fixtures");
+  fs.mkdirSync(fixtures, { recursive: true });
+  fs.writeFileSync(path.join(fixtures, "request_review.json"), JSON.stringify({ ping_id: "22222222-2222-2222-2222-222222222222" }));
+  const fileAdopted = () => {
+    let result = "", code = 0;
+    try {
+      result = execFileSync("node", [path.join(__dirname, "review-qa.js"), "file", "adopted"], {
+        cwd: work,
+        stdio: "pipe",
+        env: { ...process.env, PPK_PINGHUMANS_URL: pathToFileURL(fixtures).href, PINGFUSI_TOKEN: "" },
+      }).toString();
+    } catch (e) { code = e.status; result = (e.stdout || "").toString() + (e.stderr || "").toString(); }
+    return { code, out: result };
+  };
+  const staleAdopted = fileAdopted();
+  check("review-qa file re-checks and refuses a stale adopted-build tunnel", staleAdopted.code === 1 && /adopted draft url is not serving/.test(staleAdopted.out), staleAdopted.out.slice(0, 160));
+
+  const livePage = path.join(work, "live-adopted.html");
+  fs.writeFileSync(livePage, `<html><body>${"reachable adopted page ".repeat(12)}</body></html>`);
+  fs.writeFileSync(path.join(adoptedDir, "tunnel.json"), JSON.stringify({ url: pathToFileURL(livePage).href, verified: "reachable" }));
+  const liveAdopted = fileAdopted();
+  check("review-qa file accepts a reachable adopted-build tunnel", liveAdopted.code === 0 && /filed round/.test(liveAdopted.out), liveAdopted.out.slice(0, 160));
 
   fs.rmSync(work, { recursive: true, force: true });
   console.log(failed ? `\n❌ tunnel-selftest: ${failed} check(s) failed.` : "\n✓ tunnel-selftest: all checks pass.");

@@ -6,7 +6,12 @@
 //   - <script>/script-preloads/CSP <meta>/<base> stripped
 //   - stylesheets downloaded + self-hosted; SRI/crossorigin dropped from rewritten links
 //   - fonts downloaded to /assets/fonts/ with REAL bytes (the assets gate checks wOF2 magic)
-//   - every other ref absolutized (src/srcset/poster/inline-style url()); data: untouched;
+//   - <img>/<video>/<audio>/<source> assets downloaded to /assets/media/ with REAL bytes,
+//     src/srcset/poster rewritten to the local copy, crossorigin DROPPED from media tags
+//     (a kept cross-origin src + crossorigin attr = Chrome refuses to paint on localhost)
+//   - a media download that fails is a PER-ASSET ⚠ receipt, the ref stays absolute, and
+//     the build still exits 0 (unlike stylesheets, which stay fatal)
+//   - every other ref absolutized (inline-style url()); data: untouched;
 //     anchor hrefs untouched; loading=lazy → eager
 //   - a failed stylesheet download exits nonzero (pixel-determining, never silent)
 // Run: node harness/capture-build-selftest.js   (regression.js runs it too)
@@ -30,7 +35,14 @@ const work = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-capbuild-"));
 // ── a tiny live-site stand-in on disk (served via file:// — no sockets) ───────
 const site = path.join(work, "site");
 fs.mkdirSync(path.join(site, "assets"), { recursive: true });
+fs.mkdirSync(path.join(site, "img"), { recursive: true });
+fs.mkdirSync(path.join(site, "vid"), { recursive: true });
 fs.writeFileSync(path.join(site, "assets", "brand.woff2"), Buffer.concat([Buffer.from("wOF2"), Buffer.alloc(28, 7)]));
+// real media bytes — these MUST self-host; img/a.png etc. stay deliberately missing so
+// the per-asset failure path (kept absolute, ⚠ receipt, exit 0) is exercised too
+fs.writeFileSync(path.join(site, "img", "real.png"), Buffer.from("PNG-REAL-BYTES"));
+fs.writeFileSync(path.join(site, "img", "real-2x.png"), Buffer.from("PNG-REAL-2X-BYTES"));
+fs.writeFileSync(path.join(site, "vid", "v.mp4"), Buffer.from("MP4-REAL-BYTES"));
 fs.writeFileSync(path.join(site, "assets", "site.css"), [
   '@font-face{font-family:X;src:url(./brand.woff2) format("woff2")}',
   "@import url(./extra.css);",
@@ -53,6 +65,7 @@ function domHtml(doctype, cssHref) {
 <script>window.hydrate()</script>
 </head><body>
 <img loading="lazy" src="./img/a.png" srcset="./img/a.png 1x, ./img/a@2x.png 2x">
+<img class="hero" src="./img/real.png" srcset="./img/real.png 1x, ./img/real-2x.png 2x" crossorigin="anonymous">
 <video poster="./img/poster.jpg"><source src="./vid/v.mp4"></video>
 <a href="/pricing">Pricing</a>
 </body></html>`;
@@ -82,14 +95,25 @@ check("script preload + modulepreload stripped", !/app\.js|chunk\.mjs/.test(idx)
 check("stylesheet href rewritten to self-hosted path", idx.includes('href="/assets/css/00-site.css"'));
 check("SRI + crossorigin dropped from rewritten link", !/integrity=|crossorigin=/i.test(idx));
 check("inline <style> root-relative url() absolutized", idx.includes("url(file:///img/inline.png)"));
-check("img src absolutized", idx.includes(`src="${origin}/img/a.png"`));
-check("srcset entries absolutized", idx.includes(`srcset="${origin}/img/a.png 1x, ${origin}/img/a@2x.png 2x"`));
+check("MISSING media kept absolute (per-asset failure, never fatal)", idx.includes(`src="${origin}/img/a.png"`));
+check("missing srcset entries kept absolute", idx.includes(`srcset="${origin}/img/a.png 1x, ${origin}/img/a@2x.png 2x"`));
+// real media self-hosts EXACTLY like css/fonts — the bizar.ro paper cut: a kept
+// cross-origin src (+ crossorigin attr) is an image Chrome refuses to paint on localhost
+check("img src rewritten to self-hosted /assets/media/ path", idx.includes('src="/assets/media/real.png"'));
+check("img srcset rewritten to self-hosted candidates", idx.includes('srcset="/assets/media/real.png 1x, /assets/media/real-2x.png 2x"'));
+check("crossorigin dropped from media tags (CORS refuses paint on localhost)", !/crossorigin/i.test(idx));
+check("media self-hosted with REAL bytes",
+  fs.existsSync(path.join(r1.cloneDir, "assets", "media", "real.png")) &&
+  fs.readFileSync(path.join(r1.cloneDir, "assets", "media", "real.png"), "latin1") === "PNG-REAL-BYTES");
+check("report counts self-hosted media", /media:\s+3 self-hosted → clone\/assets\/media\//.test(r1.out));
+check("failed media downloads are ⚠ receipted per-asset (a.png named), build still exit 0",
+  /⚠ media: 3 download\(s\) failed/.test(r1.out) && r1.out.includes("img/a.png"));
 // Link hrefs are entity-decoded BEFORE url-parsing — without the decode, "&amp;" inside a
 // multi-param href becomes a bogus "amp;family" param and every family after the first is
 // silently dropped (astryx: 1 of 15 Google Fonts families loaded, ~74 visual fails from a
 // system-font fallback — the gate caught it live; this locks the fix in)
 check("&amp;-encoded link href decoded before parsing (astryx Google Fonts miss)", idx.includes('href="https://cdn.example.com/css2?family=A&family=B&display=swap"'));
-check("video poster + source absolutized", idx.includes(`poster="${origin}/img/poster.jpg"`) && idx.includes(`src="${origin}/vid/v.mp4"`));
+check("missing video poster kept absolute; <source> self-hosted", idx.includes(`poster="${origin}/img/poster.jpg"`) && idx.includes('src="/assets/media/v.mp4"'));
 check("anchor href untouched (doesn't paint)", idx.includes('href="/pricing"'));
 check('loading="lazy" forced to eager', idx.includes('loading="eager"') && !/loading\s*=\s*"lazy"/i.test(idx));
 check("no scaffold TODO (build gate would pass)", !/TODO: build to spec/.test(idx));

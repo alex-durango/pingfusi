@@ -159,7 +159,29 @@
       ...Object.keys(clone.elements || {}),
     ]);
 
+    // PHASE-FREEZE EXCLUSIONS (LEARNINGS #38 — the mindmarket belts: 334–336 constant-
+    // offset deltas on a CORRECT clone, two runs). A mark inside an UNFREEZABLE mover's
+    // subtree — rAF-driven motion the capture receipts in the snapshot's `freeze` field
+    // because no declared-animation pause can fix its phase — is measured at an arbitrary
+    // phase on each side, so its numbers are noise by construction. Excluding it is
+    // honest ONLY out loud: every excluded mark is kept on `result.excluded`, counted in
+    // the summary, and LISTED by formatDiff and the gates — never silently dropped. A
+    // snapshot without a freeze field (older schema, interactive capture) changes
+    // nothing (#23: no invented friction on old artifacts).
+    const excludedBy = {};
+    for (const [side, snap] of [["live", live], ["clone", clone]]) {
+      const marks = snap && snap.freeze && snap.freeze.excludedMarks;
+      if (!marks || typeof marks !== "object") continue;
+      for (const markName of Object.keys(marks)) {
+        if (!excludedBy[markName]) excludedBy[markName] = { selector: String(marks[markName]), sides: [] };
+        excludedBy[markName].sides.push(side);
+      }
+    }
+    const excluded = [];
+
     for (const name of names) {
+      const ex = excludedBy[name];
+      if (ex) { excluded.push({ target: name, selector: ex.selector, sides: ex.sides }); continue; }
       const L = live.elements[name];
       const C = clone.elements[name];
 
@@ -244,8 +266,25 @@
           // a snapshot taken before this field simply skips instead of retro-failing. And an image
           // broken on BOTH sides (live 404s too) is a MATCH — the clone is faithfully reproducing a
           // broken image, which is the site's real rendering (#25's rule).
-          if (L.glyph.painted !== undefined && C.glyph.painted !== undefined)
+          if (L.glyph.painted !== undefined && C.glyph.painted !== undefined) {
             add("glyph.painted", L.glyph.painted, C.glyph.painted);
+            // Painted on live, hole in the clone → NAME THE COMMONEST CAUSE instead of
+            // leaving a bare boolean row (bizar.ro: the row was right, the agent still
+            // hand-debugged it). A clone <img> that kept a cross-origin src fetches in
+            // CORS mode when a crossorigin attribute survived — and Chrome refuses to
+            // PAINT it on localhost/hosted-draft origins (hotlink walls do the same with
+            // no attribute at all). The box is CSS-sized either way, so every other
+            // number matches. Fires only on live-true/clone-false: the reverse direction
+            // (clone paints, live broken) is a different defect and both-false is a match.
+            if (L.glyph.painted === true && C.glyph.painted === false)
+              warnings.push(
+                `"${name}": the image painted on LIVE but not in the clone (glyph.painted true→false). ` +
+                  `Commonest cause: the clone kept a cross-origin <img> src (CORS/hotlink — Chrome refuses to paint it ` +
+                  `from a localhost or hosted-draft origin, especially with a crossorigin attribute). ` +
+                  `Self-host it: re-run capture-build (it downloads <img>/<video>/<source> assets into ` +
+                  `clone/assets/media/ and drops crossorigin), then re-capture the clone.`
+              );
+          }
         } else {
           add("rect.cx", L.rect.x + L.rect.w / 2, C.rect.x + C.rect.w / 2);
           add("rect.cy", L.rect.y + L.rect.h / 2, C.rect.y + C.rect.h / 2);
@@ -308,7 +347,8 @@
       ok: fails === 0,
       rows,
       warnings,
-      summary: { targets: names.size, comparisons: compared, failures: fails, tol },
+      excluded,
+      summary: { targets: names.size, comparisons: compared, failures: fails, excluded: excluded.length, tol },
     };
   }
 
@@ -318,6 +358,13 @@
     const pad = (s, n) => String(s == null ? "" : s).padEnd(n).slice(0, n);
     for (const w of result.warnings) lines.push("⚠  " + w);
     if (result.warnings.length) lines.push("");
+    // Excluded marks are LISTED, never silently dropped (LEARNINGS #38): each one names
+    // the unfreezable mover that owns it and which side(s) receipted the exclusion.
+    if (result.excluded && result.excluded.length) {
+      lines.push(`⚠  ${result.excluded.length} mark(s) EXCLUDED from comparison — inside unfreezable movers' subtrees (rAF-driven; phase cannot be frozen, receipted in the snapshots' freeze field):`);
+      for (const e of result.excluded) lines.push(`     ${e.target}  (mover ${e.selector}; receipted by ${e.sides.join("+")})`);
+      lines.push("");
+    }
 
     const fails = result.rows.filter((r) => !r.pass);
     const show = result.rows.length === fails.length ? fails : result.rows; // --all keeps passes
@@ -339,10 +386,11 @@
       lines.push("");
     }
     const s = result.summary;
+    const exclNote = s.excluded ? ` ${s.excluded} mark(s) excluded (unfreezable movers — listed above).` : "";
     lines.push(
       result.ok
-        ? `✓ PASS — ${s.comparisons} comparisons across ${s.targets} targets, all within ${s.tol}px.`
-        : `❌ FAIL — ${s.failures} of ${s.comparisons} comparisons over ${s.tol}px tolerance. Fix or explain each row above.`
+        ? `✓ PASS — ${s.comparisons} comparisons across ${s.targets} targets, all within ${s.tol}px.${exclNote}`
+        : `❌ FAIL — ${s.failures} of ${s.comparisons} comparisons over ${s.tol}px tolerance. Fix or explain each row above.${exclNote}`
     );
     return lines.join("\n");
   }

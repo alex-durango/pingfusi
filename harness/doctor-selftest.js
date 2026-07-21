@@ -90,13 +90,31 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
   const r1 = install(home, false);
   const dest = path.join(home, ".claude", "skills", "pixel-perfect-clone", "SKILL.md");
   const destFix = path.join(home, ".claude", "skills", "fix-with-pingfusi", "SKILL.md");
-  ok(r1.ok && fs.existsSync(dest) && fs.existsSync(destFix), "installs ALL kit skills (pixel-perfect-clone + fix-with-pingfusi) into ~/.claude/skills/");
+  const destBeautify = path.join(home, ".claude", "skills", "beautify-with-pingfusi", "SKILL.md");
+  const destVideo = path.join(home, ".claude", "skills", "review-video-with-pingfusi", "SKILL.md");
+  ok(r1.ok && fs.existsSync(dest) && fs.existsSync(destFix) && fs.existsSync(destBeautify) && fs.existsSync(destVideo), "installs ALL kit skills (clone + fix + beautify + video) into ~/.claude/skills/");
   const body = fs.readFileSync(dest, "utf8");
   ok(/^---\nname: pixel-perfect-clone/.test(body) && /description: .*[Cc]lone/.test(body), "installed skill has the frontmatter Claude Code discovers it by");
   ok(/pingfusi doctor/.test(body) && /pingfusi where/.test(body) && /independent reviewer/i.test(body) && /verdict/i.test(body), "skill teaches preflight, kit location, and the independent-reviewer contract");
   const fix = fs.readFileSync(destFix, "utf8");
   ok(/^---\nname: fix-with-pingfusi/.test(fix) && /fix it with pingfusi/.test(fix) && /polish this clone/.test(fix) && /ditto/.test(fix), "fix-with-pingfusi triggers on 'fix it with pingfusi' / polish this clone / ditto phrasing");
   ok(/pingfusi adopt/.test(fix) && /--changelog/.test(fix) && /verdict/i.test(fix) && /DRAFT'S OWN source/.test(fix), "fix-with-pingfusi teaches adopt → tunnel --url → review loop, fixing in the draft's own source");
+  const beautify = fs.readFileSync(destBeautify, "utf8");
+  ok(/^---\nname: beautify-with-pingfusi/.test(beautify)
+    && /beautify this website/.test(beautify) && /make this page look professional/.test(beautify),
+    "beautify-with-pingfusi has discoverable beautify/professional-design triggers");
+  ok(/core\.draft\.push/.test(beautify) && /core\.review\.file/.test(beautify)
+    && /omit `draft_url`/.test(beautify) && /pingfusi wait/.test(beautify)
+    && /core\.review\.verify/.test(beautify) && /project's own source/.test(beautify),
+    "beautify teaches publish → custom single-page round → wait → verify/refile in owned source");
+  const videoSkill = fs.readFileSync(destVideo, "utf8");
+  ok(/^---\nname: review-video-with-pingfusi/.test(videoSkill)
+    && /review this video/.test(videoSkill) && /match the prompt\/brief/.test(videoSkill),
+    "review-video-with-pingfusi has discoverable video-review triggers");
+  ok(/media_type: "video"/.test(videoSkill) && /core\.review\.file/.test(videoSkill)
+    && /Matches the prompt/.test(videoSkill) && /pingfusi wait/.test(videoSkill)
+    && /core\.review\.verify/.test(videoSkill) && /Content-Range/.test(videoSkill),
+    "video skill teaches seekable publish → video round → wait → verify with the fixed verdict pair");
   const r2 = install(home, false);
   ok(!r2.ok && /--force/.test(r2.message), "refuses to overwrite an existing install without --force");
   ok(install(home, true).ok, "--force overwrites");

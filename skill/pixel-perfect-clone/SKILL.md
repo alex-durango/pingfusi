@@ -7,7 +7,7 @@ description: Clone, copy, or replicate a website/page pixel-perfect using pingfu
 
 The pixel-perfect-kit is an enforced, receipt-driven pipeline: a phase is done because
 its gate command exits 0, never because anyone says so. Your job is to drive it end to
-end; review rounds are answered by an INDEPENDENT reviewer on the pingfusi service —
+end; review rounds are answered by an INDEPENDENT human reviewer on the pingfusi service —
 not by the user, and never by you.
 
 ## Steps
@@ -16,8 +16,10 @@ not by the user, and never by you.
    lines and stop until resolved. Run `pingfusi where` → KIT (the installed kit's directory;
    all docs below live there).
 
-2. **Get the three values.** URL (ask if not given). WIDTH: default 1512 unless the user
-   specifies. NAME: a short slug from the domain (e.g. `stripe` for stripe.com). Targets
+2. **Get the three values.** URL (ask if not given). WIDTH: default 1728 (the kit's own
+   default — omit the argument) unless the user specifies; a width must be a positive
+   number of pixels (`pingfusi new` refuses anything else). NAME: a short slug from the
+   domain (e.g. `stripe` for stripe.com). Targets
    are created under the CURRENT working directory (`targets/<NAME>/`) — cd to the user's
    preferred workspace first.
 
@@ -40,8 +42,10 @@ not by the user, and never by you.
      through your round-trips. `--side auto` does live until the clone exists, then both.
      FALL BACK to the interactive path only when capture-run says so (bot wall, no Chrome,
      probe refusal — its errors name the fallback): `pingfusi capture open <NAME>` (hosted
-     session), ONE call per tab — `await pxCaptureAll('<sink_url>')` on live,
+     session), ONE call per tab — `await pxCaptureAllPhased('<sink_url>')` on live,
      `{prefix:'clone'}` on the clone — then `pingfusi capture pull <NAME> --all`.
+     (Phased = settle → freeze animation phase → measure: both sides must measure at a
+     FIXED animation phase or never-settling animations fail gates on a correct clone.)
      Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
    - Behavior discovery needs `document.hidden === false`. If your browser tooling reports
      tabs hidden PERMANENTLY (some automation stacks do), skip in-tab discovery — it can
@@ -90,7 +94,7 @@ not by the user, and never by you.
    - All reviewer contact through `pingfusi review <NAME> …` (file/poll/verify) — never through
      any MCP directly. First filings carry `--context "one line: what this site/page is and
      where to look"` (the reviewer sees it); refiles carry `--changelog "what changed"`.
-     Full rounds default to 5 results. Use `--results 1` for a quick/low-risk check and
+     Full rounds default to 1 result. Request `--results 5` for a broader read and
      `--results 15` to `--results 20` only for complex work or higher confidence. Each
      completed result costs 1 credit; undelivered results are not charged.
    - No pingfusi login (doctor shows it missing)? STOP and tell the user to run
@@ -118,13 +122,15 @@ not by the user, and never by you.
    invented values), re-green the gates, refile with a changelog, re-arm the waiter.
    **When `pingfusi score` or `pingfusi status` prints STALLED, do not run another blind
    iteration**: run `pingfusi next <NAME>` first. If it reports layout, run
-   `pingfusi assist <NAME>` — a 1-result poll auto-composed from the failing
-   gate's own artifacts; a reviewer names in one look what costs you three iterations. If
-   the question is inherently two-sided, `pingfusi assist <NAME> --compare` files a scoped
-   diagnostic round instead (5 results by default, slower — poll first). Assists don't block you:
-   keep iterating while one is pending and re-check the answer (free) with the printed
-   poll-result/assist-result command between iterations. Never open a second ask while
-   one is pending.
+   `pingfusi assist <NAME> --compare` — a scoped side-by-side diagnostic round
+   auto-composed from the failing gate's own artifacts; a reviewer names in one look what
+   costs you three iterations. `--compare` is required: the old text-only question format
+   is retired (a reviewer can't act on an element question without seeing both pages), and
+   bare `pingfusi assist <NAME>` refuses with exactly this nudge. It reuses the target's
+   recorded hosted draft after re-verifying it — you only re-push if the draft went stale.
+   Assists don't block you: keep iterating while one is pending and re-check the answer
+   (free) with the printed assist-result command between iterations. Never open a second
+   ask while one is pending.
    Done = `pingfusi gate <NAME> done` exits 0 — all ten phases, including a real
    approving verdict from the reviewer. A first draft, green machine gates, or a filed
    round are NOT done: ending your turn before done, without being blocked on the

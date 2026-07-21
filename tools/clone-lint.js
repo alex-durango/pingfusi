@@ -156,6 +156,35 @@ function lintHtml(html) {
         `${hits.length} node(s) injected by the AUTOMATION EXTENSION, not by the site — the clone would ship the agent's own overlay. Re-capture with a current browser-capture.js (pxDomHtml strips them)`);
   }
 
+  // 6) DEAD CANVAS — a <canvas> paints ONLY what script draws into it; in a static clone it
+  //    renders as a blank rectangle (usually black or transparent) forever. Found on bizar.ro
+  //    (LEARNINGS #37): the page's entire visible painting is a WebGL canvas, the DOM skeleton
+  //    measured identical on both sides (the aloyoga shared-blind-spot, one layer down — pixels
+  //    the capture cannot see are pixels both snapshots agree about), visual passed 1236/1236,
+  //    and the published draft rendered SOLID BLACK — the reviewer wrote "cannot see any draft"
+  //    and the round burned. WARN whenever canvases ship (verify the page doesn't lean on them);
+  //    FAIL when the rest of the page paints almost nothing — then the canvas IS the page, and
+  //    a static DOM clone of it is a blank sheet no reviewer should ever be sent. Text + media
+  //    counts are the cheap STATIC proxies for "paints anything else"; the geometric truth is
+  //    the capture receipt's paint probe + pxCanvasDominant (capture-run.json).
+  {
+    const canvases = html.match(/<canvas\b[^>]*>/gi) || [];
+    if (canvases.length) {
+      // What the page paints BESIDES canvases: strip canvas subtrees (their fallback content
+      // only shows where canvas is unsupported), then non-painting blocks, then count.
+      const rest = html
+        .replace(/<canvas\b[\s\S]*?<\/canvas>/gi, " ").replace(/<canvas\b[^>]*\/?>/gi, " ")
+        .replace(/<(script|style|head|noscript|template)\b[\s\S]*?<\/\1>/gi, " ");
+      const text = rest.replace(/<[^>]*>/g, " ").replace(/&[a-z]+;|&#\d+;/gi, " ").replace(/\s+/g, " ").trim();
+      const media = (rest.match(/<img\b|<svg\b|<picture\b|<video\b/gi) || []).length;
+      const paintsLittleElse = text.length < 200 && media < 3;
+      add("dead-canvas", paintsLittleElse && !hasFixes ? "FAIL" : "WARN", canvases.map((t) => t.slice(0, 90)),
+        paintsLittleElse
+          ? `${canvases.length} <canvas> and almost nothing else painted (${text.length} text chars, ${media} media element(s)) — the page's visible painting is script-driven canvas; a static clone renders it BLANK${hasFixes ? ". fixes.js is present: VERIFY it actually paints the canvas" : ". A DOM clone cannot reproduce this — do not send it to a reviewer as-is"}`
+          : `${canvases.length} <canvas> element(s) render blank without script — verify the page does not rely on them for visible content`);
+    }
+  }
+
   return { ok: !rules.some((r) => r.level === "FAIL"), rules };
 }
 

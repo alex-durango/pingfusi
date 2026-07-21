@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review a video with pingfusi"
+  short_description: "Human review for rendered video output"
+  default_prompt: "Use $review-video-with-pingfusi to have this rendered video reviewed against its brief by a real human."

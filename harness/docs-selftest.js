@@ -50,12 +50,12 @@ const walk = (dir, re, out = []) => {
 //
 // REQUIRED_SHAPES exists so the gate cannot be dodged by deleting the comment: a function listed
 // here MUST carry a `// → {…}` annotation somewhere in the docs, or that is itself a failure.
-const REQUIRED_SHAPES = ["pxScrollSettle"];
+const REQUIRED_SHAPES = ["pxScrollSettle", "pxFreezeAnimations"];
 
 // Run a px* function against a shim and return its actual key set. Add a case here when a new
 // function's return shape becomes load-bearing enough to document.
 async function actualKeys(fnName) {
-  if (fnName !== "pxScrollSettle") return null;   // nothing else is exercised yet
+  if (fnName !== "pxScrollSettle" && fnName !== "pxFreezeAnimations") return null;   // nothing else is exercised yet
   const prevWindow = global.window, prevDoc = global.document;
   try {
     global.window = global;
@@ -68,6 +68,13 @@ async function actualKeys(fnName) {
     const src = require.resolve(path.join(KIT, "tools", "browser-capture.js"));
     delete require.cache[src];
     require(src);
+    if (fnName === "pxFreezeAnimations") {
+      // shim host has no getAnimations and an empty body: supported:false + an empty
+      // watch — every receipt key is present on every path BY DESIGN, which is what
+      // makes this shape documentable at all.
+      const r = await global.pxFreezeAnimations({ watchIntervalMs: 1, watchIntervals: 1 });
+      return Object.keys(r).sort();
+    }
     const r = await global.pxScrollSettle({ pause: 1, settle: 1, stableGapMs: 1, stableChecks: 2, maxSweeps: 2 });
     return Object.keys(r).sort();
   } finally { global.window = prevWindow; global.document = prevDoc; }
@@ -144,10 +151,42 @@ function gateEnforcementClaims() {
     `${missing.join(", ")} — a lesson claiming a gate that is not there is worse than no lesson`);
 }
 
+// ── GATE 4 — the documented width default must be the width the kit actually scaffolds ────────
+// Paid for on a real reviewed run (2026-07-20): the skill said "default 1512" while
+// new-target.js scaffolded 1728 — an agent following the doc measured a DIFFERENT page than the
+// kit built, and adopt.js quietly used a third default of its own. Mechanical, so gated:
+//   a) new-target.js and adopt.js scaffold ONE default (parsed from their width guards);
+//   b) the skill's "default N" names exactly that number;
+//   c) the retired default (1512) appears in no shipped doc — that number only ever meant
+//      "the width the kit no longer uses", and every past occurrence was presented as the
+//      default/example width.
+function gateWidthDefault() {
+  const parseDefault = (file) => {
+    const m = read(file).match(/\?\s*(\d+)\s*:\s*\+widthArg/);
+    return m ? Number(m[1]) : null;
+  };
+  const newDefault = parseDefault("harness/new-target.js");
+  const adoptDefault = parseDefault("harness/adopt.js");
+  check("new-target.js and adopt.js scaffold ONE width default",
+    newDefault != null && newDefault === adoptDefault,
+    `new-target.js says ${newDefault}, adopt.js says ${adoptDefault} — two defaults means target.json depends on which door you came in through`);
+  const skillClaim = (read("skill/pixel-perfect-clone/SKILL.md").match(/WIDTH:\s*default\s+(\d+)/) || [])[1];
+  check(`the skill's documented width default matches the kit's real one (${newDefault})`,
+    Number(skillClaim) === newDefault,
+    `SKILL.md says "default ${skillClaim}" but new-target.js scaffolds ${newDefault} — an agent following the doc measures a different page than the kit builds`);
+  // LEARNINGS.md is the one exemption: it is the post-mortem catalog, and lesson 39
+  // NAMES the retired number as history. Every other doc is an instruction surface.
+  const stale = DOC_FILES.filter((f) => f !== path.join("docs", "LEARNINGS.md") && /\b1512\b/.test(read(f)));
+  check("the retired width default (1512) appears in no shipped instruction doc",
+    stale.length === 0,
+    `${stale.join(", ")} still says 1512 — that number was only ever the old default, and every doc occurrence presented it as the width to use`);
+}
+
 (async () => {
   await gateReturnShapes();
   gateCitations();
   gateEnforcementClaims();
+  gateWidthDefault();
   console.log(bad ? `\n❌ docs-selftest: ${bad} check(s) failed — the docs no longer describe the tools.` : "\n✓ docs-selftest: documented return shapes match the real ones, every #NN citation resolves, every claimed fixture exists.");
   process.exit(bad ? 1 : 0);
 })();

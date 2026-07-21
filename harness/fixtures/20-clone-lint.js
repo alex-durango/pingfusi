@@ -87,6 +87,29 @@ const CLEAN = `<!doctype html><html><head><link rel=stylesheet href="assets/css/
   check("CONTROL — a plain static page with no JS markers does not fire", fired(CLEAN, "stripped-scripts") === 0);
 }
 
+// ---------- 5. dead-canvas — script-painted canvas in a STATIC clone ----------
+// bizar.ro (LEARNINGS #37): the page's entire visible painting is a WebGL canvas; the DOM
+// skeleton measured identical on both sides (the same shared-blind-spot as this file's
+// header, one layer down — pixels the capture cannot see are pixels both snapshots agree
+// about), visual passed 1236/1236, and the published draft rendered SOLID BLACK. The
+// reviewer wrote "cannot see any draft" and the round burned.
+{
+  // the bizar.ro shape: a canvas and almost nothing else painted → the canvas IS the page
+  const defect = `<body><canvas id="scene" width="1440" height="900"></canvas><div id="app"></div></body>`;
+  check("lint catches the canvas-only page (canvas + almost nothing else painted)", fired(defect, "dead-canvas") === 1);
+  check("  …as FAIL — a static clone of a canvas-painted page is a blank sheet", levelOf(defect, "dead-canvas") === "FAIL");
+  check("  …downgraded to WARN when fixes.js ships (the behavior phase may paint it)", levelOf(FIXES + defect, "dead-canvas") === "WARN");
+  // a decorative canvas on a page that paints plenty else: surfaced, never failed
+  const decorated = `<body><canvas id="confetti"></canvas><header><h1>Big Summer Sale</h1><p>${"plenty of visible copy here ".repeat(12)}</p></header><img src="assets/a.jpg"><img src="assets/b.jpg"><img src="assets/c.jpg"></body>`;
+  check("a decorative canvas on a page that paints plenty else is WARN, not FAIL",
+    fired(decorated, "dead-canvas") === 1 && levelOf(decorated, "dead-canvas") === "WARN");
+  // canvas FALLBACK content only renders where canvas is unsupported — it must not count
+  // as "the page paints something else"
+  const fallbackOnly = `<body><canvas id="scene"><p>${"fallback prose that no real visitor sees ".repeat(10)}</p></canvas></body>`;
+  check("canvas fallback content does not count as painted page content (still FAIL)", levelOf(fallbackOnly, "dead-canvas") === "FAIL");
+  check("CONTROL — the clean canvas-free clone stays silent", fired(CLEAN, "dead-canvas") === 0);
+}
+
 // ---------- the real thing: a FROZEN specimen of the defective capture ----------
 // scripts/fixtures-data/aloyoga-topofpage-capture.html is the aloyoga clone EXACTLY as the
 // top-of-page capture produced it (sha f3d2c53b…) — frozen BEFORE the fix, per the kit's

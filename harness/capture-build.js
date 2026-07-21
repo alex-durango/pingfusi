@@ -16,6 +16,14 @@
 //   - downloads every linked stylesheet          → clone/assets/css/   (self-hosted)
 //   - downloads every font the CSS references    → clone/assets/fonts/ (self-hosted —
 //     the assets gate verifies their wOF2 magic; cross-origin fonts need CORS anyway)
+//   - downloads every <img>/<video>/<audio>/<source> asset (src/poster/srcset)
+//     → clone/assets/media/ (self-hosted, same rule as css/fonts) and DROPS their
+//     crossorigin attributes — a kept cross-origin src with `crossorigin` makes the
+//     clone's fetch CORS-mode, and Chrome REFUSES TO PAINT the image on localhost and
+//     hosted drafts (bizar.ro needed a hand fixup; the box measures identically either
+//     way, so a green sweep never sees the hole). A media download that fails is a
+//     PER-ASSET receipt (the ref stays absolute so the page still tries the CDN),
+//     never a build failure — unlike stylesheets/fonts, which stay pixel-fatal.
 //   - rewrites every other css/html asset ref to the ABSOLUTE live URL (byte-identical
 //     bytes from the origin/CDN; nothing redrawn, nothing re-encoded)
 //   - strips <script> (a static clone must not re-hydrate/redirect), script preloads,
@@ -178,6 +186,48 @@ async function downloadFonts(urls, state) {
   }
 }
 
+// ── media (<img>/<video>/<audio>/<source>) self-hosting ──────────────────────
+// Same discipline as fonts: dedupe by absolute URL, disambiguate basename collisions,
+// keep the absolute URL on failure. The ONE deliberate difference: a failed media
+// download is receipted per-asset and NEVER fails the build — a missing photo is a
+// visible, reviewer-catchable hole, while a missing stylesheet/font silently reshapes
+// every measurement (those stay fatal).
+const MEDIA_TAG_RE = /<(?:img|video|audio|source)\b[^>]*>/gi;
+
+// Collect every absolute media URL referenced by src/poster/srcset on media tags.
+function scanMediaUrls(html, baseUrl) {
+  const found = new Set();
+  for (const tag of html.match(MEDIA_TAG_RE) || []) {
+    for (const attr of ["src", "poster"]) {
+      const abs = absolutize(attrValue(tag, attr) || "", baseUrl);
+      if (abs) found.add(abs);
+    }
+    const srcset = attrValue(tag, "srcset");
+    if (srcset && !/^data:/i.test(srcset.trim())) {
+      for (const { url } of parseSrcset(srcset)) {
+        const abs = absolutize(url, baseUrl);
+        if (abs) found.add(abs);
+      }
+    }
+  }
+  return [...found];
+}
+
+async function downloadMedia(urls, state) {
+  for (const abs of urls) {
+    if (state.mediaMap.has(abs)) continue;
+    let file = baseNameOfUrl(abs);
+    if ([...state.mediaMap.values()].includes(`/assets/media/${file}`)) file = `${state.mediaMap.size}-${file}`;
+    try {
+      await fetchTo(abs, path.join(state.mediaDir, file));
+      state.mediaMap.set(abs, `/assets/media/${file}`);
+    } catch (e) {
+      state.mediaFailures.push(`${abs} — ${e.message}`);
+      state.mediaMap.set(abs, abs); // keep the absolute URL so the page still tries the CDN
+    }
+  }
+}
+
 // ── html attribute helpers ────────────────────────────────────────────────────
 // Attribute values are HTML-entity-encoded in the source (a multi-query-param URL like
 // Google Fonts' combined css2?family=A&family=B legally authors the "&" as "&amp;" inside
@@ -228,10 +278,12 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
   const cloneDir = path.join(dir, "clone");
   const cssDir = path.join(cloneDir, "assets", "css");
   const fontDir = path.join(cloneDir, "assets", "fonts");
+  const mediaDir = path.join(cloneDir, "assets", "media");
   fs.mkdirSync(cssDir, { recursive: true });
   fs.mkdirSync(fontDir, { recursive: true });
+  fs.mkdirSync(mediaDir, { recursive: true });
 
-  const state = { fontMap: new Map(), imports: [], failures: [], fontDir };
+  const state = { fontMap: new Map(), mediaMap: new Map(), imports: [], failures: [], mediaFailures: [], fontDir, mediaDir };
 
   // ── the doctype is a pixel-determining property of the whole page (#18) ─────
   // Preserve exactly what was captured; only REPORT the implied rendering mode.
@@ -269,6 +321,10 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
 
   for (const [abs, { dest, css }] of cssText) fs.writeFileSync(dest, rewriteCss(css, abs, state));
 
+  // media referenced by <img>/<video>/<audio>/<source> — self-hosted like css/fonts,
+  // failures per-asset receipted below (never fatal)
+  await downloadMedia(scanMediaUrls(html, target.url), state);
+
   // ── pass 2: rewrite the HTML ─────────────────────────────────────────────────
   // scripts: a static clone must never re-hydrate, redirect, or blank itself
   html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "").replace(/<script\b[^>]*\/>/gi, "");
@@ -295,19 +351,31 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
     return out;
   });
 
-  // src/poster on img/video/iframe/source/etc → absolute (bytes come from the live origin/CDN)
+  // src/poster on img/video/iframe/source/etc → the self-hosted /assets/media/ copy when
+  // one was downloaded, else absolute (bytes come from the live origin/CDN). Values are
+  // entity-decoded before URL-parsing for the same reason link hrefs are (see
+  // decodeAttrEntities): "&amp;" inside a CDN query string must not become a bogus param.
+  const localOrAbs = (abs) => (state.mediaMap.has(abs) && state.mediaMap.get(abs) !== abs ? state.mediaMap.get(abs) : abs);
   html = html.replace(/\b(src|poster)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (m, attr, dq, sq) => {
-    const abs = absolutize(dq != null ? dq : sq, target.url);
-    return abs ? `${attr}="${abs}"` : m;
+    const abs = absolutize(decodeAttrEntities(dq != null ? dq : sq), target.url);
+    return abs ? `${attr}="${localOrAbs(abs)}"` : m;
   });
   html = html.replace(/\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (m, dq, sq) => {
-    const val = dq != null ? dq : sq;
+    const val = decodeAttrEntities(dq != null ? dq : sq);
     if (/^data:/i.test(val.trim())) return m;
     const rewritten = parseSrcset(val)
-      .map(({ url, desc }) => [absolutize(url, target.url) || url, desc].filter(Boolean).join(" "))
+      .map(({ url, desc }) => {
+        const abs = absolutize(url, target.url);
+        return [abs ? localOrAbs(abs) : url, desc].filter(Boolean).join(" ");
+      })
       .join(", ");
     return `srcset="${rewritten}"`;
   });
+  // crossorigin on media tags was authored for the ORIGINAL origin. On the clone it makes
+  // the fetch CORS-mode, and a CDN that never sends ACAO for localhost/hosted-draft origins
+  // means Chrome refuses to PAINT the image — a hole the box-identical sweep can't see.
+  // Drop it whether or not the asset self-hosted; a plain (no-cors) <img> paints either way.
+  html = html.replace(MEDIA_TAG_RE, (tag) => dropAttr(tag, "crossorigin"));
   // a lazy image inside a hidden/JS-toggled container never fires its viewport check
   html = html.replace(/\bloading\s*=\s*(?:"lazy"|'lazy'|lazy\b)/gi, 'loading="eager"');
 
@@ -351,9 +419,16 @@ capture it off the LIVE page first (tools/RUNBOOK.md "Build by capture"):
   doctype:    ${mode}
   css:        ${cssMap.size} stylesheet(s) self-hosted → clone/assets/css/
   fonts:      ${[...state.fontMap.values()].filter((v) => v.startsWith("/assets/")).length} self-hosted → clone/assets/fonts/  (assets gate checks their wOF2 magic)
+  media:      ${[...state.mediaMap.values()].filter((v) => v.startsWith("/assets/")).length} self-hosted → clone/assets/media/  (img/video/audio/source; crossorigin dropped)
   stripped:   <script> tags, script preloads, CSP <meta>${hadBase ? ", <base> (refs absolutized)" : ""}
   fixes.js:   ${fixesWired ? `wired (<script src="fixes.js" defer> before </body>)` : "not wired — pass --fixes once you have targets/" + name + "/clone/fixes.js (behavior phase)"}`);
   if (state.imports.length) console.log(`  ⚠ @import: ${state.imports.length} absolutized, NOT recursed — fonts behind them are not self-hosted:\n      ${state.imports.join("\n      ")}`);
+  // Media failures are per-asset receipts, NEVER fatal: the ref stays absolute (the page
+  // still tries the live origin/CDN), and the diff's glyph.painted check + a reviewer
+  // catch a hole. A cross-origin ref that survives here is the commonest cause of
+  // "painted on live, hole in the clone" (CORS/hotlink) — the pixel-diff hint names it.
+  if (state.mediaFailures.length)
+    console.log(`  ⚠ media: ${state.mediaFailures.length} download(s) failed — kept the absolute url (a cross-origin src may refuse to paint on the clone's origin):\n      ${state.mediaFailures.join("\n      ")}`);
   if (state.failures.length) {
     console.error(`  ❌ ${state.failures.length} download(s) FAILED — these are pixel-determining; fix before advancing build:\n      ${state.failures.join("\n      ")}`);
     process.exit(1);
@@ -384,4 +459,4 @@ measure it on live with tools/behavior-capture.js, reproduce in clone/fixes.js, 
 }
 
 if (require.main === module) main().catch((e) => { console.error(`capture-build failed: ${e.message}`); process.exit(1); });
-module.exports = { absolutize, scanCssFontUrls, rewriteCss, parseSrcset };
+module.exports = { absolutize, scanCssFontUrls, rewriteCss, parseSrcset, scanMediaUrls };

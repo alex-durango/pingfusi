@@ -6,7 +6,10 @@
 //
 // Asserts the contracts the design contract calls out explicitly:
 //   - blocks on missing inventory (live, then clone)
-//   - blocks on a live behavior absent from the clone inventory, NAMED in the reason
+//   - blocks on a live interaction/state behavior absent from the clone inventory, NAMED
+//     in the reason — while TEMPORAL rows (reveal:/mutation:/startup:) follow the
+//     first-draft doctrine: motion-receipted → satisfied-by-motion (informational),
+//     unreceipted → advisory routed at the motion utilities, never a deviations demand
 //   - blocks on out-of-tolerance values (speed, opacity, transform mismatch)
 //   - passes on within-tolerance reproduction
 //   - passes on a documented deviation
@@ -230,8 +233,37 @@ writeJson("behaviors-clone.json", {
   behaviors: { "mutation:div.hero-rotator": { trigger: "mutation", kind: "observed-mutation", measured: { after: { opacity: 0.4, transform: "matrix(1, 0, 0, 1, 0, -80)", filter: "none" } } } },
 });
 ok(run(["gate", NAME, "behavior"]).code === 0, "passes an interval rotation whose frame snapshots differ (observed-mutation: presence+trigger are the contract, frames are nondeterministic)");
+
+// ── TEMPORAL rows missing from the clone follow the first-draft doctrine, not the miss path ──
+// The motion pass reproduces reveal:/mutation:/startup: phenomena in the draft itself and
+// clone-side discovery does not re-observe that reproduction as the same row — so "missing"
+// is not a miss for them, and the deviations file is barred from temporal evidence. The old
+// accounting demanded exactly that entry: a contradiction with no legitimate exit.
 writeJson("behaviors-clone.json", { url: "http://localhost:8080/", discovery: discoveryMeta(), behaviors: {} });
-ok(run(["gate", NAME, "behavior"]).code === 1, "an observed-mutation key missing from the clone still blocks (the clone must rotate at all)");
+const temporalAdvisory = run(["gate", NAME, "behavior"]);
+ok(temporalAdvisory.code === 0 && /NO motion receipt/.test(temporalAdvisory.out) && /mutation:div\.hero-rotator/.test(temporalAdvisory.out),
+  "a temporal row missing from the clone with no motion receipt is an ADVISORY, never a blocking miss");
+ok(/never require behavior-deviations\.json/.test(temporalAdvisory.out) && new RegExp(`next ${NAME}`).test(temporalAdvisory.out),
+  "the temporal advisory routes at the motion utilities and never demands a deviations entry");
+// a motion receipt for the row's element (pass-written @2 item, selector-matched) upgrades
+// it to satisfied-by-motion — informational, cited with the receipt id
+const savedManifest = fs.readFileSync(path.join(dir, "motion-items.json"), "utf8");
+writeJson("motion-items.json", {
+  schema: "pingfusi/motion-items@2",
+  items: [{ id: "pass-sampled-cafe1234", selector: "div.hero-rotator", scope: "div.hero-rotator", tier: "sampled", action: "player-applied", verify: "pass", source: "motion-pass", status: "pass" }],
+});
+const satisfied = run(["gate", NAME, "behavior"]);
+ok(satisfied.code === 0 && /satisfied by motion receipts/.test(satisfied.out) && /mutation:div\.hero-rotator → pass-sampled-cafe1234/.test(satisfied.out),
+  "a motion-receipted temporal row is SATISFIED-BY-MOTION — the pass reproduced it in the draft, cited informationally");
+// a motion-doc track captured for the element is a receipt too (the pass's players are
+// generated from exactly these tracks)
+writeJson("motion-items.json", { schema: "pingfusi/motion-items@2", items: [] });
+writeJson("motion-doc.json", { schema: "pingfusi/motion-doc@1", tracks: [{ id: "trk-rotator", target: { selector: "div.hero-rotator" }, provenance: { tier: "sampled" } }] });
+const viaDoc = run(["gate", NAME, "behavior"]);
+ok(viaDoc.code === 0 && /satisfied by motion receipts/.test(viaDoc.out) && /trk-rotator/.test(viaDoc.out),
+  "a motion-doc track for the row's element counts as a motion receipt");
+fs.rmSync(path.join(dir, "motion-doc.json"));
+fs.writeFileSync(path.join(dir, "motion-items.json"), savedManifest);
 
 // reset live back to the simple opacity-reveal case used by the remaining assertions below
 writeJson("behaviors-live.json", {

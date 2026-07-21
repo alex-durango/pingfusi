@@ -56,6 +56,33 @@ function decodeClientFrames(state, chunk, out) {
   }
 }
 
+// ── tiny PNG encoder for the paint probe (filter-0 rows, CRCs zeroed — the probe reads
+//    its own Chrome's bytes and does not verify CRCs; the probe MATH is fixtured in
+//    harness/fixtures/43-paint-probe.js, this half proves the CDP wiring + receipts) ────
+function makePng(width, height, px) {
+  const zlib = require("zlib");
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    return Buffer.concat([len, Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA, non-interlaced — Chrome's screenshot shape
+  const stride = width * 4;
+  const raw = Buffer.alloc(height * (stride + 1));
+  for (let y = 0; y < height; y++) {
+    const off = y * (stride + 1);
+    for (let x = 0; x < width; x++) {
+      const [r, g, b] = px(x, y);
+      const i = off + 1 + x * 4;
+      raw[i] = r; raw[i + 1] = g; raw[i + 2] = b; raw[i + 3] = 255;
+    }
+  }
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+const PNG_BLACK = makePng(64, 64, () => [0, 0, 0]).toString("base64");
+const PNG_RICH = makePng(64, 64, (x, y) => (((x >> 3) + (y >> 3)) % 2 ? [255, 255, 255] : [20, 40, 200])).toString("base64");
+
 const GOOD_PROBE = { documentHidden: false, visibilityState: "visible", hasFocus: false, innerWidth: 1440, devicePixelRatio: 2, raf: { frames: 33, ms: 702 }, anim: { expectedPxPerSec: 100, measuredPxPerSec: 99.1 } };
 const snapJson = JSON.stringify({ url: "http://fake/", viewport: { width: 1440, height: 982, dpr: 2 }, mode: "CSS1Compat", elements: { h1: {} } });
 const GOOD_REPORT = (prefix) => ({
@@ -106,6 +133,10 @@ function fakeChrome(script) {
         } else if (msg.method === "Network.getResponseBody") {
           const n = (acts.network || []).find((x) => x.id === (msg.params || {}).requestId);
           reply(n ? { body: n.base64 ? Buffer.from(n.body, "latin1").toString("base64") : n.body, base64Encoded: !!n.base64 } : { body: "", base64Encoded: false });
+        } else if (msg.method === "Page.captureScreenshot") {
+          // no acts.screenshot → an empty reply, which the paint probe must receipt as a
+          // note ("returned no data"), never as a capture failure
+          reply(acts.screenshot ? { data: acts.screenshot } : {});
         } else if (msg.method === "Emulation.setDeviceMetricsOverride") {
           metricsCalls.push(msg.params);
           reply({});
@@ -114,10 +145,33 @@ function fakeChrome(script) {
           if (e.includes("__ppkProbe")) value(acts.probe || GOOD_PROBE);
           else if (e.includes("iw: innerWidth")) value(acts.viewportRead || { iw: 1440, cw: 1440, ih: 982, dpr: 2 });
           else if (e === "document.title") value(acts.title || "Fake Page");
-          else if (e === "typeof pxCaptureAll") value("function");
-          else if (e.startsWith("pxCaptureAll(")) {
+          else if (e.startsWith("typeof pxCaptureAll")) value("function"); // pxCaptureAll AND pxCaptureAllPhased
+          else if (e.startsWith("pxCaptureAll")) {
             const prefix = /"prefix":"(\w+)"/.exec(e) ? /"prefix":"(\w+)"/.exec(e)[1] : "live";
-            value(acts.report ? acts.report(prefix) : GOOD_REPORT(prefix));
+            const rep = acts.report ? acts.report(prefix) : GOOD_REPORT(prefix);
+            // The phased call carries the runner's known-unfreezable list; echo it back on
+            // the freeze receipt the way the real in-page freeze merges opts.unfreezable —
+            // so tests can assert the runner actually PASSED it in.
+            if (!rep.aborted && rep.freeze === undefined) {
+              let unf = [];
+              const um = /"unfreezable":(\[[^\]]*\])/.exec(e);
+              if (um) { try { unf = JSON.parse(um[1]); } catch (err) { unf = []; } }
+              rep.freeze = acts.freeze || {
+                supported: true, frozen: 2, ids: ["css:spin@.loader", "pingfusi:motion-replay"], players: [],
+                alreadyPaused: 0, skipped: { finished: 0, scrollLinked: 0, agentDom: 0, kitPlayer: 0, failed: 0 },
+                unfreezable: unf, stillMoving: [], watch: { ran: true, intervals: 2, intervalMs: 180, tracked: 3, writes: 0, truncated: false },
+                excludedMarks: {},
+              };
+            }
+            value(rep);
+          } else if (e.startsWith("pxMarksInSubtrees(")) {
+            value(acts.marks || {});
+          } else if (e.startsWith("Math.max((document.documentElement.scrollHeight")) {
+            value(acts.scrollMax); // undefined by default → the ongoing sweep skips, as before
+          } else if (e.includes("pxDenseRecordStart")) {
+            value(acts.detect || { unsupported: true });
+          } else if (e.startsWith("(() => { const out = {}; for (const sel of ")) {
+            value(acts.tops || {});
           } else if (e.startsWith("pxIntrospectAnimations")) {
             if (acts.introspect === "throw") reply({ result: { type: "object", subtype: "error" }, exceptionDetails: { exception: { description: "Error: getAnimations exploded on this page" } } });
             else if (acts.introspect !== undefined) value(acts.introspect);
@@ -126,6 +180,8 @@ function fakeChrome(script) {
             if (acts.gsap === "throw") reply({ result: { type: "object", subtype: "error" }, exceptionDetails: { exception: { description: "Error: gsap probe exploded" } } });
             else if (acts.gsap !== undefined) value(acts.gsap);
             else reply({ result: { type: "undefined" } });
+          } else if (e.includes("pxCanvasDominant")) {
+            value(acts.canvas !== undefined ? acts.canvas : { unsupported: true });
           } else reply({ result: { type: "undefined" } }); // injection etc.
         } else reply({});
       }
@@ -171,6 +227,7 @@ function makeTarget(work, name) {
     check("live.json + coverage.json + dom.html written from payloads", fs.existsSync(path.join(dir, "live.json")) && fs.existsSync(path.join(dir, "coverage.json")) && fs.readFileSync(path.join(dir, "dom.html"), "utf8") === "<html>fake dom</html>");
     const receipt = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
     check("run receipt: kit version, viewport + sources, probe numbers, per-file bytes", receipt.kitVersion === KITV && receipt.viewport.dpr === 2 && receipt.viewport.sources.width === "target.json" && receipt.sides[0].probe.rafHz > 60 && receipt.sides[0].files.some((f) => f.file === "live.json"));
+    check("paint probe with no screenshot data is a receipted note, never a failure", /paint probe unavailable/.test(receipt.sides[0].paint.error || "") && !receipt.paint);
     check("viewport normalized unconditionally (width+height+dsf, never dsf:0)", server.metricsCalls.length >= 1 && server.metricsCalls.every((m) => m.width === 1440 && m.height === 982 && m.deviceScaleFactor === 2));
     check("next step points at capture-build", /capture-build t1/.test(r.out));
     check("kit version printed at startup", new RegExp(`pingfusi ${KITV.replace(/\./g, "\\.")} capture-run`).test(r.out));
@@ -205,7 +262,7 @@ function makeTarget(work, name) {
     makeTarget(work, "t3");
     const server = await fakeChrome([{ title: "Just a moment..." }]);
     const r = await run(["t3", "--attach", `127.0.0.1:${server.address().port}`], work);
-    check("challenge title → exit 1, ladder + interactive fallback in the ERROR", r.code === 1 && /bot-challenge wall/.test(r.out) && /--profile/.test(r.out) && /pxCaptureAll\('<sink_url>'\)/.test(r.out));
+    check("challenge title → exit 1, ladder + interactive fallback in the ERROR (the PHASED call — the fallback must not reintroduce phase poison)", r.code === 1 && /bot-challenge wall/.test(r.out) && /--profile/.test(r.out) && /pxCaptureAllPhased\('<sink_url>'\)/.test(r.out));
     check("wall artifacts still written as EVIDENCE, and marked as such", fs.existsSync(path.join(work, "targets", "t3", "live.json")) && /EVIDENCE of the wall/.test(r.out) && /do not capture-build from them/.test(r.out));
     server.close();
   }
@@ -319,6 +376,91 @@ function makeTarget(work, name) {
     check("classifier: only the never-settling uncovered mover is detected", movers.length === 1 && movers[0].selector === ".belt" && movers[0].property === "transform", JSON.stringify(movers));
     const g = groupMoversByViewport([{ selector: "a" }, { selector: "b" }, { selector: "c" }, { selector: "gone" }], { a: 5000, b: 5400, c: 9000 }, 982);
     check("grouping: one viewport group per 0.8×height span, topmost is the anchor, missing tops dropped", g.groups.length === 2 && g.groups[0].anchor === "a" && g.groups[0].movers.length === 2 && g.groups[1].anchor === "c" && g.dropped === 1, JSON.stringify(g));
+  }
+
+  // ── the paint probe (LEARNINGS #37): pixels are the only witness painting happened ──
+  {
+    const dir = makeTarget(work, "t8");
+    fs.mkdirSync(path.join(dir, "clone"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "clone", "index.html"), "<html></html>");
+    const server = await fakeChrome([
+      { screenshot: PNG_BLACK }, // clone captured first — the solid-black draft, as the reviewer saw it
+      { screenshot: PNG_RICH, canvas: { schema: "pingfusi/canvas-dominant@1", viewport: { w: 1440, h: 982 }, canvases: 1, bestCoverage: 0.97, marksInFront: 2, dominant: true } },
+    ]);
+    const r = await run(["t8", "--attach", `127.0.0.1:${server.address().port}`, "--clone-url", "http://fake-clone/"], work);
+    check("near-blank clone under a rich live page is a WARNING — the capture still exits 0 (first-draft doctrine)", r.code === 0 && /paints almost nothing/.test(r.out), r.out.slice(0, 600));
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
+    const cSide = receipt.sides.find((s) => s.side === "clone"), lSide = receipt.sides.find((s) => s.side === "live");
+    check("paintStat receipted per side (clone near-blank, live rich)", cSide.paint.stat.nearBlank === true && lSide.paint.stat.nearBlank === false && lSide.paint.stat.nonUniformRatio > 0.4, JSON.stringify({ clone: cSide.paint, live: lSide.paint }));
+    check("the run receipt carries the paint warning `review file` refuses on", /paints almost nothing/.test((receipt.paint || {}).warning || ""));
+    check("canvasDominant receipted on the LIVE side only (the honest capability statement)", !!lSide.canvas && lSide.canvas.dominant === true && !cSide.canvas && /CANNOT reproduce/.test(r.out));
+    check("the warning names the canvas mechanism when live receipted dominance", /script-driven canvas/.test(receipt.paint.warning));
+    server.close();
+
+    // A clone-only re-run must not lose the verdict: the live stat rides in from the
+    // previous receipt, clearly labeled as a previous-run measurement.
+    const server2 = await fakeChrome([{ screenshot: PNG_BLACK, canvas: undefined }]);
+    const r2 = await run(["t8", "--attach", `127.0.0.1:${server2.address().port}`, "--side", "clone", "--clone-url", "http://fake-clone/"], work);
+    const receipt2 = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
+    check("clone-only re-run keeps the warning (live side carried from the previous run, labeled)", r2.code === 0 && /paints almost nothing/.test((receipt2.paint || {}).warning || "") && /previous run/.test(receipt2.paint.warning), (receipt2.paint || {}).warning || r2.out.slice(0, 300));
+    server2.close();
+  }
+
+  // ── phase-freeze (LEARNINGS #38): known-unfreezable plumbing + the freeze receipt ──
+  {
+    const dir = makeTarget(work, "t9");
+    // Earlier receipts on disk: a sampled-ongoing track AND a sweep-detected mover — the
+    // runner must hand BOTH to the in-page freeze as known-unfreezable; declared tiers
+    // (css/gsap/waapi) are pausable and must NOT ride the list.
+    fs.writeFileSync(path.join(dir, "motion-doc.json"), JSON.stringify({
+      schema: "pingfusi/motion-doc@1", url: "http://fake-live/", viewport: { width: 1440, height: 982, dpr: 2 }, assets: [],
+      tracks: [
+        { id: "tr1", target: { selector: ".belt" }, property: "transform", keyframes: [], timing: {}, provenance: { tier: "sampled" }, ongoing: true },
+        { id: "tr2", target: { selector: ".spin" }, property: "transform", keyframes: [], timing: {}, provenance: { tier: "introspected-css" } },
+        { id: "tr3", target: { selector: ".fin" }, property: "opacity", keyframes: [], timing: {}, provenance: { tier: "sampled" } }, // sampled but FINITE — freezable clip, not unfreezable
+      ],
+    }));
+    fs.mkdirSync(path.join(dir, "motion"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "motion", "auto-sample.json"), JSON.stringify({ detected: [{ selector: ".ticker", property: "transform", depth: 0 }] }));
+    {
+      // The pure reader, exercised where WORK resolves to the fake workdir.
+      const prevCwd = process.cwd();
+      process.chdir(work);
+      const runnerKey = require.resolve("./capture-runner.js");
+      delete require.cache[runnerKey];
+      const { sweepUnfreezableSelectors } = require("./capture-runner.js");
+      const sels = sweepUnfreezableSelectors("t9");
+      process.chdir(prevCwd);
+      delete require.cache[runnerKey]; // leave no cwd-bound module behind for later requires
+      check("sweepUnfreezableSelectors: sampled-ongoing + sweep-detected, sorted; declared tiers and finite sampled tracks excluded", sels.join(",") === ".belt,.ticker", JSON.stringify(sels));
+    }
+    const server = await fakeChrome([{ marks: {} }]);
+    const r = await run(["t9", "--attach", `127.0.0.1:${server.address().port}`], work);
+    check("phase-freeze rides the capture: frozen count + phase 0 printed, exit 0", r.code === 0 && /phase-freeze: 2 animation\(s\) paused at phase 0/.test(r.out), r.out.slice(0, 500));
+    check("known-unfreezable movers were passed IN to the in-page freeze and printed", /2 UNFREEZABLE mover\(s\)/.test(r.out));
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
+    const fz = receipt.sides[0].freeze;
+    check("freeze receipted on the side: counts, ids, unfreezable list, per-mark count (map lives in the snapshot)", !!fz && fz.frozen === 2 && fz.ids.length === 2 && fz.unfreezable.join(",") === ".belt,.ticker" && fz.excludedMarkCount === 0 && fz.excludedMarks === undefined, JSON.stringify(fz));
+    server.close();
+  }
+
+  // ── phase-freeze, second half: the sweep's movers are noted into live.json SAME-RUN ──
+  {
+    const dir = makeTarget(work, "t10");
+    const mkSamples = (txs) => txs.map((tx, i) => ({ t: i * 350, values: { transform: `matrix(1, 0, 0, 1, ${tx}, 0)`, opacity: "1" } }));
+    const server = await fakeChrome([{
+      scrollMax: 0, // one sweep depth
+      detect: { record: { elements: [{ selector: ".marq", samples: mkSamples([0, 7, 14, 21]) }] } }, // moves every interval → ongoing mover
+      tops: {},     // mover "vanishes" before position read → detected but never sampled (still a mover)
+      marks: { div_marq: ".marq", div_evil: ".not-ours" }, // page answer is REMOTE-CONTROLLED: only selectors the runner SENT may map
+    }]);
+    const r = await run(["t10", "--attach", `127.0.0.1:${server.address().port}`], work);
+    check("sweep-detected mover noted into live.json same-run, printed with the mark count", r.code === 0 && /1 sweep-detected ongoing mover\(s\) noted as unfreezable in live\.json — 1 mark\(s\)/.test(r.out), r.out.slice(0, 700));
+    const snap = JSON.parse(fs.readFileSync(path.join(dir, "live.json"), "utf8"));
+    check("live.json freeze field: unfreezable + excludedMarks (foreign selectors from the page REFUSED)", !!snap.freeze && snap.freeze.unfreezable.includes(".marq") && snap.freeze.excludedMarks.div_marq === ".marq" && !("div_evil" in snap.freeze.excludedMarks), JSON.stringify(snap.freeze));
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, "capture-run.json"), "utf8"));
+    check("the patch is receipted on the side and mirrored into the run receipt's unfreezable list", receipt.sides[0].freezePatch && receipt.sides[0].freezePatch.marks === 1 && receipt.sides[0].freeze.unfreezable.includes(".marq"), JSON.stringify(receipt.sides[0].freezePatch));
+    server.close();
   }
 
   // ── --dry-run ──────────────────────────────────────────────────────────────────

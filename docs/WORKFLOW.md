@@ -51,10 +51,10 @@ node harness/workflow.js gate    <name> <phase>    # run ONE gate read-only (exi
 node harness/workflow.js advance <name> <phase> [--evidence "…"] [--force]
 node harness/workflow.js ledger  <name>            # the audit trail (receipts)
 node harness/capture-build.js    <name> [domFile]  # the default build step: clone FROM the captured DOM
-node harness/review-qa.js file    <name> --draft <public-url> [--region "the header"] [--results 1..20]   # file the review round (default 5)
+node harness/review-qa.js file    <name> --draft <public-url> [--region "the header"] [--results 1..20]   # file the review round (default 1)
 ```
 
-Review depth is explicit: a quick check targets 1 result, a standard round defaults to 5,
+Review depth is explicit: every round defaults to 1 result, a broader read can request 5,
 and complex or high-confidence work can target 15–20. Each completed result costs 1 credit;
 filing and undelivered results are free.
 
@@ -268,10 +268,17 @@ see `docs/PLAYBOOK.md`'s behavior section for the full technique writeup. In sho
 4. The gate (`harness/workflow.js`, phase `behavior`) compares every live behavior against
    the clone's inventory by KEY (see "Behavior keys" below) and MEASURED value, within the
    tolerances below. `behavior-deviations.json` is the honest disposition for unsupported
-   interaction/state inventory. Motion bookkeeping rides along as INFORMATIONAL receipt
-   lines on the gate's pass reason (first-draft doctrine): temporal candidates and motion
-   items without a green machine receipt surface as warnings plus a `pingfusi next`
-   route — never gate failures.
+   interaction/state inventory — and for that inventory ONLY. TEMPORAL rows
+   (`reveal:`/`mutation:`/`startup:`) are the motion pass's jurisdiction: one missing from
+   the clone inventory whose element carries a motion receipt (a motion-items@2 item or a
+   motion-doc track — the pass reproduces the phenomenon in the draft itself, and
+   clone-side discovery does not re-observe a player as the same row) counts as
+   SATISFIED-BY-MOTION, an informational line citing the receipt id; one with no receipt
+   is an ⚠ advisory routed at `pingfusi next`. Neither is ever a miss, and neither ever
+   demands a deviations entry (LEARNINGS #40). Motion bookkeeping rides along as
+   INFORMATIONAL receipt lines on the gate's pass reason (first-draft doctrine): temporal
+   candidates and motion items without a green machine receipt surface as warnings plus a
+   `pingfusi next` route — never gate failures.
 
 **A hidden tab is not a measurement environment — and the kit can bring its own.** The gate
 refuses any snapshot whose `discovery.documentHidden` is `true` (throttled timers + a frozen
@@ -386,8 +393,8 @@ Or via the shim: `./bin/pingfusi status <name>` (symlink `bin/pingfusi` onto you
 - **Three failed advances on one phase print STALLED.** The streak is derived from the
   ledger's gate-failure refusals (nothing new is stored) and surfaces in `status`, failing
   `gate` probes, and the refusal itself, with the runnable escalation: `pingfusi assist
-  <name>` — a 1-result reviewer question auto-composed from the failing gate's own artifacts
-  (`--compare` files a 5-result scoped diagnostic round by default). Advisory: nothing blocks. The
+  <name> --compare` — a 1-result scoped diagnostic round whose question is auto-composed
+  from the failing gate's own artifacts. Advisory: nothing blocks. The
   streak resets when an assist is FILED (the ledger `assist` receipt), not when it is
   answered — one ask buys more iterations while the answer arrives.
 
@@ -461,13 +468,17 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   1 completed result (up to 1 credit)
   mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `reviewer`
   gate never reads polls; it requires an approving verdict on a full round.
-- **Assists**: `pingfusi assist <name>` is the stall escalation — it auto-composes the
-  question from the failing phase's own artifacts (worst failing diff row, uncovered leaf,
-  behavior row) and files a micro-poll, or with `--compare` a scoped diagnostic round
-  (side-by-side compare UI; recorded under `diagnostics`). At most ONE open assist per
-  target — a second unanswered ask multiplies credits without resolving the first. A filed
-  assist appends an `event:"assist"` receipt to `workflow.jsonl` (this is what resets the
-  stall streak); answers are re-fetched free with `poll-result` / `assist-result`, and
+- **Assists**: `pingfusi assist <name> --compare` is the stall escalation — it
+  auto-composes the question from the failing phase's own artifacts (worst failing diff
+  row, uncovered leaf, behavior row) and files a scoped diagnostic round (side-by-side
+  compare UI; recorded under `diagnostics`). `--compare` is required: the text-only
+  micro-poll format is retired — a live reviewer's reply to one was "I don't understand.
+  Send a comparison", so bare `assist` refuses with that nudge instead of burning a
+  round on the format. The target's recorded `draft.json` is REUSED after its served
+  bytes re-verify; only a missing or stale draft demands a push. At most ONE open assist
+  per target — a second unanswered ask multiplies credits without resolving the first. A
+  filed assist appends an `event:"assist"` receipt to `workflow.jsonl` (this is what
+  resets the stall streak); answers are re-fetched free with `assist-result`, and
   `status` surfaces the pending/answered ask. Assist refuses phases a reviewer can't help
   with: mechanical artifacts, and environment-shaped behavior failures (those steer to
   `pingfusi behavior-capture`).

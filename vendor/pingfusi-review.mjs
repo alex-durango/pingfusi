@@ -96,6 +96,8 @@ const RULE_BODY = `Use the pingfusi MCP to get a review round on your work whene
 
 Do not use for: anything verifiable with code, tests, or a local browser; objective questions answerable from docs or search.
 
+Cloning is only the first packaged use case: pingfusi is a general channel to real human reviewers, so use pingfusi ask / pingfusi review for any judgment task in any project — copy, design, flows — not only site clones.
+
 Clone-target precedence: when the repository contains targets/<name>/workflow.json, the CLI owns orchestration. Start with pingfusi next <name> and follow what it prints. Never call the raw review MCP tools for that target: doing so bypasses the workflow gates. Animation reproduction is part of the draft build: motion checks are machine receipts and warnings surfaced by pingfusi next, never gate failures and never review rounds. File page/layout work through pingfusi review <name> ...; the side-by-side compare round (pingfusi assist <name> --compare) is the one reviewer channel for anything visual. The generic MCP steps below apply only outside a pingfusi clone workflow.
 
 ## Steps
@@ -111,7 +113,7 @@ name: pingfusi-review
 description: This skill should be used when the user has built or changed a UI and wants it verified with a review round, asks for QA / testing / feedback on a build, or wants to check the results of a previously filed review. Also activates for subjective gut-checks (taste, copy, design preference) via pingfusi.
 ---
 
-When you've built or changed something you can't verify yourself, use pingfusi to get it tested and return structured results — a verdict, pinned component comments with CSS selectors, a per-step proof-of-work report, and screenshots you can open.
+When you've built or changed something you can't verify yourself, use pingfusi to get it tested and return structured results — a verdict, pinned component comments with CSS selectors, a per-step proof-of-work report, and screenshots you can open. Cloning is only the first packaged use case: pingfusi is a general review channel for any judgment task an agent can't verify itself — copy, design, flows — not only website clones.
 
 ## Clone Targets: the CLI Owns Orchestration
 
@@ -129,7 +131,7 @@ If the repository contains targets/<name>/workflow.json, begin with pingfusi nex
 
 ### Step 1: Make the build reachable and instrumented
 
-The \`url\` must be PUBLICLY reachable — a remote reviewer opens it, so localhost won't work: tunnel it first (ngrok, cloudflared) or deploy a preview. The toolbar script is REQUIRED for pinned comments and step auto-verification — one line, once per project, in the preview build's HTML (root layout / index template), preview/dev only:
+The \`url\` must be PUBLICLY reachable — a remote human reviewer opens it, so localhost won't work: tunnel it first (ngrok, cloudflared) or deploy a preview. The toolbar script is REQUIRED for pinned comments and step auto-verification — one line, once per project, in the preview build's HTML (root layout / index template), preview/dev only:
 
 \`\`\`html
 <script src="https://pingfusi.com/qa-toolbar.js"></script>

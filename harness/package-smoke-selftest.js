@@ -30,6 +30,8 @@ console.log("package-smoke-selftest — generated fresh-agent surface");
 if (!fs.existsSync(BUILD)) {
   ok(fs.existsSync(path.join(KIT, "packages", "motion", "bin", "motion-kit.js")), "public checkout includes the integrated motion entrypoint");
   ok(fs.existsSync(path.join(KIT, "skill", "pixel-perfect-clone", "SKILL.md")), "public checkout includes the clone-agent skill");
+  ok(fs.existsSync(path.join(KIT, "skill", "beautify-with-pingfusi", "SKILL.md")), "public checkout includes the beautify-agent skill");
+  ok(fs.existsSync(path.join(KIT, "use-cases", "beautify", "README.md")), "public checkout includes the beautify catalog entry");
   process.exit(failed ? 1 : 0);
 }
 
@@ -81,6 +83,8 @@ for (const required of [
   "packages/motion/player/linked.html",
   "packages/motion/package-lock.json",
   "skill/pixel-perfect-clone/SKILL.md",
+  "skill/beautify-with-pingfusi/SKILL.md",
+  "use-cases/beautify/README.md",
 ]) ok(names.has(required), `packed artifact contains ${required}`);
 // negative surface: local capture artifacts, recorded video, and the internal leak-guard
 // selftest must never ride along in a release tarball
@@ -120,9 +124,14 @@ ok(lazyMotion.status === 2 && /pingfusi motion install\b/.test((lazyMotion.stder
 
 const setup = run(entry, ["agent-setup", "codex", "--force"], blank, home);
 const installedSkill = path.join(home, ".codex", "skills", "pixel-perfect-clone", "SKILL.md");
-ok(setup.status === 0 && fs.existsSync(installedSkill), "packed setup installs the clone skill into an isolated coding-agent home");
+const installedBeautify = path.join(home, ".codex", "skills", "beautify-with-pingfusi", "SKILL.md");
+ok(setup.status === 0 && fs.existsSync(installedSkill) && fs.existsSync(installedBeautify), "packed setup installs clone + beautify skills into an isolated coding-agent home");
 const skillText = fs.existsSync(installedSkill) ? fs.readFileSync(installedSkill, "utf8") : "";
 ok(/pingfusi next/.test(skillText) && /motion pass/.test(skillText) && !/motion review\b/.test(skillText), "installed skill teaches the default-on motion pass and machine-check routing, with review-round motion machinery gone");
+const beautifyText = fs.existsSync(installedBeautify) ? fs.readFileSync(installedBeautify, "utf8") : "";
+ok(/core\.review\.file/.test(beautifyText) && /omit `draft_url`/.test(beautifyText)
+  && /Professionally polished/.test(beautifyText),
+  "packed beautify skill uses the generic single-page round with an exact approval verdict");
 
 const target = path.join(blank, "targets", "circle");
 writeJson(path.join(target, "workflow.json"), {

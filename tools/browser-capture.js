@@ -1345,3 +1345,307 @@
     });
   };
 })(typeof window !== "undefined" ? window : globalThis);
+
+// ── pxCanvasDominant — is this page's visible painting a script-driven canvas? ──
+// The BLACK-PAGE GREEN miss (bizar.ro, LEARNINGS #37): a WebGL canvas painted the whole
+// page, the DOM skeleton measured identical on both sides — live.json and clone.json come
+// from the SAME instrument, so a property the capture cannot see is one both sides agree
+// about — and every gate passed while the published draft rendered solid black. A static
+// DOM clone CANNOT reproduce script-driven canvas painting; this helper is the honest
+// capability statement, read on the LIVE capture and receipted by capture-run. Two halves
+// so the rule is fixtured in node (harness/fixtures/44-canvas-dominant.js):
+//   pxCanvasDominance(viewport, canvasRects, markRects, opts) — the PURE classifier
+//   pxCanvasDominant(opts)                                    — the DOM read
+// "In front" is approximated by OVERLAP: painted leaves (pxEnumerateLeaves) whose boxes
+// intersect the biggest canvas's box. Real z-order needs per-pixel hit-testing the
+// instrument doesn't do — a full-bleed background canvas under plenty of DOM marks is NOT
+// dominant (the DOM clone reproduces most of what a viewer sees); a big canvas with next
+// to nothing over it IS. Read-only toward the page; agent DOM skipped like every reader.
+(function (root) {
+  root.pxCanvasDominance = function (viewport, canvasRects, markRects, opts) {
+    var o = opts && typeof opts === "object" ? opts : {};
+    var minCoverage = typeof o.minCoverage === "number" ? o.minCoverage : 0.5; // > ~half the viewport
+    var maxMarks = typeof o.maxMarks === "number" ? o.maxMarks : 12;           // "fewer than N painted DOM marks in front"
+    var vw = (viewport && viewport.w) || 0, vh = (viewport && viewport.h) || 0;
+    var viewArea = vw * vh;
+    var best = null, bestCov = 0;
+    for (var i = 0; i < (canvasRects || []).length; i++) {
+      var r = canvasRects[i];
+      if (!r || !(r.w > 0) || !(r.h > 0)) continue;
+      var ix = Math.max(0, Math.min(r.x + r.w, vw) - Math.max(r.x, 0));
+      var iy = Math.max(0, Math.min(r.y + r.h, vh) - Math.max(r.y, 0));
+      var cov = viewArea > 0 ? (ix * iy) / viewArea : 0;
+      if (cov > bestCov) { bestCov = cov; best = r; }
+    }
+    var marks = 0;
+    if (best) {
+      for (var j = 0; j < (markRects || []).length; j++) {
+        var m = markRects[j];
+        if (!m || !(m.w > 0) || !(m.h > 0)) continue;
+        var ox = Math.max(0, Math.min(m.x + m.w, best.x + best.w) - Math.max(m.x, best.x));
+        var oy = Math.max(0, Math.min(m.y + m.h, best.y + best.h) - Math.max(m.y, best.y));
+        if (ox * oy > 0) marks++;
+      }
+    }
+    return {
+      schema: "pingfusi/canvas-dominant@1",
+      viewport: { w: vw, h: vh },
+      canvases: (canvasRects || []).length,
+      bestCoverage: Math.round(bestCov * 1000) / 1000,
+      marksInFront: marks,
+      dominant: !!best && bestCov >= minCoverage && marks < maxMarks,
+    };
+  };
+  root.pxCanvasDominant = function (opts) {
+    var vw = 0, vh = 0;
+    try { vw = root.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 0; } catch (e) {}
+    try { vh = root.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0; } catch (e) {}
+    var isAgent = typeof root.pxIsAgentDom === "function" ? root.pxIsAgentDom : function () { return false; };
+    var rectOf = function (el) { var r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+    var canvases = [];
+    var nodes = [];
+    try { nodes = document.querySelectorAll("canvas"); } catch (e) { nodes = []; }
+    for (var i = 0; i < nodes.length; i++) {
+      if (isAgent(nodes[i])) continue;
+      try { canvases.push(rectOf(nodes[i])); } catch (e) {}
+    }
+    // Painted DOM marks: the same enumeration every gate certifies (text, media, painted
+    // boxes), canvases themselves excluded — a canvas cannot testify for its own painting.
+    var marks = [];
+    if (typeof root.pxEnumerateLeaves === "function") {
+      var leaves = [];
+      try { leaves = root.pxEnumerateLeaves(); } catch (e) { leaves = []; }
+      for (var j = 0; j < leaves.length; j++) {
+        var el = leaves[j] && leaves[j].el;
+        if (!el || String(el.tagName || "").toLowerCase() === "canvas") continue;
+        try { marks.push(rectOf(el)); } catch (e) {}
+      }
+    }
+    return root.pxCanvasDominance({ w: vw, h: vh }, canvases, marks, opts);
+  };
+})(typeof window !== "undefined" ? window : globalThis);
+
+// ── pxFreezeAnimations / pxMarksInSubtrees / pxCaptureAllPhased — PHASE-FREEZE ──
+// Measurement must happen at a FIXED ANIMATION PHASE on both sides (LEARNINGS #38).
+// A never-settling animation (an infinite CSS spin, a WAAPI belt) is at a phase
+// determined by WHEN the page loaded, so live and clone snapshots of a CORRECT clone
+// land at different phases and visual/strict fail with hundreds of constant-offset
+// deltas (mindmarket: 334–336 deltas, two runs, nothing wrong with the clone). The
+// settle wait cannot fix this — the animation never settles BY DESIGN.
+//
+// So the measurement capture freezes phase first:
+//   pxFreezeAnimations(opts)  → pause every document.getAnimations() animation that is
+//     still RUNNING and seek it to the canonical measure phase — progress 0 within its
+//     CURRENT iteration (phase 0 pose is identical across iterations for normal-
+//     direction loops, and keeping the iteration preserves alternate-direction parity).
+//     Kit-generated players freeze THEMSELVES first through the hook registry
+//     window.__pingfusiFreezeHooks (each hook pauses its own writers at phase 0 and
+//     returns {player, frozen, ids}); a future non-WAAPI kit player MUST register the
+//     same hook or its subtree is honestly excluded as unfreezable. What the pass may
+//     NOT touch, receipted by count: finished/idle animations (their end state IS the
+//     settled page), page-authored paused animations (a deliberate pose), scroll/view-
+//     timeline animations (scroll position already fixes their phase), and the agent's
+//     own overlay (the instrument must not adjust itself).
+//   THEN a bounded post-freeze watch (the dense recorder — the ongoing sampler's own
+//     instrument) reads what STILL moves: rAF-driven motion owns no Animation object
+//     and cannot be paused generically (GSAP included). Those selectors are receipted
+//     as `unfreezable`; the caller-known list (the capture sweep's ongoing movers)
+//     rides in via opts.unfreezable and is merged in.
+//   pxMarksInSubtrees(selectors) → {markName: selector} for every enumerated leaf
+//     inside an unfreezable mover's subtree, so the diff can EXCLUDE those marks from
+//     pixel-determining comparisons — receipted per mark in the snapshot's `freeze`
+//     field and LISTED by the gates, never silently dropped.
+//   pxCaptureAllPhased(sinkUrl, opts) → the phased one-call: settle → freeze → measure,
+//     same report contract as pxCaptureAll (settle STOP included). In value mode
+//     (falsy sinkUrl) the snapshot payload gains the `freeze` field; in sink mode the
+//     freeze still HAPPENS (deterministic phase) and the receipt returns on the report,
+//     but the POSTed snapshot predates it — prefer capture-run / value mode.
+//
+// Read-mostly by design: pausing and seeking declared animations is the ONE deliberate
+// perturbation, made because measuring an arbitrary phase is measuring the instrument's
+// own arrival time, not the page (#20's rule: the reference must be the site, not the
+// instrument's accident). Everything is receipted — count, ids, what was skipped and
+// why, what refused to freeze.
+(function (root) {
+  "use strict";
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const KIT_ANIM_PREFIX = "pingfusi:"; // the generated players tag their animations (motion-replay et al.)
+  const firstMsg = (e) => String((e && e.message) || e).slice(0, 120);
+
+  const freezeLabel = (anim, target) => {
+    if (typeof anim.id === "string" && anim.id) return anim.id;
+    const sel = root.pxSelectorOf ? root.pxSelectorOf(target) : null;
+    const kind = typeof anim.animationName === "string" ? `css:${anim.animationName}`
+      : typeof anim.transitionProperty === "string" ? `transition:${anim.transitionProperty}`
+      : "waapi";
+    return sel ? `${kind}@${sel}` : kind;
+  };
+
+  root.pxFreezeAnimations = async function (opts) {
+    const o = opts || {};
+    const receipt = {
+      supported: !!(root.document && typeof root.document.getAnimations === "function"),
+      frozen: 0,
+      ids: [],
+      players: [],
+      alreadyPaused: 0,
+      skipped: { finished: 0, scrollLinked: 0, agentDom: 0, kitPlayer: 0, failed: 0 },
+      unfreezable: [],
+      stillMoving: [],
+      watch: null,
+    };
+    for (const s of Array.isArray(o.unfreezable) ? o.unfreezable : []) {
+      if (typeof s === "string" && s.trim() && receipt.unfreezable.indexOf(s) === -1) receipt.unfreezable.push(s);
+    }
+
+    // 1) Kit players first: they own their writers and freeze them at phase 0 through
+    //    the hook registry. A hook that throws is receipted, never fatal.
+    for (const hook of Array.isArray(root.__pingfusiFreezeHooks) ? root.__pingfusiFreezeHooks.slice() : []) {
+      try {
+        const r = typeof hook === "function" ? hook() : null;
+        receipt.players.push(r && typeof r === "object"
+          ? { player: String(r.player || "kit-player").slice(0, 40), frozen: r.frozen | 0, ids: (Array.isArray(r.ids) ? r.ids : []).slice(0, 50).map(String) }
+          : { player: "kit-player", frozen: 0, ids: [] });
+      } catch (e) {
+        receipt.players.push({ player: "kit-player", frozen: 0, ids: [], error: firstMsg(e) });
+      }
+    }
+
+    // 2) The generic pass: every declared animation still RUNNING is paused and seeked
+    //    to progress 0 of its current iteration.
+    if (receipt.supported) {
+      let anims = [];
+      try { anims = document.getAnimations({ subtree: true }) || []; }
+      catch (e) { try { anims = document.getAnimations() || []; } catch (e2) { anims = []; } }
+      for (const anim of anims) {
+        try {
+          if (typeof anim.id === "string" && anim.id.indexOf(KIT_ANIM_PREFIX) === 0) { receipt.skipped.kitPlayer++; continue; } // the player's own hook handled it
+          const effect = anim.effect;
+          const target = effect && effect.target;
+          if (target && root.pxIsAgentDom && root.pxIsAgentDom(target)) { receipt.skipped.agentDom++; continue; }
+          const tl = anim.timeline;
+          const scrollDriven = !!tl && ((root.ViewTimeline && tl instanceof root.ViewTimeline) || (root.ScrollTimeline && tl instanceof root.ScrollTimeline));
+          if (scrollDriven) { receipt.skipped.scrollLinked++; continue; } // scroll position IS its phase — already deterministic, and ms-seeking a percent clock would corrupt it
+          const state = anim.playState;
+          if (state === "finished" || state === "idle") { receipt.skipped.finished++; continue; } // the settled end state is the page users see
+          if (state === "paused") { receipt.alreadyPaused++; continue; } // page-authored pose — not the instrument's to move
+          let t = {};
+          try { t = (effect && typeof effect.getComputedTiming === "function" && effect.getComputedTiming()) || {}; } catch (e) {}
+          const dur = typeof t.duration === "number" && isFinite(t.duration) ? t.duration : 0;
+          const iter = typeof t.currentIteration === "number" && isFinite(t.currentIteration) ? t.currentIteration : 0;
+          const delay = typeof t.delay === "number" && isFinite(t.delay) ? t.delay : 0;
+          anim.pause();
+          anim.currentTime = delay + iter * dur; // progress 0 within the CURRENT iteration
+          receipt.frozen++;
+          if (receipt.ids.length < 100) receipt.ids.push(freezeLabel(anim, target));
+        } catch (e) { receipt.skipped.failed++; }
+      }
+    }
+
+    // 3) The post-freeze watch: what still moves after every declared animation is held
+    //    is a writer no pause can reach (a hand-rolled rAF loop, GSAP's own ticker).
+    //    Reuses the dense recorder — the sampled tier's instrument — so "still moving"
+    //    means the same thing here as in the ongoing-motion sweep: changed in EVERY
+    //    interval (element samples), or inline-style writes at 2+ distinct step times.
+    const watchIntervals = typeof o.watchIntervals === "number" && o.watchIntervals >= 1 ? Math.floor(o.watchIntervals) : 2;
+    const watchIntervalMs = typeof o.watchIntervalMs === "number" && o.watchIntervalMs > 0 ? o.watchIntervalMs : 180;
+    if (o.watch === false || typeof root.pxDenseRecordStart !== "function") {
+      receipt.watch = { ran: false, reason: o.watch === false ? "disabled by caller" : "dense recorder unavailable" };
+    } else {
+      try {
+        root.pxDenseRecordStart({ scopes: [typeof o.watchScope === "string" && o.watchScope ? o.watchScope : "body"], props: ["transform", "opacity"] });
+        root.pxDenseRecordStep(0);
+        for (let i = 1; i <= watchIntervals; i++) { await sleep(watchIntervalMs); root.pxDenseRecordStep(i * watchIntervalMs); }
+        const rec = root.pxDenseRecordStop();
+        const moving = {};
+        for (const el of rec.elements || []) {
+          if (!el || typeof el.selector !== "string" || !el.selector || !Array.isArray(el.samples) || el.samples.length < watchIntervals + 1) continue;
+          for (const prop of ["transform", "opacity"]) {
+            let moved = true;
+            for (let i = 1; i < el.samples.length; i++) {
+              const a = el.samples[i - 1] && el.samples[i - 1].values ? el.samples[i - 1].values[prop] : null;
+              const b = el.samples[i] && el.samples[i].values ? el.samples[i].values[prop] : null;
+              if (a === b) { moved = false; break; }
+            }
+            if (moved) { moving[el.selector] = 1; break; }
+          }
+        }
+        const writeTimes = {};
+        for (const w of rec.writes || []) {
+          if (!w || typeof w.selector !== "string" || !w.selector) continue;
+          (writeTimes[w.selector] = writeTimes[w.selector] || {})[w.t] = 1;
+        }
+        for (const sel of Object.keys(writeTimes)) if (Object.keys(writeTimes[sel]).length >= 2) moving[sel] = 1;
+        receipt.stillMoving = Object.keys(moving).sort();
+        receipt.watch = { ran: true, intervals: watchIntervals, intervalMs: watchIntervalMs, tracked: (rec.elements || []).length, writes: (rec.writes || []).length, truncated: !!rec.truncated };
+      } catch (e) {
+        receipt.watch = { ran: false, reason: firstMsg(e) };
+      }
+    }
+    for (const sel of receipt.stillMoving) if (receipt.unfreezable.indexOf(sel) === -1) receipt.unfreezable.push(sel);
+    return receipt;
+  };
+
+  // Which enumerated marks live inside an unfreezable mover's subtree? Keyed by the same
+  // slug names the snapshot uses (pxEnumerateLeaves is deterministic on a frozen DOM), so
+  // the diff can exclude exactly these marks and LIST them. closest() matches the mover
+  // itself too — the mover is its own first excluded mark.
+  root.pxMarksInSubtrees = function (selectors) {
+    const out = {};
+    const sels = [];
+    for (const s of Array.isArray(selectors) ? selectors : []) if (typeof s === "string" && s.trim()) sels.push(s);
+    if (!sels.length || typeof root.pxEnumerateLeaves !== "function") return out;
+    for (const leaf of root.pxEnumerateLeaves()) {
+      for (const sel of sels) {
+        let hit = null;
+        try { hit = leaf.el && leaf.el.closest ? leaf.el.closest(sel) : null; } catch (e) { hit = null; }
+        if (hit) { out[leaf.name] = sel; break; }
+      }
+    }
+    return out;
+  };
+
+  // The phased one-call: settle → freeze → measure. Same report contract as pxCaptureAll
+  // — including the settle STOP (the predicate is duplicated from captureAllShouldAbort
+  // because this section is append-only by design; keep them in lockstep).
+  root.pxCaptureAllPhased = async function (sinkUrl, opts) {
+    const o = opts || {};
+    const prefix = o.prefix || "live";
+    const settle = o.settle === false ? "skipped" : await root.pxScrollSettle(o.settleOpts);
+    if (settle && typeof settle === "object" && settle.stable === false) {
+      return {
+        prefix, leaves: 0, byKind: {}, delivered: [], failed: [], ok: false,
+        aborted: "settle-not-stable", settle,
+        hint: "the page never settled (still growing, or images still loading) — the DOM right now is a page that never existed. Inspect settle.heights / settle.imagesPending / settle.pendingImageSrcs, fix or wait, then re-run.",
+      };
+    }
+    const freeze = await root.pxFreezeAnimations({
+      unfreezable: o.unfreezable,
+      watch: o.freezeWatch,
+      watchIntervalMs: o.freezeWatchIntervalMs,
+      watchIntervals: o.freezeWatchIntervals,
+    });
+    const inner = {};
+    for (const k of Object.keys(o)) inner[k] = o[k];
+    inner.settle = false; // the settle above already ran and passed — never settle twice
+    const report = await root.pxCaptureAll(sinkUrl, inner);
+    report.settle = settle; // the real settle evidence, not "skipped"
+    const excludedMarks = root.pxMarksInSubtrees(freeze.unfreezable);
+    freeze.excludedMarks = excludedMarks;
+    const file = prefix + ".json";
+    if (report.payloads && typeof report.payloads[file] === "string") {
+      try {
+        const snap = JSON.parse(report.payloads[file]);
+        snap.freeze = {
+          frozen: freeze.frozen, ids: freeze.ids, players: freeze.players,
+          alreadyPaused: freeze.alreadyPaused, skipped: freeze.skipped,
+          unfreezable: freeze.unfreezable, excludedMarks,
+        };
+        report.payloads[file] = JSON.stringify(snap);
+        for (const d of report.delivered || []) if (d && d.file === file) d.bytes = new TextEncoder().encode(report.payloads[file]).length;
+      } catch (e) { freeze.embedError = firstMsg(e); }
+    }
+    report.freeze = freeze;
+    return report;
+  };
+})(typeof window !== "undefined" ? window : globalThis);

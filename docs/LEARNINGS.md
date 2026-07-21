@@ -977,3 +977,182 @@ the scrolled flag so a clean verdict names the vantage it was earned from.
 > focus, media-query, time-of-day. The probe reproduces the one condition every scroll
 > trigger shares (being on screen); rarer gates need the operator to stage the condition
 > or resolve ownership by reading the clone's code.
+
+## 37. THE GATES MEASURED THE SKELETON WHILE THE PAGE PAINTED IN CANVAS — pixels are the only witness that painting happened
+Found on bizar.ro (2026-07-20), and it reached a reviewer. The site paints its entire
+visible surface in a WebGL canvas; the DOM around it is a thin skeleton. Both snapshots
+come from the same instrument (`tools/browser-capture.js`), so every property the capture
+CAN see — boxes, fonts, backdrop colors, the canvas element's own rect — agreed perfectly:
+visual passed **1236/1236**, the pipeline went green end to end, and the published draft
+rendered **SOLID BLACK**. The filed round's one answer was "cannot see any draft" — a
+whole review round spent confirming what one screenshot would have said for free. This is
+the aloyoga shared-blind-spot (#20's file, clone-lint's header) one layer down: there, a
+property the capture didn't measure was a property both sides agreed about; here, the
+capture measured everything it knows how to measure and the page's actual PAINTING lived
+in none of it. No DOM gate can close this — script-driven canvas painting is invisible to
+DOM measurement by construction, and a static DOM clone cannot reproduce it at all.
+
+**Lesson: a gate stack built on one instrument inherits that instrument's blind spot on
+both sides at once — so at least one receipt must come from a different witness. For
+"did the page paint", the only honest witness is the pixels themselves.** And when the
+answer is "this site's painting is script-driven canvas", that is not a defect to fix but
+a CAPABILITY LIMIT to state: receipt it, warn on it, and refuse to spend a reviewer round
+on a draft the probe already knows is blank.
+
+> 🔒 **Enforced now, four ways.** (1) THE PAINT PROBE: `capture-run` takes one
+> `Page.captureScreenshot` per side (the CDP session is already open) and reduces it to a
+> paint statistic via a dependency-honest PNG scanline reader (zlib is a Node built-in —
+> no image library enters the core kit): `paintStat` per side in `capture-run.json`, and
+> a clone under the documented near-blank floor while live sits above the rich floor is a
+> WARNING receipt on the run — "the clone paints almost nothing" — never a capture
+> failure (first-draft doctrine). The pairing is the false-positive guard: a genuinely
+> minimal live page never flags its equally minimal clone
+> (harness/fixtures/43-paint-probe.js). (2) THE CAPABILITY STATEMENT: `pxCanvasDominant`
+> (tools/browser-capture.js) receipts `canvasDominant` on the live capture — a canvas
+> covering more than ~half the viewport with fewer than a dozen painted DOM marks in
+> front means this site's visible painting is script-driven canvas and a DOM clone CANNOT
+> reproduce it (harness/fixtures/44-canvas-dominant.js). (3) THE STATIC RATCHET:
+> clone-lint's `dead-canvas` rule fails a built clone that is a canvas plus almost
+> nothing else painted — a blank sheet no reviewer should be sent
+> (harness/fixtures/20-clone-lint.js). (4) THE FILING GUARD: `review-qa.js file` refuses
+> — full rounds and diagnostics alike — while the run receipt's paint warning stands;
+> `--anyway` overrides WITH a `paint_override` receipt on the round
+> (harness/fixtures/49-paint-filing-guard.js). Never burn a reviewer round on a black
+> page.
+> 👁 **Still yours:** what to DO with a canvas-dominant site. The kit states the limit
+> honestly; choosing between scoping the clone to the regions DOM can carry, embedding a
+> poster frame of the canvas as a deliberate deviation, or declining the target is a
+> judgment about what the product should promise — and a `--anyway` filing over the
+> guard is that judgment made explicit, receipted on the round.
+
+## 38. THE BELTS NEVER SETTLE, SO THE SNAPSHOTS RACED THEM — measure at a frozen phase, exclude out loud what cannot freeze
+Found TWICE on mindmarket (2026-07-20, kit 0.9.0), identically. The page runs belts that never
+settle by design, so live.json and clone.json each caught them at a phase determined by WHEN that
+page happened to load — and visual/strict failed a CORRECT clone with hundreds of constant-offset
+deltas (334 and 336, two runs, same shape). The settle wait is the wrong tool by definition: it
+waits for a state this animation never reaches. Every delta was real arithmetic over numbers that
+were noise by construction — the instrument was measuring its own arrival time, not the page
+(#20's rule wearing a clock).
+
+**Lesson: a measurement of animated content is only comparable at a FIXED ANIMATION PHASE — so
+the capture must freeze the phase before measuring, and anything it cannot freeze must be
+excluded from the comparison OUT LOUD, per mark, never silently.** Both halves matter. Declared
+animation (CSS/WAAPI — everything `document.getAnimations` returns) can be paused and seeked to
+the canonical phase: progress 0 of its current iteration, the pose a normal-direction loop
+renders identically every cycle, on both sides, regardless of load time. rAF-driven motion owns
+no Animation object and CANNOT be paused generically (GSAP's ticker included) — pretending
+otherwise would trade phase poison for a fake freeze, so those movers are receipted as
+`unfreezable` and the marks inside their subtrees leave the pixel comparison with their names on
+the gate output. An exclusion the operator never sees is a silent drop; an exclusion LISTED is
+the honest boundary of the instrument. And the freeze must not touch what the page settled into:
+a finished entrance animation's end state IS the page, a page-authored pause is a deliberate
+pose, and a scroll-linked timeline's phase is already fixed by scroll position.
+
+> 🔒 **Enforced now:** `pxCaptureAllPhased` (tools/browser-capture.js) is the runner's
+> one-call — settle → `pxFreezeAnimations` → measure — so capture-run measures both sides
+> at phase 0 with the freeze receipted in the snapshot's `freeze` field (count, ids, what
+> was skipped and why). Kit-generated players freeze their own writers first through the
+> `window.__pingfusiFreezeHooks` contract (the emitted motion-replay player registers it;
+> any future non-WAAPI kit player must too, or its subtree is excluded as unfreezable).
+> The post-freeze watch (the dense recorder — the ongoing sampler's own instrument) plus
+> the sweep's receipts (sampled-ongoing tracks, detect list) name the unfreezable movers;
+> `pxMarksInSubtrees` maps their subtrees to snapshot marks, and diffSnapshots EXCLUDES
+> exactly those marks — counted in the summary, listed by formatDiff, named on the visual
+> and strict gate reasons, pass or fail. Locked by
+> `harness/fixtures/47-phase-freeze.js` (phase-shifted WAAPI lands at phase 0 on both
+> sides; the emitted player's hook freezes only its own animations; the gates go green on
+> a phase-shifted-but-correct pair that fails without the change, with the exclusion
+> named; an unrelated miss is NOT laundered by an exclusion; no-freeze snapshots behave
+> exactly as before) and the capture-runner selftest (known-unfreezable plumbing in, sweep
+> movers noted into live.json same-run, foreign selectors from the page refused).
+> 👁 **Still yours:** what an excluded mark MEANS. The gate tells you which marks left the
+> comparison and which mover owns them — whether the draft's reproduction of that mover
+> looks right is exactly what the compare round exists for, and alternate-direction loops
+> frozen at different iteration parities can still legitimately differ. The exclusion list
+> on a green gate is a reading assignment, not a clean bill.
+
+## 39. FOUR PAPER CUTS, FOUR REAL COSTS — the kit's own rough edges are misses, and they gate like misses
+Found across the 2026-07-20 reviewed runs (kit 0.9.0), none of them exotic, all of them paid for:
+(1) capture-build self-hosted css/fonts but hotlinked `<img>/<video>` — bizar.ro's images kept
+cross-origin srcs WITH their `crossorigin` attributes, so on localhost Chrome fetched them in CORS
+mode and refused to paint; the boxes are CSS-sized, so the sweep stayed green over the holes and a
+hand fixup ate the session. (2) `pingfusi new <name> <url> default` coerced the width to NaN and
+WROTE IT into target.json — the scaffold never refused, and every later gate compared against a
+width that does not exist. (3) A bare `pingfusi assist` filed a text-only element question; the
+live reviewer's entire answer was "I dont understand. Send a comparison" — a round burned on the
+FORMAT — and `assist --compare` then demanded a fresh draft push while a valid draft.json sat on
+disk. (4) The skill said "WIDTH: default 1512" while new-target.js scaffolds 1728 and adopt.js
+scaffolded a third default of its own — an agent following the doc measured a different page than
+the kit built.
+
+**Lesson: ergonomics are correctness.** A tool edge that makes the operator hand-fix, re-push,
+re-scaffold, or measure at the wrong width costs exactly what a wrong number costs — reviewer
+rounds and trust — so each edge gets the same treatment as a measurement miss: a refusal or a
+receipt at the point of damage, plus a fixture. Concretely: media assets self-host like css/fonts
+(crossorigin dropped; a failed download is a per-asset ⚠ receipt, never a build failure, because a
+visible hole is reviewer-catchable while a silent font swap is not); a malformed width is a usage
+error at every door that writes target.json; the diff's `glyph.painted true→false` row now NAMES
+the cross-origin/CORS cause and the capture-build remedy instead of leaving a bare boolean; bare
+assist refuses with the `--compare` nudge (the compare round is the one reviewer channel — first-
+draft doctrine); `assist --compare` re-verifies and REUSES the recorded draft, demanding a push
+only for a missing or byte-stale one; and the width default is ONE number that the docs are gated
+against.
+> 🔒 **Enforced now:** capture-build-selftest (media self-hosted with real bytes, srcset/poster
+> rewritten, crossorigin gone, per-asset failure receipts with exit 0);
+> `harness/fixtures/45-width-nan-guard.js` (the literal "default" refused at dispatcher AND
+> writers, adopt/new agree on 1728); `harness/fixtures/46-cors-unpainted-hint.js` (the CORS hint
+> fires only on live-true/clone-false); assist-selftest (the retirement nudge, no receipt on
+> refusal, stale-draft refusal BY NAME, byte-verified reuse); docs-selftest gate 4 (scaffold
+> defaults agree, the skill's number is the scaffold's number, 1512 banned from shipped docs).
+> 👁 **Still yours:** the judgment inside the nudges. Whether a stale draft means "re-push" or
+> "the clone regressed — fix first", and whether a reviewer question is worth a 5-result
+> diagnostic at all, stay calls the operator makes; the kit only refuses the formats and inputs
+> that are ALWAYS wrong.
+
+## 40. THE GATE DEMANDED WHAT THE DOCTRINE FORBADE — every refusal must name an exit that is actually open
+Found on the 2026-07-20 reviewed runs (kit 0.9.0), on CORRECT drafts. The behavior gate counted
+every live row missing from the clone inventory as one kind of miss, with one message for all of
+them: "reproduce in clone/fixes.js or document why in behavior-deviations.json". For TEMPORAL
+rows — the sweep's `reveal:`/`mutation:`/`startup:` observations — both named channels are barred
+by the kit's own rules: the deviations file refuses temporal evidence by doctrine (it is the
+honest disposition for unsupported interaction/state rows, nothing else), and the motion pass,
+which ALREADY reproduces those phenomena in the draft (captured CSS carries the css/transition
+tiers, other tiers get generated WAAPI players) and receipts every element it acts on
+(motion-items@2 items, motion-doc tracks), never writes `behaviors-clone.json` rows — clone-side
+discovery does not re-observe a player as the same row. So the gate manufactured misses on rows
+the build had reproduced AND receipted, and the only legal move left was `advance --blocked`
+citing the kit's own doctrine at the kit's own gate. Strict had the same disease in message form:
+its paint refusal read "visible marks can never be documented away, fix them" — implying the
+`--blocked` receipt was refused too, when it was always accepted — so an agent facing an
+environment-made delta (a never-settling animation caught at two phases, #38's poison) stalled
+on a MESSAGE, with the legitimate exit sitting unadvertised in the code.
+
+**Lesson: a refusal is a contract, and the message is part of the contract — every demand a gate
+makes must name a channel some rule actually permits, and when two of the kit's rules combine to
+close every channel a message names, the kit has manufactured a deadlock, not enforced honesty.**
+The fix is never to relax the gate; it is to make the gate READ THE RECEIPTS the pipeline already
+writes (the miss was real bookkeeping the accounting ignored), split the demand by jurisdiction
+(temporal phenomena belong to the motion pass; interaction/state rows keep the deviations
+channel), and make every refusal state what is actually accepted — including the escapes.
+
+> 🔒 **Enforced now:** temporal rows missing from the clone inventory are never misses.
+> `isTemporalBehaviorKey` classifies them and `motionReceiptForBehaviorRow`
+> (harness/motion-items.js) looks the row's element up in the pass's own bookkeeping — an @2
+> item by exact selector/scope match, behavior-key lineage, or a motion-doc track; pure,
+> throw-free, and exact-match only (a fuzzy match would attach a receipt to motion it never
+> covered). Receipted → SATISFIED-BY-MOTION, an informational line on the gate's pass reason
+> citing each row → receipt id; unreceipted → an ⚠ advisory that routes at `pingfusi next` and
+> says outright that temporal rows never require behavior-deviations.json entries. Non-temporal
+> interaction/state rows keep the hard miss and the deviations channel. Strict's paint refusal
+> now states both halves: deviations.json can never document a paint delta away AND the
+> `--blocked` receipt IS accepted — done stays red until the phase re-earns a passing gate, so
+> the receipt keeps the final claim honest. Locked by
+> `harness/fixtures/48-temporal-satisfied-by-motion.js` (all three receipt kinds satisfy, cited
+> by id; unreceipted rows advise at exit 0; a missing interaction row still blocks as the
+> control; the strict message names the accepted escape — every half fails without the change)
+> plus matching behavior-selftest, motion-items-selftest, and workflow-selftest assertions.
+> 👁 **Still yours:** whether the motion pass's reproduction is any GOOD. Satisfied-by-motion
+> means "the pass acted on this element and receipted it", never "the animation looks right" —
+> that judgment is exactly what the compare round exists for, and the deep machine checks
+> (`verify-introspected`, sample → apply-sampled → verify-sampled) are the operator utilities
+> the advisory's `next` route points at.

@@ -50,6 +50,19 @@ function parseTunnelUrl(logText) {
   return m ? m[0] : null;
 }
 
+// cloudflared is pointed at the dev server's ORIGIN, but the URL handed to the reviewer
+// must still name the page the operator adopted. Without carrying this suffix across,
+// `--url http://localhost:3000/design/review?mode=full` silently records the app root and
+// both the warm-up probe and the reviewer inspect the wrong route.
+function publicUrlForLocal(tunnelUrl, localUrl) {
+  const local = localUrl instanceof URL ? localUrl : new URL(localUrl);
+  const publicUrl = new URL(tunnelUrl);
+  publicUrl.pathname = local.pathname;
+  publicUrl.search = local.search;
+  publicUrl.hash = local.hash;
+  return publicUrl.href;
+}
+
 // System resolvers can lag (or plain fail) on freshly-minted *.trycloudflare.com names
 // while the tunnel is already serving — three concurrent live runs each burned ~6–11 min
 // exhausting verify budgets on tunnels that answered in <0.5 s via `curl --resolve`, then
@@ -184,7 +197,11 @@ async function sinkMain(port) {
 // record says so (verified:"reachable").
 async function probeUrl(url) {
   try {
-    const r = await fetchAny(url);
+    // file:// keeps the reachability contract socket-free in the selftest, just as
+    // verifyServes does above. Real tunnel records are always public HTTPS URLs.
+    const r = url.startsWith("file://")
+      ? { status: 200, body: fs.readFileSync(new URL(url)), via: "system" }
+      : await fetchAny(url);
     if (r.status < 200 || r.status >= 300) return { ok: false, reason: `HTTP ${r.status} from ${url}` };
     if (r.body.length < 200) return { ok: false, reason: `${url} answered but the body is ${r.body.length} bytes — not a page (dev server still starting?)` };
     return { ok: true, reason: `reachable: ${url} serves a ${r.body.length}-byte page (byte-identity not checkable for a live dev server)${r.via === "system" ? "" : ` (via ${r.via})`}` };
@@ -217,11 +234,12 @@ async function urlMain(name, localUrl) {
   while (!url && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 300));
   if (!url) { console.error(`❌ no tunnel url within 30s — cloudflared output:\n${log.slice(-800)}`); child.kill(); process.exit(1); }
 
-  const v = await warmUp(() => probeUrl(url));
+  const publicUrl = publicUrlForLocal(url, parsed);
+  const v = await warmUp(() => probeUrl(publicUrl));
   if (!v.ok) { console.error(`❌ tunnel came up but never served the page: ${v.reason}`); child.kill(); process.exit(1); }
 
-  fs.writeFileSync(tunnelPath(name), JSON.stringify({ url, localUrl: parsed.href, startedAt: new Date().toISOString(), verified: "reachable" }, null, 2) + "\n");
-  console.log(`✓ tunnel ready: ${url}\n  ${v.reason}\n  recorded → targets/${name}/tunnel.json (review-qa uses it as the default --draft)\n  next: node harness/review-qa.js file ${name}`);
+  fs.writeFileSync(tunnelPath(name), JSON.stringify({ url: publicUrl, localUrl: parsed.href, startedAt: new Date().toISOString(), verified: "reachable" }, null, 2) + "\n");
+  console.log(`✓ tunnel ready: ${publicUrl}\n  ${v.reason}\n  recorded → targets/${name}/tunnel.json (review-qa uses it as the default --draft)\n  next: node harness/review-qa.js file ${name}`);
 
   const stop = () => { child.kill(); process.exit(0); };
   process.on("SIGINT", stop);
@@ -291,4 +309,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { parseTunnelUrl, verifyServes, looksLikeSink, probeSink };
+module.exports = { parseTunnelUrl, publicUrlForLocal, verifyServes, looksLikeSink, probeSink, probeUrl };

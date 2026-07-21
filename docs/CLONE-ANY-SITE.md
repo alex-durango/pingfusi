@@ -7,7 +7,7 @@ approval recorded as the `reviewer` phase. The operator's only job is to have ru
 
 **Fill in:**
 - `{{URL}}` — the live page to clone, e.g. `https://www.example.com/`
-- `{{WIDTH}}` — the measurement viewport width in px, e.g. `1512`
+- `{{WIDTH}}` — the measurement viewport width in px, e.g. `1728` (the kit default)
 - `{{NAME}}` — the target name, e.g. `example`
 
 ---
@@ -40,11 +40,14 @@ minutes, so the agent is the bottleneck, not the reviewer:**
   `pingfusi review {{NAME}} poll "…" --choices "Yes,No"` — BEFORE burning a full test
   round on it. Polls advise; only full rounds satisfy the review gate.
 - Stalled on a gate (score/status print STALLED after 3 no-progress iterations)?
-  `pingfusi assist {{NAME}}` composes the poll question FOR you from the failing gate's
-  own artifacts — a reviewer names in one look what costs you three blind iterations.
-  `--compare` files a scoped side-by-side diagnostic round instead when a one-sided
-  description won't do (5 results by default, slower — poll first). Keep iterating while the
-  ask is pending; never open a second one.
+  `pingfusi assist {{NAME}} --compare` composes the question FOR you from the failing
+  gate's own artifacts and files a scoped side-by-side diagnostic round (1 result by
+  default) — a reviewer names in one look what costs you three blind iterations.
+  `--compare` is required: the text-only poll format is retired (a reviewer cannot act
+  on an element question without seeing both pages; bare `assist` refuses with the
+  nudge). The recorded hosted draft is reused after a byte re-verify — re-push only if
+  it reports the draft stale. Keep iterating while the ask is pending; never open a
+  second one.
 - **On every REFILE, pass `--changelog "what changed since the last review"`** —
   a reviewer who isn't told what changed reviews blind ("did you fix
   anything?" is a wasted round). And **never escalate a reviewer's comment
@@ -63,7 +66,7 @@ minutes, so the agent is the bottleneck, not the reviewer:**
   clone vs live at 2–3 rotation/reveal states) — a defect you catch yourself
   costs seconds; one the reviewer catches costs a round.
 
-Full review rounds default to 5 results. Use `--results 1` for a quick/low-risk check and
+Full review rounds default to 1 result. Request `--results 5` for a broader read and
 `--results 15` to `--results 20` only for complex work or higher confidence. Each completed
 result costs 1 credit; filing and undelivered results are free.
 
@@ -130,8 +133,8 @@ always tells you what's next):**
 
    **A pre-review gate blocked by the ENVIRONMENT never ends the run unfiled.** The
    ladder, in order: (1) the remedy the gate's refusal names (e.g. hidden tabs →
-   `pingfusi behavior-capture {{NAME}}`); (2) `pingfusi assist {{NAME}}` when a reviewer
-   observation could unstick you; (3) receipt the constraint —
+   `pingfusi behavior-capture {{NAME}}`); (2) `pingfusi assist {{NAME}} --compare` when a
+   reviewer observation could unstick you; (3) receipt the constraint —
    `pingfusi advance {{NAME}} <phase> --blocked "what you tried and why it failed"` —
    and file the round anyway: the spec documents the gap to the reviewer automatically,
    and a reviewer look at a partial clone catches what the gates structurally can't.

@@ -114,50 +114,59 @@ const customMotion = runHq(["assist", MOTION_NAME, "--phase", "behavior", "--ask
 ok(customMotion.code === 1 && /machine checks/.test(customMotion.out) && /pingfusi motion/.test(customMotion.out) && !/--mode |motion review/.test(customMotion.out), "custom temporal --ask cannot bypass the machine-check guard, and the remedy prints no review-round machinery");
 fs.rmSync(motionDir, { recursive: true, force: true });
 
-// ── assist files a poll, receipts it, and the receipt resets the streak ──────────
-const PING_POLL = "00000000-0000-4000-8000-00000000a011";
-mockJson("quick_poll.json", { ping_id: PING_POLL, status: "pending", n_received: 0, responses: [] });
+// ── bare assist (the text-only question format) is RETIRED: refuse-with-nudge ───
+// Paid for live (2026-07-20): the reviewer's whole answer to a filed text poll was
+// "I dont understand. Send a comparison" — a round burned on the FORMAT, not the clone.
 const as1 = runHq(["assist", NAME]);
-ok(as1.code === 0 && /assist \(phase visual/.test(as1.out) && /nav first/.test(as1.out), "assist resolves the stuck phase and files the composed question");
-const hq1 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-ok(hq1.polls.length === 1 && hq1.polls[0].assist && hq1.polls[0].assist.phase === "visual" && hq1.polls[0].ping_id === PING_POLL, "the ask is recorded in hq.polls with assist metadata");
+ok(as1.code === 2 && /retired/.test(as1.out) && new RegExp(`assist ${NAME} --compare`).test(as1.out), "bare assist refuses with the --compare nudge (the text-only format is retired)");
+ok(assistEvents().length === 0, "the refusal appends NO ledger receipt");
+ok(!fs.existsSync(path.join(dir, "review-qa.json")) || !((JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8")).polls || []).length), "no poll is recorded — the text channel is gone");
+ok(/STALLED — 3 consecutive/.test(runWf(["status", NAME]).out), "a refused bare assist does NOT reset the stall streak");
+
+// ── assist --compare REUSES the recorded draft after re-verifying its served bytes ──
+const PING_DIAG = "00000000-0000-4000-8000-00000000a022";
+mockJson("request_review.json", { ping_id: PING_DIAG });
+const noDraft = runHq(["assist", NAME, "--compare"]);
+ok(noDraft.code === 1 && /push one first/.test(noDraft.out), "no recorded draft at all → the push-first refusal");
+const SLUG = "selftestslug01";
+const served = path.join(MOCK, "served-draft.html");
+const { rewriteAssetRefs } = require(path.join(KIT, "harness", "draft.js"));
+writeJson("draft.json", { url: "file://" + served, slug: SLUG });
+fs.writeFileSync(served, "STALE BYTES — an older push");
+const asStale = runHq(["assist", NAME, "--compare"]);
+ok(asStale.code === 1 && /STALE/.test(asStale.out) && /draft\.js push/.test(asStale.out), "a stale recorded draft is refused BY NAME (served bytes re-verified at ask time)");
+ok(assistEvents().length === 0, "a stale-draft refusal files nothing — no receipt, streak untouched");
+fs.writeFileSync(served, rewriteAssetRefs(fs.readFileSync(path.join(dir, "clone", "index.html"), "utf8"), SLUG));
+const as3 = runHq(["assist", NAME, "--compare"]);
+ok(as3.code === 0 && /diagnostic round filed/.test(as3.out) && /never the review gate/.test(as3.out), "assist --compare files a scoped diagnostic round and says it is advisory");
+ok(/reusing the recorded hosted draft/.test(as3.out), "…REUSING the recorded draft.json after byte re-verify — no ritual re-push demanded");
+const hq2 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
+ok((hq2.diagnostics || []).length === 1 && hq2.diagnostics[0].assist.phase === "visual" && hq2.diagnostics[0].n_target === 1 && /nav first/.test(hq2.diagnostics[0].region), "the diagnostic defaults to one reviewer and stays scoped to the worst failing leaf");
 ok(assistEvents().length === 1 && assistEvents()[0].phase === "visual", "a FILED assist appends the ledger receipt");
 ok(!/STALLED/.test(runWf(["status", NAME]).out), "the assist receipt resets the stall streak (filed, not answered)");
 ok(/assist pending \(phase visual/.test(runWf(["status", NAME]).out), "status surfaces the pending assist with the free re-check command");
 
 // ── one open assist per target; a new one is allowed once the answer lands ──────
-const as2 = runHq(["assist", NAME]);
-ok(as2.code === 1 && /already open/.test(as2.out) && /poll-result/.test(as2.out), "a second assist while one is pending is refused with the re-check command");
-mockJson(`get_ping-${PING_POLL}.json`, { status: "completed", n_received: 1, responses: [{ choice: null, free_text: "the heading is deep red, not black" }] });
-ok(runHq(["poll-result", NAME, PING_POLL]).code === 0, "the answer arrives via poll-result (free)");
-ok(/assist answered \(phase visual\).*deep red/.test(runWf(["status", NAME]).out), "status surfaces the assist answer");
-
-// ── assist --compare files a scoped DIAGNOSTIC round that can never satisfy review ──
-const PING_DIAG = "00000000-0000-4000-8000-00000000a022";
-writeJson("draft.json", { url: "https://drafts.example.net/x/abc123" });
-mockJson("request_review.json", { ping_id: PING_DIAG });
-const as3 = runHq(["assist", NAME, "--compare"]);
-ok(as3.code === 0 && /diagnostic round filed/.test(as3.out) && /never the review gate/.test(as3.out), "assist --compare files a diagnostic round and says it is advisory");
-const hq2 = JSON.parse(fs.readFileSync(path.join(dir, "review-qa.json"), "utf8"));
-ok((hq2.diagnostics || []).length === 1 && hq2.diagnostics[0].assist.phase === "visual" && hq2.diagnostics[0].n_target === 5 && /nav first/.test(hq2.diagnostics[0].region), "the diagnostic is recorded at standard 5-result depth, scoped to the worst failing leaf");
-ok(assistEvents().length === 2, "the diagnostic assist is receipted in the ledger too");
+const as4 = runHq(["assist", NAME, "--compare"]);
+ok(as4.code === 1 && /already open/.test(as4.out) && /assist-result/.test(as4.out), "a second assist while one is pending is refused with the re-check command");
 ok(runHq(["verify", NAME]).code === 1 && /no review round recorded/.test(runHq(["verify", NAME]).out), "verify ignores diagnostics — the review gate is untouched");
-mockJson(`get_test_results-${PING_DIAG}.json`, { status: "pending", n_received: 1, n_target: 5, responses: [{ choice: "Described the differences", free_text: "the nav link is a heavier red weight" }], comments: [] });
+mockJson(`get_test_results-${PING_DIAG}.json`, { status: "pending", n_received: 0, n_target: 1, responses: [], comments: [] });
 const partialAr = runHq(["assist-result", NAME, PING_DIAG]);
-ok(partialAr.code === 1 && /diagnostic collecting — 1\/5/.test(partialAr.out), "a partial diagnostic stays collecting until its requested depth resolves");
-ok(/assist pending \(phase visual, ping .*1\/5 results/.test(runWf(["status", NAME]).out), "workflow status shows partial diagnostic progress instead of calling it answered early");
-ok(runHq(["assist", NAME]).code === 1 && /already open/.test(runHq(["assist", NAME]).out), "a partially answered diagnostic still counts as the one open assist");
-mockJson(`get_test_results-${PING_DIAG}.json`, { status: "complete", n_received: 1, n_target: 5, responses: [{ choice: "Described the differences", free_text: "the nav link is a heavier red weight" }], comments: [] });
+ok(partialAr.code === 1 && /pending — 0 answers yet/.test(partialAr.out), "a pending diagnostic stays collecting until its requested depth resolves");
+ok(/assist pending \(phase visual, ping /.test(runWf(["status", NAME]).out), "workflow status keeps an unanswered diagnostic pending instead of calling it answered early");
+ok(runHq(["assist", NAME, "--compare"]).code === 1 && /already open/.test(runHq(["assist", NAME, "--compare"]).out), "a partially answered diagnostic still counts as the one open assist");
+mockJson(`get_test_results-${PING_DIAG}.json`, { status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Described the differences", free_text: "the nav link is a heavier red weight" }], comments: [] });
 const ar = runHq(["assist-result", NAME, PING_DIAG]);
 ok(ar.code === 0 && /heavier red/.test(ar.out), "a terminal diagnostic returns delivered results even if credit exhaustion ended it below target");
+ok(/assist answered \(phase visual\).*heavier red/.test(runWf(["status", NAME]).out), "status surfaces the assist answer");
 
 // ── failed filings leave NO receipt (the receipt is what resets the streak) ──────
-const asOffline = runHq(["assist", NAME, "--phase", "visual"], { PPK_PINGHUMANS_URL: "https://selftest-invalid.example", PPK_PINGHUMANS_TOKEN: "" });
+const asOffline = runHq(["assist", NAME, "--phase", "visual", "--compare"], { PPK_PINGHUMANS_URL: "https://selftest-invalid.example", PPK_PINGHUMANS_TOKEN: "" });
 ok(asOffline.code === 1 && /pingfusi setup/.test(asOffline.out), "logged out: assist refuses naming setup (and the receipted alternatives)");
-ok(assistEvents().length === 2, "a logged-out refusal appends no ledger receipt");
-const asBroken = runHq(["assist", NAME, "--phase", "visual"], { PPK_PINGHUMANS_URL: "file://" + EMPTY_MOCK });
+ok(assistEvents().length === 1, "a logged-out refusal appends no ledger receipt");
+const asBroken = runHq(["assist", NAME, "--phase", "visual", "--compare"], { PPK_PINGHUMANS_URL: "file://" + EMPTY_MOCK });
 ok(asBroken.code === 1, "a transport failure exits nonzero");
-ok(assistEvents().length === 2, "a failed filing appends no ledger receipt — the streak is untouched");
+ok(assistEvents().length === 1, "a failed filing appends no ledger receipt — the streak is untouched");
 
 // ── --blocked: the receipted last rung — push to review despite the environment ──
 writeJson("clone.json", CLONE_GOOD);
@@ -197,7 +206,7 @@ ok(d1.code === 1 && /environment-BLOCKED/.test(d1.out), "the done gate refuses a
 
 // ── ledger renders the new events readably ───────────────────────────────────────
 const led = runWf(["ledger", NAME]);
-ok(/assist\s+visual/.test(led.out) && /assist poll filed:/.test(led.out), "ledger renders assist events with phase + question");
+ok(/assist\s+visual/.test(led.out) && /assist diagnostic round filed:/.test(led.out), "ledger renders assist events with phase + scoped region");
 ok(/BLOCKED behavior/.test(led.out), "ledger renders the blocked advance as BLOCKED, not FORCED");
 
 // ── score.js: the advisory STALLED banner on 3 no-improvement runs ───────────────

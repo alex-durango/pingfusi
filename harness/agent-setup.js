@@ -1,11 +1,9 @@
 // harness/agent-setup.js — `pingfusi agent-setup`: teach the user's AI agent to use the kit.
 //
-// The kit's entire new-user experience is "install, then ask your agent to clone a
-// site" — this is the command that makes the second half true. It installs the kit's
-// clone-site skill into the selected coding agent's skill directory, where the agent
-// auto-discovers it: from then on, "clone https://example.com" in any
-// session triggers the skill, which drives the full pingfusi pipeline and iterates on
-// review rounds answered by an independent reviewer until one approves.
+// The kit's new-user experience is "install, then ask your agent" — this command
+// installs every shipped use-case skill into the selected coding agent's native skill
+// directory. Clone, fix, and beautify prompts then route into the same review verbs and
+// iterate on rounds answered by an independent reviewer until one approves.
 //
 // USAGE:  pingfusi agent-setup [claude-code|cursor|codex] [--force]
 //         With no client, existing agent homes are detected; Claude Code is the fallback.
@@ -43,8 +41,7 @@ function skillDir(homeDir, client) {
 
 function install(homeDir, force, requestedClient, options = {}) {
   // Every skill the kit ships lives in PKG/skill/<skill-name>/SKILL.md — install them
-  // all (pixel-perfect-clone: the full gated pipeline; fix-with-pingfusi: polish any
-  // existing draft with review rounds). One kit, several front doors.
+  // all. One kit, several use-case front doors over the same review verbs.
   const skillRoot = path.join(PKG, "skill");
   if (!fs.existsSync(skillRoot)) return { ok: false, message: `kit skills missing at ${skillRoot} — broken install; reinstall pingfusi`, installed: [] };
   const names = fs.readdirSync(skillRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(skillRoot, e.name, "SKILL.md"))).map((e) => e.name);
@@ -84,7 +81,9 @@ function install(homeDir, force, requestedClient, options = {}) {
   → ${destinations.join("\n  → ")}
   Your agent picks them up on its next session. Then just ask it:
     "Clone https://example.com pixel-perfect."   (the full gated pipeline)
-    "Fix it with pingfusi."                           (from inside any draft project — review rounds)
+    "Fix it with pingfusi."                      (match an existing draft to its reference)
+    "Beautify this page. Use pingfusi."          (professional polish, no reference required)
+    "Review this video with pingfusi."           (rendered output judged against its brief)
   (Review rounds are answered by an independent reviewer — the agent iterates until one approves.)` };
 }
 

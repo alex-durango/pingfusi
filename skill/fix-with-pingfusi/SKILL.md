@@ -22,7 +22,7 @@ own source, repeat until an approving verdict.
    URL for the reviewer).
 5. **The loop**: `pingfusi review <name> file [--region "…"] [--context "one line: what
    this site/page is"] [--results 1..20]` → tell the user the round is
-   filed with an independent reviewer on the pingfusi service (the reviewer pins what's
+   filed with an independent human reviewer on the pingfusi service (the reviewer pins what's
    wrong + picks a verdict — the user does not review). Immediately after filing,
    start `pingfusi wait <ping_id>` as a BACKGROUND task — a parked agent is not resumed
    when the verdict lands, and the loop dies silently at round 1 (the most common failure).
@@ -34,7 +34,7 @@ own source, repeat until an approving verdict.
      verify the dev server picked them up, `pingfusi tunnel <name> --check`, refile with
      `--changelog "what changed since your last review"`, re-arm the waiter. Repeat —
      the run is not complete until an approving verdict is recorded. Full rounds default
-     to 5 results; use 1 for a quick/low-risk check and 15–20 only for complex work or when
+     to 1 result; request 5 for a broader read and 15–20 only for complex work or when
      higher confidence is worth it. Each completed result costs 1 credit; undelivered
      results are not charged.
    - If a pin is temporal (timing, easing, spring, stagger, scroll/pointer-driven,

@@ -219,6 +219,10 @@ Done. Open your AI agent and say:
    "Clone https://example.com pixel-perfect."
 or, from inside any draft/clone project you already have:
    "Fix it with pingfusi."
+or, when the page works but still looks machine-made:
+   "Beautify this page. Use pingfusi."
+or, when you rendered a video no test can judge:
+   "Review this video with pingfusi."
 
 Review rounds are answered by an independent reviewer; your agent files them
 and iterates on the verdicts. (re-check anytime: pingfusi doctor)`);

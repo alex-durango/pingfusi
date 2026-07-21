@@ -149,7 +149,15 @@ ok(ledger.some((r) => r.gate === "refused"), "refused advances are receipted in 
   ok(run(["gate", NAME, "done"]).code === 1, "done gate FAILS when a certified artifact was edited (stale visual pass)");
   // a PAINT delta can never be documented away in deviations.json
   writeJson("deviations.json", { nav_first: { "font.color": "attempt to excuse a visible mark" } });
-  ok(run(["gate", NAME, "strict"]).code === 1, "strict gate refuses to let deviations.json excuse a PAINT delta");
+  const paintRefusal = run(["gate", NAME, "strict"]);
+  ok(paintRefusal.code === 1, "strict gate refuses to let deviations.json excuse a PAINT delta");
+  // …and the refusal states BOTH halves of what holds: no deviations channel for paint,
+  // but the --blocked receipt is ACCEPTED (agents used to read the message as "--blocked
+  // refused" and stall with no legitimate exit)
+  ok(/documented away in deviations\.json/.test(paintRefusal.out) && /--blocked/.test(paintRefusal.out) && /IS accepted/.test(paintRefusal.out),
+    "the strict paint refusal names the accepted --blocked escape instead of implying it is refused");
+  ok(/done stays red until the phase re-earns a passing gate/.test(paintRefusal.out),
+    "…and says the receipt keeps done honest rather than passing it");
   fs.rmSync(path.join(dir, "deviations.json"));
   fs.writeFileSync(clonePath, original);
   ok(run(["gate", NAME, "done"]).code === 0, "done gate passes again once the artifact is restored");

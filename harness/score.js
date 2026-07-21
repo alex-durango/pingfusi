@@ -60,6 +60,13 @@ if (vFails.length) {
   for (const r of vFails) console.log(`    ${r.target.padEnd(14)} ${String(r.prop).padEnd(20)} live=${r.live}  clone=${r.clone}  Δ=${r.delta}`);
 }
 
+// Phase-freeze exclusions (LEARNINGS #38): marks inside unfreezable movers' subtrees are
+// not compared — LISTED here so an exclusion is never a silent drop.
+if (v.excluded && v.excluded.length) {
+  console.log(`\n  excluded from comparison (inside unfreezable movers — receipted in the snapshots' freeze field):`);
+  for (const r of v.excluded) console.log(`    ${r.target.padEnd(14)} mover ${r.selector} (${r.sides.join("+")})`);
+}
+
 fs.appendFileSync(logPath, JSON.stringify(score) + "\n");
 console.log(`\nrecorded to targets/${name}/scores.jsonl  (${prevLines.length + 1} runs)`);
 

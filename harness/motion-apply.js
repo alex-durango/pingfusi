@@ -291,6 +291,30 @@ function renderReplay(receipt, payloads) {
   const armAll = () => { for (const item of ITEMS) arm(item); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", armAll);
   else armAll();
+  // PHASE-FREEZE hook (measurement contract, LEARNINGS #38): before the measurement
+  // capture, pxFreezeAnimations calls every registered hook so kit players freeze their
+  // OWN writers at phase 0 — the pixel gates must compare both sides at a fixed
+  // animation phase. This player's writers are WAAPI, so freezing is pause + seek to
+  // the active start (progress 0). A future non-WAAPI kit player must register the same
+  // contract or its subtree is honestly excluded as unfreezable.
+  const freezeAtPhase0 = () => {
+    let anims = [];
+    try { anims = typeof document.getAnimations === "function" ? document.getAnimations() : []; } catch (e) { anims = []; }
+    const out = { player: "motion-replay", frozen: 0, ids: [] };
+    for (const a of anims) {
+      if (!a || String(a.id || "").indexOf(REPLAY_ID) !== 0) continue;
+      try {
+        a.pause();
+        let t0 = 0;
+        try { const t = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null; if (t && typeof t.delay === "number" && isFinite(t.delay)) t0 = t.delay; } catch (e) {}
+        a.currentTime = t0;
+        out.frozen++;
+        if (out.ids.length < 50) out.ids.push(String(a.id));
+      } catch (e) {}
+    }
+    return out;
+  };
+  if (typeof window !== "undefined") (window.__pingfusiFreezeHooks = window.__pingfusiFreezeHooks || []).push(freezeAtPhase0);
 })();
 `;
 }

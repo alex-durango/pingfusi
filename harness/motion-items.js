@@ -283,6 +283,45 @@ function advisoryMotionCandidates(snapshot, items) {
   return unownedMotionCandidates(snapshot, items);
 }
 
+// ── behavior-gate receipt lookup (first-draft doctrine) ─────────────────────────────────
+// The sweep's TEMPORAL observation prefixes: a scroll reveal, a repeated style mutation,
+// a pre-navigation startup animation. Time-driven phenomena are the motion pass's
+// jurisdiction — never behavior-deviations.json material (that file is for unsupported
+// non-temporal interaction/state rows; docs/CLONE-ANY-SITE.md).
+const TEMPORAL_ROW = /^(?:reveal|mutation|startup):/i;
+function isTemporalBehaviorKey(key) {
+  return TEMPORAL_ROW.test(String(key || ""));
+}
+
+// Does the motion machinery hold a receipt for this behavior row's element? Receipts live
+// in motion-items.json (@2: the build pass writes one item per (selector, tier) it acted
+// on — css-inherited verifies, applied players, receipted skips; declare-era items own
+// behavior keys by lineage) and motion-doc.json (the capture's recorded tracks, which the
+// pass's players are generated from). Match order: behavior-key lineage → item
+// selector/scope (exact trimmed match, the same rule as introspected binding — fuzzy
+// matching would attach a receipt to motion it never covered) → doc track target
+// selector. Pure and throw-free: the result feeds an INFORMATIONAL line on the behavior
+// gate's receipt, never a gate result.
+function motionReceiptForBehaviorRow(behaviorKey, row, items, doc) {
+  let normalized;
+  try { normalized = normalizeMotionItems(items || []); } catch (_) { normalized = []; }
+  const key = String(behaviorKey || "");
+  const byKey = normalized.find((item) => behaviorKeysOf(item).includes(key));
+  if (byKey) return { via: "behavior-key", id: byKey.id };
+  const value = row && typeof row === "object" ? row : {};
+  const temporal = value.temporal && typeof value.temporal === "object" ? value.temporal : null;
+  const selector = capturedSelector(value, temporal, key);
+  if (!selector) return null;
+  const matches = (candidate) => typeof candidate === "string" && candidate.trim() === selector;
+  const bySelector = normalized.find((item) => matches(item.selector) || matches(item.scope));
+  if (bySelector) return { via: "selector", id: bySelector.id };
+  const track = doc && Array.isArray(doc.tracks)
+    ? doc.tracks.find((entry) => entry && typeof entry === "object" && entry.target && matches(entry.target.selector))
+    : null;
+  if (track) return { via: "doc-track", id: String(track.id != null ? track.id : selector) };
+  return null;
+}
+
 function autoItemId(groupKey, kind) {
   return `auto-${slug(kind)}-${sha(groupKey).slice(0, 8)}`;
 }
@@ -529,8 +568,10 @@ module.exports = {
   introspectedBindingFor,
   introspectedTracksForScope,
   isDeclaredItem,
+  isTemporalBehaviorKey,
   isTerminalMotionItem,
   motionCandidatesFromSnapshot,
+  motionReceiptForBehaviorRow,
   normalizeMotionItems,
   ownedMotionCandidate,
   readMotionDoc,

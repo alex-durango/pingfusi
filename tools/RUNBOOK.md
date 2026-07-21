@@ -101,7 +101,24 @@ authored line-heights, and drawing primitives by construction).
    `leaves`/`byKind` should be plausible for the page (a media-heavy page with
    byKind.media of 0 is under-enumeration). Then `pingfusi capture pull <name> --all`.
    Prefer this path; the granular steps here and in Step 2/3 below remain for sites
-   that need manual intervention. Delivering the DOM by hand instead:
+   that need manual intervention.
+
+   **Never-settling animations (belts, infinite spins)?** Measurement is only comparable
+   at a FIXED ANIMATION PHASE — a snapshot of a page whose animation never stops catches
+   it at a phase set by when the page loaded, and visual/strict then fail a CORRECT clone
+   with constant-offset deltas (LEARNINGS #38). `pingfusi capture-run` always measures
+   phase-frozen; on this interactive path use the phased one-call on BOTH tabs:
+   ```js
+   await pxCaptureAllPhased('<sink_url>')             // settle → freeze animation phase → measure
+   pxFreezeAnimations()   // → {supported, frozen, ids, players, alreadyPaused, skipped, unfreezable, stillMoving, watch}
+   ```
+   The freeze pauses every declared animation at progress 0 of its iteration and receipts
+   what it froze; rAF-driven movers CANNOT be paused generically and come back on
+   `unfreezable` — the report tells you, and capture-run's value mode additionally embeds
+   the receipt in the snapshot so the gates can exclude (and LIST) marks inside those
+   movers' subtrees. In sink mode the POSTed snapshot predates the receipt, so that
+   exclusion rides only the capture-run path — another reason to prefer it here.
+   Delivering the DOM by hand instead:
    ```js
    await pxSendDom('<sink_url>/dom.html')   // hosted session (Step 0) — or
    await pxSendDom('http://localhost:7799/dom.html')   // local sink, when localhost works
@@ -364,7 +381,7 @@ Two tools that keep iteration at seconds/minutes instead of full-round scale:
   (3 iterations with no progress on one gate), run `pingfusi assist <name>` — it picks the
   worst failing mark from the gate's own artifacts and files the one-sided question a
   reviewer can answer in one look. `--compare` files a scoped side-by-side diagnostic
-  round instead (5 results by default — poll first; never satisfies the review gate). One open
+  round instead (1 result by default — poll first; never satisfies the review gate). One open
   assist per target; re-check answers free with the printed poll-result/assist-result
   command between iterations.
 

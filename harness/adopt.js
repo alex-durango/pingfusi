@@ -9,7 +9,7 @@
 // WITHOUT the pixel pipeline (no workflow gates — there's no captured live.json/clone.json
 // pair to verify; the review verdict is the whole check).
 //
-// USAGE:  pingfusi adopt <name> <url> [width=1512]
+// USAGE:  pingfusi adopt <name> <url> [width=1728]
 //   then: pingfusi tunnel <name> --url http://localhost:3000     (your dev server)
 //         pingfusi review <name> file [--region "…"]              (the loop begins)
 "use strict";
@@ -21,7 +21,11 @@ const WORK = process.cwd();
 
 function main() {
   const [name, url, widthArg] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-  if (!name || !url) { console.error("usage: pingfusi adopt <name> <url> [width=1512]"); process.exit(2); }
+  if (!name || !url) { console.error("usage: pingfusi adopt <name> <url> [width=1728]"); process.exit(2); }
+  // Same guard as new-target.js: `+"default"` is NaN, and a NaN width in target.json
+  // poisons every later comparison. Default matches the kit's real default (1728).
+  const width = widthArg === undefined || widthArg === "" ? 1728 : +widthArg;
+  if (!Number.isFinite(width) || width <= 0) { console.error(`width must be a positive number of pixels, got "${widthArg}" — usage: pingfusi adopt <name> <url> [width=1728]`); process.exit(2); }
   let parsed;
   try { parsed = new URL(url); } catch (e) { console.error(`"${url}" is not a valid url`); process.exit(2); }
   const dir = path.join(WORK, "targets", name);
@@ -30,7 +34,7 @@ function main() {
     process.exit(1);
   }
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "target.json"), JSON.stringify({ name, url: parsed.href, width: +(widthArg || 1512), adopted: true }, null, 2) + "\n");
+  fs.writeFileSync(path.join(dir, "target.json"), JSON.stringify({ name, url: parsed.href, width, adopted: true }, null, 2) + "\n");
   fs.writeFileSync(path.join(dir, "NOTES.md"), `# ${name} — ${parsed.href} (ADOPTED external build — review loop only)
 
 Built by an external tool (ditto / other); the kit runs the review loop, not the

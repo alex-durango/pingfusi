@@ -19,7 +19,7 @@ function route(cmd) {
   return MCP_COMMANDS.has(cmd) ? "mcp" : "kit";
 }
 
-// `remove`/`uninstall` also sweep the kit's own clone/fix skills. A scoped remove
+// `remove`/`uninstall` also sweep the kit's own use-case skills. A scoped remove
 // touches only that coding agent; a full remove sweeps every supported skill dir.
 const VALID_CLIENTS = ["claude-code", "cursor", "codex", "claude-desktop"];
 

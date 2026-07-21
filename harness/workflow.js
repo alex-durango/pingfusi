@@ -45,7 +45,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { diffSnapshots } = require("../tools/pixel-diff.js");
-const { activeMotionItems, advisoryMotionCandidates, readMotionItems, updateMotionItem } = require("./motion-items.js");
+const { activeMotionItems, advisoryMotionCandidates, isTemporalBehaviorKey, motionReceiptForBehaviorRow, readMotionDoc, readMotionItems, updateMotionItem } = require("./motion-items.js");
 const { installAndProbeMotionBrowser } = require("./motion-browser.js");
 const { DISPLAY_RANGE, supportsNode } = require("./node-runtime.js");
 
@@ -346,10 +346,35 @@ function behaviorGate(name) {
   const devPath = path.join(dir, "behavior-deviations.json");
   const dev = exists(devPath) ? readJson(devPath) : {};
 
-  const missing = [], outOfTolerance = [], documented = [];
+  // FIRST-DRAFT doctrine (2026-07-19): TEMPORAL rows — the sweep's reveal:/mutation:/startup:
+  // observations — are the motion pass's jurisdiction. The pass reproduces them in the draft
+  // itself (captured CSS carries the css/transition tiers, other tiers get generated WAAPI
+  // players), and clone-side discovery does not re-observe that reproduction as the same row —
+  // so "missing from behaviors-clone.json" is not evidence of a miss for them. The old
+  // accounting demanded such rows be reproduced or entered in behavior-deviations.json, while
+  // the doctrine BARS temporal evidence from that file and motion never gates — a contradiction
+  // with no legitimate exit (agents had to --blocked citing the doctrine; observed on real runs
+  // 2026-07-20). Now: a temporal row whose element carries a motion receipt (motion-items@2
+  // item or motion-doc track) is SATISFIED-BY-MOTION — an informational line, not a miss; a
+  // temporal row with NO receipt is an ADVISORY routed at the motion utilities. Neither ever
+  // demands a deviations entry, and neither fails the gate.
+  let motionBookItems = [];
+  try { motionBookItems = readMotionItems(dir).items; }
+  catch (e) { /* corrupt manifest already surfaces as motionItemsRequirement's advisory */ }
+  const motionDoc = readMotionDoc(dir).doc;
+
+  const missing = [], outOfTolerance = [], documented = [], satisfiedByMotion = [], temporalUnreceipted = [];
   for (const key of liveKeys) {
     if (dev[key] && typeof dev[key].reason === "string" && dev[key].reason.trim()) { documented.push(key); continue; }
-    if (!(key in cloneBehaviors)) { missing.push(key); continue; }
+    if (!(key in cloneBehaviors)) {
+      if (isTemporalBehaviorKey(key)) {
+        const receipt = motionReceiptForBehaviorRow(key, live.behaviors[key], motionBookItems, motionDoc);
+        if (receipt) satisfiedByMotion.push(`${key} → ${receipt.id}`);
+        else temporalUnreceipted.push(key);
+        continue;
+      }
+      missing.push(key); continue;
+    }
     const liveB = live.behaviors[key], cloneB = cloneBehaviors[key];
     if (liveB.trigger && cloneB.trigger && liveB.trigger !== cloneB.trigger) {
       outOfTolerance.push(`${key} (trigger: live="${liveB.trigger}" clone="${cloneB.trigger}")`);
@@ -360,7 +385,7 @@ function behaviorGate(name) {
   }
 
   if (missing.length)
-    return { ok: false, reason: `${missing.length} live behavior(s) MISSING from the clone (silently unreproduced, undocumented): ${missing.join(", ")} — reproduce in clone/fixes.js or document why in targets/${name}/behavior-deviations.json` };
+    return { ok: false, reason: `${missing.length} live interaction/state behavior(s) MISSING from the clone (silently unreproduced, undocumented): ${missing.join(", ")} — reproduce in clone/fixes.js or document why in targets/${name}/behavior-deviations.json` };
   if (outOfTolerance.length)
     return { ok: false, reason: `${outOfTolerance.length} behavior(s) reproduced but OUT OF TOLERANCE: ${outOfTolerance.join("; ")}` };
 
@@ -383,7 +408,16 @@ function behaviorGate(name) {
 
   // Motion receipts are informational lines on the receipt, never a gate result.
   const motion = motionItemsRequirement(name, live);
-  const summary = `${liveKeys.length} live behavior(s) verified — ${liveKeys.length - documented.length} reproduced within tolerance` + (documented.length ? `, ${documented.length} documented deviation(s) [${documented.join(", ")}]` : "") + (declaredKeys.length ? `; ${declaredKeys.length} declared row(s) disposed (${declaredKeys.length - declaredExcused} reproduced, ${declaredExcused} excused)` : "") + cite(live) + (motion.artifact ? `; ${motion.reason}` : "") + (motion.advisory ? `; ⚠ ${motion.advisory}` : "");
+  const listOf = (rows) => `${rows.slice(0, 6).join(", ")}${rows.length > 6 ? ` … +${rows.length - 6} more` : ""}`;
+  const reproduced = liveKeys.length - documented.length - satisfiedByMotion.length - temporalUnreceipted.length;
+  const summary = `${liveKeys.length} live behavior(s) verified — ${reproduced} reproduced within tolerance`
+    + (documented.length ? `, ${documented.length} documented deviation(s) [${documented.join(", ")}]` : "")
+    + (satisfiedByMotion.length ? `, ${satisfiedByMotion.length} temporal row(s) satisfied by motion receipts [${listOf(satisfiedByMotion)}] — the motion pass reproduces these in the draft itself (informational)` : "")
+    + (declaredKeys.length ? `; ${declaredKeys.length} declared row(s) disposed (${declaredKeys.length - declaredExcused} reproduced, ${declaredExcused} excused)` : "")
+    + cite(live)
+    + (motion.artifact ? `; ${motion.reason}` : "")
+    + (motion.advisory ? `; ⚠ ${motion.advisory}` : "")
+    + (temporalUnreceipted.length ? `; ⚠ ${temporalUnreceipted.length} temporal row(s) not re-observed on the clone and carrying NO motion receipt: ${listOf(temporalUnreceipted)} — advisory (motion never gates, and temporal rows never require behavior-deviations.json entries); route the machine checks with ${CMD} next ${name}` : "");
   // The receipt must keep hashing behaviors-clone.json — WHAT WAS VERIFIED — never the
   // motion manifest state (a manifest edit must not re-stamp a behavior verification).
   return { ok: true, reason: summary, artifact: clonePath };
@@ -392,6 +426,15 @@ function behaviorGate(name) {
 // ── PHASES — ordered; each with an objective gate ────────────────────────────
 // kind: "machine"  → fully verified by the gate (exit 0 is a fact)
 //       "attested" → can't be fully machine-checked; requires --evidence and is flagged
+// Phase-freeze exclusions on a diff result → the gate-reason suffix that LISTS them
+// (LEARNINGS #38). A mark inside an unfreezable mover's subtree is excluded from the
+// comparison by diffSnapshots, and an exclusion the gate never names is a silent drop —
+// so both the visual and strict gates carry this on PASS and FAIL reasons alike.
+function excludedNote(diff) {
+  if (!diff.excluded || !diff.excluded.length) return "";
+  return `; ${diff.excluded.length} mark(s) EXCLUDED — inside unfreezable movers' subtrees (rAF-driven, phase cannot be frozen; receipted in the snapshots' freeze field): ${diff.excluded.map((e) => `${e.target} (${e.selector})`).join(", ")}`;
+}
+
 const PHASES = [
   {
     key: "target",
@@ -540,8 +583,12 @@ const PHASES = [
           live.viewport.height !== clone.viewport.height)
         return { ok: false, reason: `viewport heights differ (${live.viewport.height} vs ${clone.viewport.height}) — y-positions of viewport-anchored (position:fixed) elements and any vh-based layout are not comparable. Capture live and the clone in the SAME tab (identical browser chrome ⇒ identical innerHeight), then re-capture both.` };
       const v = diffSnapshots(live, clone, { visual: true });
-      if (!v.ok) return { ok: false, reason: `${v.summary.failures}/${v.summary.comparisons} --visual comparisons over ${v.summary.tol}px — run score.js for the fix list` };
-      return { ok: true, reason: `--visual PASS — ${v.summary.comparisons} comparisons, 0 fails`, artifact: path.join(targetDir(name), "clone.json") };
+      // Excluded marks (inside unfreezable movers' subtrees — phase-freeze, LEARNINGS
+      // #38) are LISTED on the gate reason, pass or fail: an exclusion the operator
+      // never sees is a silent drop, which is the one thing exclusion must never be.
+      const excl = excludedNote(v);
+      if (!v.ok) return { ok: false, reason: `${v.summary.failures}/${v.summary.comparisons} --visual comparisons over ${v.summary.tol}px — run score.js for the fix list${excl}` };
+      return { ok: true, reason: `--visual PASS — ${v.summary.comparisons} comparisons, 0 fails${excl}`, artifact: path.join(targetDir(name), "clone.json") };
     },
   },
   {
@@ -581,20 +628,25 @@ const PHASES = [
       const clone = readJson(cp2);
       const s = diffSnapshots(live, clone, {});
       const fails = s.rows.filter((r) => !r.pass);
-      if (!fails.length) return { ok: true, reason: "strict PASS — 0 structural deltas", artifact: cp2 };
+      const excl = excludedNote(s); // phase-freeze exclusions ride the pass reasons too (LEARNINGS #38)
+      if (!fails.length) return { ok: true, reason: `strict PASS — 0 structural deltas${excl}`, artifact: cp2 };
       // A delta that ALSO fails --visual is a painted mark, not structure — it can never be
       // "documented away" (PLAYBOOK ground rule 6: a colour/underline delta is never structural).
       const v = diffSnapshots(live, clone, { visual: true });
       const paintKeys = new Set(v.rows.filter((r) => !r.pass).map((r) => r.target + "\u0000" + r.prop));
       const paint = fails.filter((r) => paintKeys.has(r.target + "\u0000" + r.prop));
+      // Say what actually holds, both halves: deviations.json can never document a paint delta
+      // away — but --blocked is NOT refused. An agent facing an environment-made delta (e.g. a
+      // never-settling animation captured at different phases) used to read "fix them" as the
+      // only channel and stall; the receipted escape was always accepted and keeps done honest.
       if (paint.length)
-        return { ok: false, reason: `${paint.length} PAINT delta(s) — visible marks can never be documented away, fix them: ` + paint.map((r) => `${r.target}.${r.prop}`).join(", ") };
+        return { ok: false, reason: `${paint.length} PAINT delta(s) — visible marks can never be documented away in deviations.json, fix them: ` + paint.map((r) => `${r.target}.${r.prop}`).join(", ") + `. If the ENVIRONMENT itself manufactures the delta and the gate's remedies are exhausted, a receipted escape IS accepted: ${CMD} advance ${name} strict --blocked "<remedy tried + evidence>" — done stays red until the phase re-earns a passing gate, so the receipt keeps the final claim honest.` };
       const devPath = path.join(targetDir(name), "deviations.json");
       const dev = exists(devPath) ? readJson(devPath) : {};
       const undocumented = fails.filter((r) => !(dev[r.target] && dev[r.target][r.prop]));
       if (undocumented.length)
         return { ok: false, reason: `${undocumented.length} strict delta(s) undocumented — fix them or explain each in deviations.json: ` + undocumented.map((r) => `${r.target}.${r.prop}`).join(", ") };
-      return { ok: true, reason: `${fails.length} structural delta(s), all documented in deviations.json`, artifact: devPath };
+      return { ok: true, reason: `${fails.length} structural delta(s), all documented in deviations.json${excl}`, artifact: devPath };
     },
   },
   {
@@ -1212,7 +1264,14 @@ function finalMotionLifecyclePatch(managed, item, workDir = WORK) {
   };
 }
 
-const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enforced, gated workflow
+const HELP = `pingfusi — put your agent's work in front of a real human, and iterate until they approve
+
+THE MENU — pick a job (definitions: use-cases/README.md)
+  Quick question           one answer to one question, fast — advisory, never an approval
+  Review anything          pinned comments + a verdict on whatever you publish
+  Copy Anything            clone a site pixel-perfect — the gated pipeline below
+  Website beautification   professional polish, no reference design (skill: beautify-with-pingfusi)
+  Video review             timestamped judgment of a rendered video (skill: review-video-with-pingfusi)
 
   pingfusi setup                                     FIRST CONTACT — one interactive command: global
                                                      install, cloudflared, the review login (required
@@ -1220,10 +1279,24 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
                                                      Also: npx pingfusi setup
   pingfusi doctor                                    read-only preflight re-check, fix command per miss
   pingfusi agent-setup [client] [--force]            teach Claude Code, Cursor, or Codex: installs the
-                                                     clone-site skill in its native skill directory
-                                                     to "clone https://example.com pixel-perfect"
+                                                     shipped use-case skills in its native skill directory
+                                                     to clone, fix, or beautify a page — or review a
+                                                     video — with pingfusi
   pingfusi where                                     print the installed kit's directory (docs live there)
 
+THE EVERYDAY JOBS
+  pingfusi ask     "question" [--options "A,B,C"] [--context "…"]   QUICK QUESTION: one human, one answer,
+                                                     from ANY directory — no target, no workspace (state:
+                                                     ~/.pingfusi/asks/<ping_id>.json). 1 result, advisory;
+                                                     the answer often arrives inside the call (docs/CORE.md)
+  pingfusi ask     result <ping_id>                  collect the ask's answer + notes (free re-fetch)
+  pingfusi wait    <ping_id>                         block until a filed round resolves (wake-on-verdict) —
+                                                     arm it right after any review files
+  (REVIEW ANYTHING is the same loop against your own state file — core.review.file /
+   verify over any published artifact; contracts in docs/CORE.md. The jobs below
+   package that loop with their own reviewer surfaces.)
+
+COPY ANYTHING — the gated clone pipeline (also spoken job-first: pingfusi clone <command>)
   pingfusi new     <name> <url> [width]              scaffold a target + seed the workflow
   pingfusi adopt   <name> <original-url> [width]     register an EXTERNALLY-BUILT draft (ditto, lovable,
                                                      hand-built) for the review loop — no pixel
@@ -1301,14 +1374,14 @@ const HELP = `pingfusi — clone a site pixel-perfect, and prove it with an enfo
   pingfusi score   <name>                            score live-vs-clone vs the last run
   pingfusi diff    <live.json> <clone.json> [--visual|--inspect|--all|--tol N]   raw numeric diff
 
-  pingfusi review  <name> file [--draft <url>] [--results 1..20]   file a scope-pinned review round (default 5; the "review"
+  pingfusi review  <name> file [--draft <url>] [--results 1..20]   file a scope-pinned review round (default 1; the "review"
                                                      phase gate — verify/template/record via the same command;
                                                      --draft defaults to the hosted draft, then the tunnel)
   pingfusi review  <name> poll "question" [--choices "A,B"]   1-result mid-round micro-check with a
                                                      reviewer (advisory — never satisfies the review gate)
   pingfusi assist  <name> [--compare [--results 1..20]]   STALLED on a gate? file a reviewer ask AUTO-COMPOSED
                                                      from the failing gate's own artifacts (1-result poll;
-                                                     --compare files a 5-result scoped side-by-side diagnostic
+                                                     --compare files a 1-result scoped side-by-side diagnostic
                                                      round instead — advisory, never the review gate)
   pingfusi status  <name>                            phase table + the next required action
   pingfusi gate    <name> <phase>                    run ONE gate read-only (exit 0/1)
@@ -1323,7 +1396,12 @@ phases (in order): ${PHASES.map((p) => p.key).join(" → ")}
 docs: docs/PLAYBOOK.md (method) · docs/WORKFLOW.md (the gates) · RUNBOOK.md (fast capture)`;
 
 function main() {
-  const [cmd, name, ...rest] = process.argv.slice(2);
+  let argv = process.argv.slice(2);
+  // Job namespace: `pingfusi clone <command> …` speaks the Copy Anything job's commands
+  // job-first. A PURE alias — every kit command works under it, nothing exists only
+  // there — so docs may show either spelling and both keep working.
+  if (argv[0] === "clone") argv = argv.length > 1 ? argv.slice(1) : ["help"];
+  const [cmd, name, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { console.log(HELP); process.exit(cmd ? 0 : 2); }
 
   // delegating subcommands make `pingfusi` the single entrypoint for installed users
@@ -1358,7 +1436,17 @@ function main() {
       return delegateMotion([name, ...rest].filter((a) => a != null));
     }
     case "next": { if (!name) { console.error("usage: pingfusi next <name> [--json]"); process.exit(2); } return delegate("harness/next.js", [name, ...rest]); }
-    case "new": { if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); } return delegate("harness/new-target.js", [name, ...rest]); }
+    case "new": {
+      if (!name || !rest[0]) { console.error("usage: pingfusi new <name> <url> [width]"); process.exit(2); }
+      // width is measured everywhere downstream — a non-numeric value ("default", "auto")
+      // used to coerce to NaN and land IN target.json, where every later gate compared
+      // against it. Refuse at the door: a usage error, before anything is scaffolded.
+      if (rest[1] !== undefined && (!/^\d+$/.test(String(rest[1])) || +rest[1] <= 0)) {
+        console.error(`width must be a positive number of pixels, got "${rest[1]}" — usage: pingfusi new <name> <url> [width]   (omit it for the kit default, 1728)`);
+        process.exit(2);
+      }
+      return delegate("harness/new-target.js", [name, ...rest]);
+    }
     case "capture-build": { if (!name) { console.error("usage: pingfusi capture-build <name> [domFile] [--fixes]"); process.exit(2); } return delegate("harness/capture-build.js", [name, ...rest]); }
     case "behavior-capture": { if (!name) { console.error("usage: pingfusi behavior-capture <name> [--side both|live|clone] [--attach <port>] [--headful] [--profile] [--dry-run]"); process.exit(2); } return delegate("harness/behavior-runner.js", [name, ...rest]); }
     case "behavior-worksheet": { if (!name) { console.error("usage: pingfusi behavior-worksheet <name>"); process.exit(2); } return delegate("tools/behavior-worksheet.js", [name, ...rest]); }
@@ -1366,6 +1454,9 @@ function main() {
     case "capture": { if (!name || !rest[0]) { console.error("usage: pingfusi capture open <name> | pingfusi capture pull <name> <file>|--all"); process.exit(2); } return delegate("harness/capture-remote.js", [name, ...rest]); }
     case "review": { if (!name || !rest[0]) { console.error("usage: pingfusi review <name> file|template|record|verify [args]"); process.exit(2); } return delegate("harness/review-qa.js", [rest[0], name, ...rest.slice(1)]); }
     case "assist": { if (!name) { console.error('usage: pingfusi assist <name> [--phase <key>] [--ask "…"] [--compare]'); process.exit(2); } return delegate("harness/review-qa.js", ["assist", name, ...rest]); }
+    // The workspace-free generic verb: no <name>, no targets/ — state lives under
+    // ~/.pingfusi/asks/. Proof that the core's service verbs need zero cloning code.
+    case "ask": { if (!name) { console.error('usage: pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]   |   pingfusi ask result <ping_id>'); process.exit(2); } return delegate("harness/ask.js", [name, ...rest]); }
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
     case "draft": { if (!name || !rest[0]) { console.error("usage: pingfusi draft <name> push|status|delete"); process.exit(2); } return delegate("harness/draft.js", [rest[0], name]); }
     case "tunnel": { if (!name) { console.error("usage: pingfusi tunnel <name> [port] [--check]"); process.exit(2); } return delegate("harness/tunnel.js", [name, ...rest]); }

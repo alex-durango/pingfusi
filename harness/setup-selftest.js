@@ -72,7 +72,11 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
     ok(logs.some((l) => /ditto \(optional fast builder\): connect its MCP/.test(l)), "ditto guidance is MCP/API-key based — never a binary probe (macOS ships /usr/bin/ditto, a guaranteed false positive)");
     ok(logs.some((l) => /taught your AI agent \(claude-code\): .*pixel-perfect-clone/.test(l)), "installs the agent skills into the detected coding-agent client");
     ok(fs.existsSync(path.join(home, ".claude", "skills", "pixel-perfect-clone", "SKILL.md")), "skills really land in the fake HOME");
-    ok(logs.some((l) => /Clone https:\/\/example\.com pixel-perfect/.test(l)) && logs.some((l) => /Fix it with pingfusi/.test(l)), "summary teaches both agent sentences (clone + fix-it-with-pingfusi)");
+    ok(logs.some((l) => /Clone https:\/\/example\.com pixel-perfect/.test(l))
+      && logs.some((l) => /Fix it with pingfusi/.test(l))
+      && logs.some((l) => /Beautify this page\. Use pingfusi/.test(l))
+      && logs.some((l) => /Review this video with pingfusi/.test(l)),
+      "summary teaches all four agent sentences (clone + fix + beautify + video)");
   }
 
   // spawnSync can fail without a numeric status; never report that as installed.

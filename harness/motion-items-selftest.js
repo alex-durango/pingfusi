@@ -11,8 +11,10 @@ const {
   introspectedBindingFor,
   introspectedTracksForScope,
   isDeclaredItem,
+  isTemporalBehaviorKey,
   isTerminalMotionItem,
   motionCandidatesFromSnapshot,
+  motionReceiptForBehaviorRow,
   normalizeMotionItems,
   readMotionDoc,
   readMotionItems,
@@ -365,6 +367,30 @@ ok(isTerminalMotionItem({ id: "x", status: "approved" }) && isTerminalMotionItem
   "legacy terminal statuses stay closed receipts");
 ok(!isTerminalMotionItem({ id: "x", status: "needs-fix" }) && !isTerminalMotionItem({ id: "x", status: "edited-applied" }),
   "unknown/legacy non-terminal statuses read as open receipts (informational only — nothing gates on them)");
+
+// ── behavior-gate receipt lookup: temporal-row classification + receipt matching ─────────
+ok(isTemporalBehaviorKey("reveal:div.hero") && isTemporalBehaviorKey("mutation:div.ticker") && isTemporalBehaviorKey("startup:#loader"),
+  "reveal:/mutation:/startup: rows classify as temporal (the motion pass's jurisdiction)");
+ok(!isTemporalBehaviorKey("hover:nav") && !isTemporalBehaviorKey("marquee:belt") && !isTemporalBehaviorKey("generative:webgl_bg") && !isTemporalBehaviorKey(null),
+  "interaction/state and measured-inventory prefixes stay out of the temporal class");
+{
+  const passItem = { id: "pass-css-12345678", selector: "div.fade-up", scope: "div.fade-up", tier: "introspected-css", action: "css-inherited", verify: "pass", source: "motion-pass", status: "pass" };
+  const lineageItem = { id: "owned-loader", kind: "raf", status: "pass", sourceBehaviorKeys: ["startup:#loader"] };
+  const doc = { schema: "doc", tracks: [{ id: "trk-ticker", target: { selector: "div.ticker" }, provenance: { tier: "sampled" } }] };
+  const bySelector = motionReceiptForBehaviorRow("reveal:div.fade-up", { selector: "div.fade-up" }, [passItem, lineageItem], doc);
+  ok(bySelector && bySelector.via === "selector" && bySelector.id === "pass-css-12345678",
+    "a pass-written @2 item matching the row's element selector is a motion receipt");
+  const byLineage = motionReceiptForBehaviorRow("startup:#loader", { selector: "#loader" }, [passItem, lineageItem], doc);
+  ok(byLineage && byLineage.via === "behavior-key" && byLineage.id === "owned-loader",
+    "behavior-key lineage on an item is a motion receipt regardless of selector spelling");
+  const byTrack = motionReceiptForBehaviorRow("mutation:div.ticker", {}, [passItem, lineageItem], doc);
+  ok(byTrack && byTrack.via === "doc-track" && byTrack.id === "trk-ticker",
+    "a motion-doc track for the key-derived selector is a motion receipt (players are generated from these tracks)");
+  ok(motionReceiptForBehaviorRow("reveal:hero_heading", {}, [passItem, lineageItem], doc) === null,
+    "a logical probe name never invents a selector — no receipt without a real element match");
+  ok(motionReceiptForBehaviorRow("reveal:div.fade-up", { selector: "div.fade-up" }, [{ bad: "item" }], null) === null,
+    "an unreadable manifest degrades to no-receipt, never a throw (the gate stays runnable)");
+}
 
 console.log(failed ? `\n❌ motion-items-selftest: ${failed} assertion(s) failed.` : "\n✓ motion-items-selftest: all assertions pass.");
 process.exit(failed ? 1 : 0);

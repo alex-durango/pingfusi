@@ -27,7 +27,7 @@ for (const cmd of ["remove", "uninstall", "wait", "whoami", "rules"]) {
 
 // the kit is the default — setup DELIBERATELY: the merged onboarding runs the MCP
 // device-flow install as its login step, so no installer surface is lost
-for (const cmd of ["setup", "new", "adopt", "review", "motion", "next", "behavior-worksheet", "tunnel", "doctor", "agent-setup", "status", "advance", "help"]) {
+for (const cmd of ["setup", "new", "adopt", "review", "motion", "next", "behavior-worksheet", "tunnel", "doctor", "agent-setup", "status", "advance", "help", "ask"]) {
   ok(route(cmd) === "kit", `'pingfusi ${cmd}' → kit workflow`);
 }
 ok(route(undefined) === "kit" && route("no-such-cmd") === "kit", "bare/unknown → kit (workflow.js owns help + unknown-command handling)");
@@ -92,6 +92,58 @@ try {
     "scoped removal deletes Codex skills without touching Cursor");
 } finally {
   fs.rmSync(tmpHome, { recursive: true, force: true });
+}
+
+// ── the workspace-free generic verb: `pingfusi ask` end-to-end, ZERO cloning code ──
+// The core-extraction acceptance: an agent asking a reviewer to pick between taglines
+// runs from an EMPTY directory (no targets/, no workspace) through the same file://
+// mock transport the core selftests use (PPK_PINGHUMANS_URL=file://MOCK serves canned
+// quick_poll.json / get_ping-<ping_id>.json), with state under ~/.pingfusi/asks/.
+{
+  const MOCK = fs.mkdtempSync(path.join(os.tmpdir(), "ppk-ask-mock-"));
+  const askHome = fs.mkdtempSync(path.join(os.tmpdir(), "ppk-ask-home-"));
+  const emptyWork = fs.mkdtempSync(path.join(os.tmpdir(), "ppk-ask-work-"));
+  const BIN = path.join(__dirname, "..", "bin", "pingfusi");
+  const env = { ...process.env, HOME: askHome, USERPROFILE: askHome, PPK_PINGHUMANS_URL: "file://" + MOCK };
+  const run = (args) => spawnSync(process.execPath, [BIN, ...args], { encoding: "utf8", env, cwd: emptyWork });
+  const ID = "00000000-0000-4000-8000-00000000a51d";
+  const ID2 = "00000000-0000-4000-8000-00000000a52d";
+  try {
+    // file: the server returned pending inside the call — print the id + the collect command
+    fs.writeFileSync(path.join(MOCK, "quick_poll.json"), JSON.stringify({ ping_id: ID, status: "pending", n_received: 0, n_target: 1, responses: [] }));
+    let r = run(["ask", "Which tagline reads better?", "--options", "Draft first,Review everything", "--context", "two candidates for the launch page"]);
+    ok(r.status === 0 && r.stdout.includes(`ping ${ID}`) && r.stdout.includes(`pingfusi ask result ${ID}`),
+      "`pingfusi ask` files from an empty dir and prints the ping id + the collect command");
+    const rec = JSON.parse(fs.readFileSync(path.join(askHome, ".pingfusi", "asks", `${ID}.json`), "utf8"));
+    ok(rec.ping_id === ID && rec.question === "Which tagline reads better?" && rec.n_target === 1
+      && JSON.stringify(rec.options) === JSON.stringify(["Draft first", "Review everything"])
+      && rec.last && rec.last.status === "pending" && rec.last.responses.length === 0,
+      "…and records the ask under ~/.pingfusi/asks/<ping_id>.json (workspace-free state)");
+    ok(!fs.existsSync(path.join(emptyWork, "targets")), "…creating NO targets/ workspace anywhere");
+    // collect: the answer + notes, persisted on the record
+    fs.writeFileSync(path.join(MOCK, `get_ping-${ID}.json`), JSON.stringify({ status: "complete", n_received: 1, responses: [{ choice: "Draft first", free_text: "reads cleaner" }] }));
+    r = run(["ask", "result", ID]);
+    ok(r.status === 0 && /\[Draft first\] reads cleaner/.test(r.stdout), "`pingfusi ask result` collects the answer + notes (free re-fetch)");
+    const rec2 = JSON.parse(fs.readFileSync(path.join(askHome, ".pingfusi", "asks", `${ID}.json`), "utf8"));
+    ok(rec2.last.responses[0].choice === "Draft first" && rec2.last.responses[0].text === "reads cleaner" && !!rec2.checked_at,
+      "…and persists the collected answer on the ask record");
+    // the blocking call often carries the answer already — printed immediately
+    fs.writeFileSync(path.join(MOCK, "quick_poll.json"), JSON.stringify({ ping_id: ID2, status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Yes", free_text: "clear winner" }] }));
+    r = run(["ask", "quick check — does the second option read as a verb?"]);
+    ok(r.status === 0 && /\[Yes\] clear winner/.test(r.stdout), "an answer arriving inside the blocking call is printed immediately");
+    // a pending collect is exit 1 with the free re-check named
+    fs.writeFileSync(path.join(MOCK, `get_ping-${ID2}.json`), JSON.stringify({ status: "pending", n_received: 0, responses: [] }));
+    r = run(["ask", "result", ID2]);
+    ok(r.status === 1 && /0 answers yet/.test(r.stderr) && new RegExp(`pingfusi ask result ${ID2}`).test(r.stderr),
+      "a pending collect exits 1 and names the free re-check");
+    // usage/cap errors are exit 2, refused locally before any wire call
+    ok(run(["ask"]).status === 2, "`pingfusi ask` with no question is a usage error (exit 2)");
+    ok(run(["ask", "result"]).status === 2, "`pingfusi ask result` with no ping id is a usage error (exit 2)");
+    r = run(["ask", "pick one", "--options", "this option text is far past the forty character service cap,B"]);
+    ok(r.status === 2 && /caps options at 40/.test(r.stderr), "an option past the 40-char service cap is a NAMED local refusal, before any bytes move");
+  } finally {
+    for (const d of [MOCK, askHome, emptyWork]) fs.rmSync(d, { recursive: true, force: true });
+  }
 }
 
 // the vendored installer is intact ESM (top-level await — .mjs only) and byte-stable
