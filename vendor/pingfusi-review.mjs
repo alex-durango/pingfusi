@@ -102,7 +102,7 @@ Clone-target precedence: when the repository contains targets/<name>/workflow.js
 
 ## Steps
 
-1. Built/changed a UI? Deploy or tunnel it to a PUBLICLY reachable URL (localhost won't work — a remote reviewer opens it), make sure \`<script src="https://pingfusi.com/qa-toolbar.js"></script>\` is in the preview build's HTML, then call \`request_review_test\` with structured \`steps\` — machine-verifiable \`check\` rules plus inline \`options\` (e.g. \`["Smooth","Janky"]\`) for qualitative steps
+1. Built/changed a UI? Deploy or tunnel it to a PUBLICLY reachable URL (localhost won't work — a remote reviewer opens it; nothing to embed in the page — the review runs in the reviewer's native app), then call \`request_review_test\` with structured \`steps\` — machine-verifiable \`check\` rules plus inline \`options\` (e.g. \`["Smooth","Janky"]\`) for qualitative steps
 2. Quick taste/preference read with no build to test? Call \`ping_review\` (blocks ~50s)
 3. File tests early and keep working while the review happens — collect results with \`get_test_results\` at checkpoints, \`wait_for_results\` when blocked, or \`npx pingfusi wait <ping_id>\` as a background task (foreground in one-shot runs)
 4. For the full QA workflow (verifiable steps, evidence, waiting modes, acting on results), use the pingfusi-review skill
@@ -129,15 +129,11 @@ If the repository contains targets/<name>/workflow.json, begin with pingfusi nex
 
 ## How to File a Test
 
-### Step 1: Make the build reachable and instrumented
+### Step 1: Make the build reachable
 
-The \`url\` must be PUBLICLY reachable — a remote human reviewer opens it, so localhost won't work: tunnel it first (ngrok, cloudflared) or deploy a preview. The toolbar script is REQUIRED for pinned comments and step auto-verification — one line, once per project, in the preview build's HTML (root layout / index template), preview/dev only:
+The \`url\` must be PUBLICLY reachable — a remote human reviewer opens it, so localhost won't work: tunnel it first (ngrok, cloudflared) or deploy a preview. There is NOTHING to embed in the page: the review runs in the reviewer's native app, which supplies pinned comments and per-step tracking on its own. Just make sure the URL serves the CURRENT build before filing — a dead or stale URL burns the round.
 
-\`\`\`html
-<script src="https://pingfusi.com/qa-toolbar.js"></script>
-\`\`\`
-
-No per-task id needed — the reviewer's claim link carries the task token. \`request_review_test\`'s result reports whether the script was detected (\`toolbar_detected\`) — if it warns, fix the build and redeploy before review begins.
+No per-task id needed — the reviewer's claim link carries the task token.
 
 ### Step 2: File with verifiable steps
 
