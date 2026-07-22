@@ -22,11 +22,15 @@ finished version.
 > ```
 >
 > It installs the agent skills, the review login, and the motion runtime. After that,
-> you just talk to your agent:
+> you just talk to your agent. It can recognize when work needs human judgment, choose
+> the matching review job, and keep deterministic checks local:
 >
 > ```
 > clone www.example.com. use pingfusi.
 > ```
+>
+> Or simply ask it to build normally—the universal Pingfusi skill also triggers when
+> the agent reaches a subjective or real-world check it cannot verify itself.
 
 ## Quickstart
 

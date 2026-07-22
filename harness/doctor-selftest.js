@@ -91,8 +91,11 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
   const dest = path.join(home, ".claude", "skills", "pixel-perfect-clone", "SKILL.md");
   const destFix = path.join(home, ".claude", "skills", "fix-with-pingfusi", "SKILL.md");
   const destBeautify = path.join(home, ".claude", "skills", "beautify-with-pingfusi", "SKILL.md");
+  const destGeneral = path.join(home, ".claude", "skills", "pingfusi-review", "SKILL.md");
   const destVideo = path.join(home, ".claude", "skills", "review-video-with-pingfusi", "SKILL.md");
-  ok(r1.ok && fs.existsSync(dest) && fs.existsSync(destFix) && fs.existsSync(destBeautify) && fs.existsSync(destVideo), "installs ALL kit skills (clone + fix + beautify + video) into ~/.claude/skills/");
+  ok(r1.ok && fs.existsSync(dest) && fs.existsSync(destFix) && fs.existsSync(destBeautify)
+    && fs.existsSync(destGeneral) && fs.existsSync(destVideo),
+    "installs ALL kit skills (universal router + clone + fix + beautify + video) into ~/.claude/skills/");
   const body = fs.readFileSync(dest, "utf8");
   ok(/^---\nname: pixel-perfect-clone/.test(body) && /description: .*[Cc]lone/.test(body), "installed skill has the frontmatter Claude Code discovers it by");
   ok(/pingfusi doctor/.test(body) && /pingfusi where/.test(body) && /independent reviewer/i.test(body) && /verdict/i.test(body), "skill teaches preflight, kit location, and the independent-reviewer contract");
@@ -110,6 +113,18 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
     && /omit `draft_url`/.test(beautify) && /automatically\s+chains client-safe wait/i.test(beautify)
     && /core\.review\.verify/.test(beautify) && /project's own source/.test(beautify),
     "beautify teaches publish → custom single-page send-and-wait → verify/refile in owned source");
+  const general = fs.readFileSync(destGeneral, "utf8");
+  ok(general.startsWith("---\nname: pingfusi-review")
+    && general.includes("Trigger even when the user does not mention Pingfusi")
+    && general.includes("objective questions the agent can verify directly"),
+    "pingfusi-review proactively triggers only for human judgment or real-world verification");
+  ok(general.includes("pingfusi_quick_question") && general.includes("pingfusi_review_website")
+    && general.includes("pingfusi_compare_clone") && general.includes("pingfusi_review_video")
+    && general.includes("Use one reviewer by default"),
+    "pingfusi-review routes every job by its current public tool name and defaults to one reviewer");
+  ok(general.includes("call `pingfusi_wait` with the same ping ID")
+    && general.includes("Never report `pending` as a timeout"),
+    "pingfusi-review keeps exact wait mechanics in its operational body");
   const videoSkill = fs.readFileSync(destVideo, "utf8");
   ok(/^---\nname: review-video-with-pingfusi/.test(videoSkill)
     && /review this video/.test(videoSkill) && /match the prompt\/brief/.test(videoSkill),

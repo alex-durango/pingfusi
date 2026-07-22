@@ -2,8 +2,8 @@
 //
 // The kit's new-user experience is "install, then ask your agent" — this command
 // installs every shipped use-case skill into the selected coding agent's native skill
-// directory. Clone, fix, and beautify prompts then route into the same review verbs and
-// iterate on rounds answered by an independent reviewer until one approves.
+// directory. The universal pingfusi-review router teaches WHEN to ask a reviewer and
+// which job to choose; the specialized skills own their detailed workflows.
 //
 // USAGE:  pingfusi agent-setup [claude-code|cursor|codex] [--force]
 //         With no client, existing agent homes are detected; Claude Code is the fallback.
@@ -80,6 +80,8 @@ function install(homeDir, force, requestedClient, options = {}) {
   return { ok: true, installed: installedNames, refreshed: [...refreshed], skipped, clients, destinations, message: `✓ installed/refreshed skill(s): ${installedNames.join(", ")}${skipped.length ? `  (kept current/existing: ${skipped.join(", ")})` : ""}
   → ${destinations.join("\n  → ")}
   Your agent picks them up on its next session. Then just ask it:
+    "Which headline is clearer? Ask a human."    (one advisory judgment call)
+    "Review this build with pingfusi."           (generic verdict + pinned feedback)
     "Clone https://example.com pixel-perfect."   (the full gated pipeline)
     "Fix it with pingfusi."                      (match an existing draft to its reference)
     "Beautify this page. Use pingfusi."          (professional polish, no reference required)

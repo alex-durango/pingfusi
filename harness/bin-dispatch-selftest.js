@@ -163,9 +163,13 @@ const waitText = waitStart >= 0 ? vendorText.slice(waitStart, waitEnd > waitStar
 ok(/name: "cpyany_wait"/.test(waitText) && !/name: "cpyany_test_results"/.test(waitText)
   && /for \(;;\)/.test(waitText) && /keep the task active/.test(waitText),
   "`pingfusi wait` uses the lease-renewing server wait in a continuous heartbeat loop");
-ok(/Clone-target precedence:[\s\S]*Never call the raw review MCP tools/.test(vendorText) &&
-  /Clone Targets: the CLI Owns Orchestration[\s\S]*Never call request_review_test/.test(vendorText),
-  "installed generic guidance yields clone targets to CLI gates and typed motion routing");
+ok(vendorText.includes("Choose the smallest matching job:")
+  && vendorText.includes("pingfusi_quick_question") && vendorText.includes("pingfusi_review_video")
+  && vendorText.includes("targets/<name>/workflow.json")
+  && vendorText.includes("raw review tools bypass its gates")
+  && vendorText.includes("Trigger even when the user does not mention Pingfusi")
+  && !vendorText.includes("request_review_test") && !/(^|\W)ping_review(\W|$)/.test(vendorText),
+  "installed generic guidance proactively routes current jobs and yields managed clone targets to CLI gates");
 
 console.log(failed ? `\n❌ bin-dispatch-selftest: ${failed} assertion(s) failed.` : "\n✓ bin-dispatch-selftest: all assertions pass.");
 process.exit(failed ? 1 : 0);

@@ -216,6 +216,10 @@ Setup incomplete. Fix the failed required step above, then re-run: pingfusi setu
 ─────────────────────────
 Done. Open your AI agent and say:
 
+   "Which headline is clearer? Ask a human."
+or, when you want a structured verdict on any build or artifact:
+   "Review this build with pingfusi."
+or, for a pixel-perfect website clone:
    "Clone https://example.com pixel-perfect."
 or, from inside any draft/clone project you already have:
    "Fix it with pingfusi."

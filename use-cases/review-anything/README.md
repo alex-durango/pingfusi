@@ -34,6 +34,9 @@ have a specialized surface yet.
 needed. The installed generic review skill drives this loop for coding agents; the
 worked example in [Make your own](../your-own/TEMPLATE.md) is a complete recipe.
 
+**Its routing skill:** [`pingfusi-review`](../../skill/pingfusi-review/SKILL.md), which
+selects this verdict-bearing job when a quick advisory answer is not enough.
+
 **Reviewer surface: the generic round.** A question, steps with tappable options,
 pinned/drawn comments, and a verdict — answered with no custom UI work. That is
 exactly why it is the day-one surface for every new job.

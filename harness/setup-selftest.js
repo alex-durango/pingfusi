@@ -54,6 +54,11 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
 
 (async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-setup-"));
+  const motionPackage = path.join(home, "global-pingfusi", "packages", "motion");
+  const playwrightCli = path.join(motionPackage, "node_modules", "playwright", "cli.js");
+  fs.mkdirSync(path.dirname(playwrightCli), { recursive: true });
+  fs.writeFileSync(playwrightCli, "// offline Playwright CLI fixture\n");
+  const resolveMotionPackage = () => motionPackage;
 
   // ── fresh machine (true npx first-run), user consents to everything ──────────
   // `which pingfusi` resolves to npx's EPHEMERAL bin — that must NOT count as installed
@@ -62,7 +67,7 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
     const { io, logs, runs } = fakeIO({ probes: { brew: true }, answers: ["", "", ""], paths: { pingfusi: "/Users/x/.npm/_npx/abc123/node_modules/.bin/pingfusi" } });
     let browserChecks = 0;
     const installsCleanly = () => ++browserChecks === 1 ? motionMissing() : motionReady();
-    const r = await setup(io, { home, sourceCheckout: false, resolveToken: () => null, dittoApiKey: false, probeMotionBrowser: installsCleanly });
+    const r = await setup(io, { home, sourceCheckout: false, resolveToken: () => null, dittoApiKey: false, probeMotionBrowser: installsCleanly, resolveGlobalMotionPackageDir: resolveMotionPackage });
     ok(r.ok, "fresh-machine run completes");
     ok(runs.includes("npm i -g pingfusi"), "npx's ephemeral bin doesn't count as installed — global install prompt fires and runs on consent");
     ok(!runs.includes("brew install cloudflared"), "cloudflared is NOT installed by setup (the default flow is tunnel-free)");
@@ -75,8 +80,10 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
     ok(logs.some((l) => /Clone https:\/\/example\.com pixel-perfect/.test(l))
       && logs.some((l) => /Fix it with pingfusi/.test(l))
       && logs.some((l) => /Beautify this page\. Use pingfusi/.test(l))
-      && logs.some((l) => /Review this video with pingfusi/.test(l)),
-      "summary teaches all four agent sentences (clone + fix + beautify + video)");
+      && logs.some((l) => /Review this video with pingfusi/.test(l))
+      && logs.some((l) => /Which headline is clearer\? Ask a human/.test(l))
+      && logs.some((l) => /Review this build with pingfusi/.test(l)),
+      "summary teaches universal routing plus all four specialized agent prompts");
   }
 
   // spawnSync can fail without a numeric status; never report that as installed.
@@ -86,14 +93,14 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
       fake.runs.push([cmd, ...args].join(" "));
       return { status: null, error: new Error("spawn failed") };
     };
-    const r = await setup(fake.io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionMissing });
+    const r = await setup(fake.io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionMissing, resolveGlobalMotionPackageDir: resolveMotionPackage });
     ok(!r.ok && r.steps.includes("motion-browser-failed") && !fake.logs.some((l) => /installed motion browser runtime/.test(l)), "null-status/error browser installer cannot become a false success");
   }
 
   // A successful download is still incomplete when the real recording probe fails.
   {
     const fake = fakeIO({ probes: { cloudflared: true }, answers: [""], paths: { pingfusi: "/usr/local/bin/pingfusi" } });
-    const r = await setup(fake.io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionMissing });
+    const r = await setup(fake.io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionMissing, resolveGlobalMotionPackageDir: resolveMotionPackage });
     ok(!r.ok && fake.logs.some((l) => /downloaded, but motion recording is not usable/i.test(l)), "exit-0 download is re-probed before setup claims readiness");
   }
 
@@ -170,6 +177,7 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
       resolveToken: () => "tok",
       dittoApiKey: false,
       probeMotionBrowser: motionMissing,
+      resolveGlobalMotionPackageDir: resolveMotionPackage,
     });
     ok(!r.ok && r.steps.includes("motion-browser-failed"), "a failed accepted motion-browser install makes setup exit nonzero");
     ok(fake.logs.some((l) => /Setup incomplete/.test(l)) && !fake.logs.some((l) => /Done\. Open your AI agent/.test(l)), "failed required setup never prints the success handoff");

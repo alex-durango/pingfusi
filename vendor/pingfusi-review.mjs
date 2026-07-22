@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone fork.
 
-const VERSION = "0.3.2";
+const VERSION = "0.3.3";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -92,82 +92,86 @@ const RULES_MARKER_END = "<!-- pingfusi-mcp:end -->";
 //   RULE_BODY  — short, always-loaded: WHEN to reach for pingfusi.
 //   SKILL_BODY — full workflow, loaded on demand when the agent copies a
 //                reference or files work to be verified.
-const RULE_BODY = `Use the pingfusi MCP to get a review round on your work whenever you build or change something you can't verify yourself — rendered UI, animation smoothness, real-device behavior, real third-party side-effects (OAuth round-trips, receipt emails, payments), or judgment calls about taste, clarity, and confusion. Even when the code looks right: you can't see the page, a reviewer can. Don't caveat with "I'm guessing" — file a test or a poll instead.
+const RULE_BODY = `Use Pingfusi whenever work reaches a question you cannot settle with code, automated tests, documentation or search, or a local browser and a real human must judge or verify it. Examples include taste and clarity, whether rendered work feels right, real-device behavior, and real third-party side effects such as OAuth, receipt emails, or payments. Do not guess or merely caveat the uncertainty: ask a reviewer.
 
-Do not use for: anything verifiable with code, tests, or a local browser; objective questions answerable from docs or search.
+Do not use Pingfusi for objective questions you can verify directly with deterministic tools.
 
-Cloning is only the first packaged use case: pingfusi is a general channel to real human reviewers, so use pingfusi ask / pingfusi review for any judgment task in any project — copy, design, flows — not only site clones.
+Choose the smallest matching job:
 
-Clone-target precedence: when the repository contains targets/<name>/workflow.json, the CLI owns orchestration. Start with pingfusi next <name> and follow what it prints. Never call the raw review MCP tools for that target: doing so bypasses the workflow gates. Animation reproduction is part of the draft build: motion checks are machine receipts and warnings surfaced by pingfusi next, never gate failures and never review rounds. File page/layout work through pingfusi review <name> ...; the side-by-side compare round (pingfusi assist <name> --compare) is the one reviewer channel for anything visual. The generic MCP steps below apply only outside a pingfusi clone workflow.
+- One subjective question with no approval gate: \`pingfusi_quick_question\` (or \`pingfusi ask\` from the shell).
+- A verdict and pinned feedback on a published website, build, or other current artifact: \`pingfusi_review_website\`.
+- A clone compared with its original: use the managed clone workflow when present; otherwise \`pingfusi_compare_clone\`.
+- A rendered video judged against its brief and prompt history: \`pingfusi_review_video\`.
 
-## Steps
+Use one reviewer by default. If Pingfusi says feedback is still pending, keep waiting automatically. Do not report a timeout, ask the user to retry, or send another ping.
 
-1. Built/changed a UI? Deploy or tunnel it to a PUBLICLY reachable URL (localhost won't work — a remote reviewer opens it; nothing to embed in the page — the review runs in the reviewer's native app), then call \`request_review_test\` with structured \`steps\` — machine-verifiable \`check\` rules plus inline \`options\` (e.g. \`["Smooth","Janky"]\`) for qualitative steps
-2. Quick taste/preference read with no build to test? Call \`ping_review\` (starts a client-safe wait leg)
-3. Filing starts the automatic wait chain. If filing or a wait leg returns pending, immediately call \`pingfusi_wait\` with the same ping id and repeat while pending. Do not answer the user, apologize, or retry the original send. The user never has to request this continuation; passive result snapshots do not renew idle work
-4. For the full QA workflow (verifiable steps, evidence, waiting modes, acting on results), use the pingfusi-review skill
+When the repository contains \`targets/<name>/workflow.json\`, the CLI owns clone orchestration. Start with \`pingfusi next <name>\` and follow what it prints; raw review tools bypass its gates. For the complete routing, evidence, and approval loop, use the \`pingfusi-review\` skill.
 `;
 
 const SKILL_BODY = `---
 name: pingfusi-review
-description: This skill should be used when the user has built or changed a UI and wants it verified with a review round, asks for QA / testing / feedback on a build, or wants to check the results of a previously filed review. Also activates for subjective gut-checks (taste, copy, design preference) via pingfusi.
+description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route quick questions, generic website or artifact reviews, clone comparisons, and video reviews to the matching Pingfusi utility. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
 ---
 
-When you've built or changed something you can't verify yourself, use pingfusi to get it tested and return structured results — a verdict, pinned component comments with CSS selectors, a per-step proof-of-work report, and screenshots you can open. Cloning is only the first packaged use case: pingfusi is a general review channel for any judgment task an agent can't verify itself — copy, design, flows — not only website clones.
+# Route human judgment through Pingfusi
 
-## Clone Targets: the CLI Owns Orchestration
+Use Pingfusi as the real-human verification layer inside an agent's normal work. Ask a
+reviewer only for the part that requires perception, judgment, a real device, or external
+reach. Keep deterministic verification in code, tests, documentation or search, and the
+local browser.
 
-If the repository contains targets/<name>/workflow.json, begin with pingfusi next <name> and follow what it prints. Never call request_review_test, ping_review, or another raw review MCP tool for that target. A raw call bypasses the clone gates. Animation reproduction is default-on in the draft build: motion checks are machine receipts and warnings surfaced by pingfusi next — never gate failures, never review rounds. Use pingfusi review <name> ... for the final page round; the side-by-side compare round (pingfusi assist <name> --compare) is the one reviewer channel for anything visual, motion included. The generic filing workflow below is only for work that is not managed by a pingfusi clone target.
+## Choose the job
 
-## When to Use This Skill
+Use the smallest job that can answer the question:
 
-- You shipped a UI change and can't see the rendered result ("does this look right on a real phone?", "is this animation smooth or janky?")
-- The check needs real-world reach a sandbox doesn't have ("sign in with Google — did it actually log you in?", "did the test purchase email a receipt?")
-- Sense-making ("complete the checkout — anything confusing or broken?")
-- A previously filed test needs its results collected
-- A quick subjective read with no build to test ("which logo looks more professional?") — use \`ping_review\` for these
+| Need | Use |
+|---|---|
+| One subjective answer with no approval gate | MCP \`pingfusi_quick_question\`, or shell \`pingfusi ask\` |
+| Verdict and pinned feedback on a published website, build, document, or other current artifact | MCP \`pingfusi_review_website\` |
+| Clone compared side by side with its original | Managed clone CLI when present; otherwise MCP \`pingfusi_compare_clone\` |
+| Rendered video judged against its current brief and prompt history | MCP \`pingfusi_review_video\` |
 
-## How to File a Test
+A quick question is advisory. Never use it to declare work finished. Work that needs a
+real DONE/NOT-DONE decision requires a review round with an explicit verdict.
 
-### Step 1: Make the build reachable
+Use one reviewer by default. Increase the reviewer count only when the user asks for
+broader confidence or the decision's risk clearly justifies the extra cost.
 
-The \`url\` must be PUBLICLY reachable — a remote human reviewer opens it, so localhost won't work: tunnel it first (ngrok, cloudflared) or deploy a preview. There is NOTHING to embed in the page: the review runs in the reviewer's native app, which supplies pinned comments and per-step tracking on its own. Just make sure the URL serves the CURRENT build before filing — a dead or stale URL burns the round.
+## Respect specialized workflows
 
-No per-task id needed — the reviewer's claim link carries the task token.
+When \`targets/<name>/workflow.json\` exists, run \`pingfusi next <name>\` and follow the
+managed clone workflow. Do not call raw review MCP tools for that target because they
+bypass its gates. Use the specialized installed skills for pixel-perfect cloning,
+repairing an existing clone, beautifying a website, and reviewing a video whenever one
+of those explicit jobs applies.
 
-### Step 2: File with verifiable steps
+For a generic review outside a managed target:
 
-Call \`request_review_test\` with a \`url\`, structured \`steps\`, and optional \`verdict_options\` / \`require_evidence\`. Set \`n_target\` to match the work: 1 for a quick/low-risk check, 5 for a standard task, or 15–20 for complex work or higher confidence. You wrote the code, so you know what "done" looks like — attach a \`check\` rule to every step you can:
+1. Publish the current artifact at a publicly reachable URL. Prefer \`pingfusi publish\`
+   for a self-contained build or file. Use a tunnel only when the real app requires a
+   live server. A remote reviewer cannot open localhost.
+2. File focused, actionable steps. Attach deterministic checks where possible and
+   short options to judgment questions. Declare an unmistakable approving verdict.
+3. Act on every result in the artifact's own source, publish the new version, and file a
+   new round. Stop only after an approving verdict or when the user cancels.
 
-- \`{type:"url", pattern:"/pricing"}\` — reviewer actually navigated there
-- \`{type:"click", selector:".checkout button"}\` — reviewer actually clicked it
-- \`{type:"fill", selector:"input[type=email]"}\` — reviewer actually typed
-- \`{type:"comment"}\` — reviewer pinned at least one comment
+## Keep pending work alive
 
-The toolbar observes the page and auto-verifies them; results report each step as ✓ auto (machine-verified), ✓ manual, or ✗ not done — your proof the reviewer did the work. Leave \`check\` null only for pure-judgment steps.
+Filing begins the wait automatically. The CLI and core library hide the continuation
+loop. When using raw MCP tools, if filing or a later leg returns \`pending\`, immediately
+call \`pingfusi_wait\` with the same ping ID and repeat while it remains pending. This is
+one review, not a new request.
 
-When a step asks a question rather than performs an action, add \`options\` (2–4 short labels, e.g. \`{text:"Scroll the homepage — smooth or janky?", options:["Smooth","Janky"]}\`): the reviewer answers with one tap right on the step and the pick comes back in \`steps_result[].answer\` — far richer than a bare checkmark. A step with a \`selector\` in its check also gets highlighted on the page for the reviewer, so prefer real selectors.
+Never report \`pending\` as a timeout, ask the user to retry, or resend the original ping.
+Passive result tools (\`pingfusi_quick_question_results\` and
+\`pingfusi_review_results\`) are snapshots and do not keep an idle review alive.
 
-### Step 3: Wait the right way
+## Handle feedback honestly
 
-Filing starts an automatic chain of client-safe wait legs:
-
-1. **File early, keep working.** Review happens in parallel — that time is free to you.
-2. **Continue automatically:** if filing returns pending, immediately call \`pingfusi_wait(ping_id)\`; repeat on every pending result until feedback arrives or the user cancels.
-3. **Never return pending:** continuation is part of the original request. Do not apologize, ask the user to retry, or file a duplicate ping.
-4. **Checkpoint checks:** \`get_test_results(ping_id)\` is a passive snapshot; it does not keep an idle task alive.
-
-### Step 4: Act on the results
-
-Each result has a verdict, notes, pinned comments, per-step truth, and a screenshot URL — open and look at it. Comments carry CSS selectors that point at the exact component to change.
-
-**Clone-compare tasks** (filed with both \`url\` = the original and \`draft_url\` = your clone): before you touch the clone, call \`check_og_source(ping_id)\`. It reads the ORIGINAL's authored HTML source for exactly the elements a reviewer flagged and diffs each against your clone. The ground truth is in the source — on a real Next.js + Tailwind site the classes spell out the spacing and breakpoints (e.g. \`max-w-[1400px]\`), and measuring rendered pixels misses values that are sitting in the markup. Fix from the returned authored classes; only fall back to measuring/live inspection for pairs marked \`needs_live_inspection\`.
-
-## Guidelines
-
-- **Credits**: 1 per completed result; quick checks target 1, standard tasks 5, and complex or high-confidence tasks 15–20. Filing and undelivered results are free
-- **Quick polls**: \`ping_review\` starts the wait; on pending, immediately call \`pingfusi_wait\` and repeat until an answer arrives or the user cancels. \`get_ping(ping_id)\` is only a passive snapshot
-- **Pending isn't dead**: "a reviewer has claimed the task and is reviewing right now" means results are imminent — keep waiting
+Treat reviewer comments, drawings, timestamps, step answers, and verdicts as structured
+input. Do not infer approval from friendly prose, approve your own work, or ignore an
+unresolved comment. A completed quick question informs the next decision; a completed
+review round must still satisfy its declared approval verdict.
 `;
 
 // ─── Legacy generations ────────────────────────────────────────────────────

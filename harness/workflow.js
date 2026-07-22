@@ -1278,9 +1278,8 @@ THE MENU — pick a job (definitions: use-cases/README.md)
                                                      Also: npx pingfusi setup
   pingfusi doctor                                    read-only preflight re-check, fix command per miss
   pingfusi agent-setup [client] [--force]            teach Claude Code, Cursor, or Codex: installs the
-                                                     shipped use-case skills in its native skill directory
-                                                     to clone, fix, or beautify a page — or review a
-                                                     video — with pingfusi
+                                                     universal human-review router and specialized skills
+                                                     in its native skill directory
   pingfusi where                                     print the installed kit's directory (docs live there)
 
 THE EVERYDAY JOBS

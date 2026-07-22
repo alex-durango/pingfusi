@@ -20,6 +20,10 @@ generic publish → verdict → iterate loop. The specialized jobs are that same
 a reviewer surface built for their artifact — side-by-side compare for clones, the
 single-page surface for beautify, the timestamped player for video.
 
+The universal [`pingfusi-review`](../skill/pingfusi-review/SKILL.md) skill teaches coding
+agents when human judgment is actually needed and routes these everyday jobs by their
+current tool names. Specialized skills take over only after a specific job is chosen.
+
 All jobs run on one small core API — ask a question, publish a draft, file a round,
 wait for the verdict ([docs/CORE.md](../docs/CORE.md) has the contracts). You only
 need it to BUILD a job, never to pick one.

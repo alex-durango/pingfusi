@@ -31,6 +31,7 @@ if (!fs.existsSync(BUILD)) {
   ok(fs.existsSync(path.join(KIT, "packages", "motion", "bin", "motion-kit.js")), "public checkout includes the integrated motion entrypoint");
   ok(fs.existsSync(path.join(KIT, "skill", "pixel-perfect-clone", "SKILL.md")), "public checkout includes the clone-agent skill");
   ok(fs.existsSync(path.join(KIT, "skill", "beautify-with-pingfusi", "SKILL.md")), "public checkout includes the beautify-agent skill");
+  ok(fs.existsSync(path.join(KIT, "skill", "pingfusi-review", "SKILL.md")), "public checkout includes the universal human-review router skill");
   ok(fs.existsSync(path.join(KIT, "use-cases", "beautify", "README.md")), "public checkout includes the beautify catalog entry");
   process.exit(failed ? 1 : 0);
 }
@@ -86,6 +87,7 @@ for (const required of [
   "skill/pixel-perfect-clone/SKILL.md",
   "skill/beautify-with-pingfusi/SKILL.md",
   "skill/fix-with-pingfusi/SKILL.md",
+  "skill/pingfusi-review/SKILL.md",
   "skill/review-video-with-pingfusi/SKILL.md",
   "use-cases/beautify/README.md",
   "use-cases/video-review/README.md",
@@ -133,10 +135,11 @@ const setup = run(entry, ["agent-setup", "codex", "--force"], blank, home);
 const installedSkill = path.join(home, ".codex", "skills", "pixel-perfect-clone", "SKILL.md");
 const installedBeautify = path.join(home, ".codex", "skills", "beautify-with-pingfusi", "SKILL.md");
 const installedFix = path.join(home, ".codex", "skills", "fix-with-pingfusi", "SKILL.md");
+const installedGeneral = path.join(home, ".codex", "skills", "pingfusi-review", "SKILL.md");
 const installedVideo = path.join(home, ".codex", "skills", "review-video-with-pingfusi", "SKILL.md");
 ok(setup.status === 0 && fs.existsSync(installedSkill) && fs.existsSync(installedBeautify)
-  && fs.existsSync(installedFix) && fs.existsSync(installedVideo),
-  "packed setup installs clone, fix, beautify, and video skills into an isolated coding-agent home");
+  && fs.existsSync(installedFix) && fs.existsSync(installedGeneral) && fs.existsSync(installedVideo),
+  "packed setup installs the universal router plus clone, fix, beautify, and video skills into an isolated coding-agent home");
 const skillText = fs.existsSync(installedSkill) ? fs.readFileSync(installedSkill, "utf8") : "";
 ok(/pingfusi next/.test(skillText) && /motion pass/.test(skillText) && !/motion review\b/.test(skillText), "installed skill teaches the default-on motion pass and machine-check routing, with review-round motion machinery gone");
 const beautifyText = fs.existsSync(installedBeautify) ? fs.readFileSync(installedBeautify, "utf8") : "";
@@ -149,6 +152,15 @@ ok(/pingfusi publish/.test(fixText) && /--target/.test(fixText) && /genuinely re
 const videoText = fs.existsSync(installedVideo) ? fs.readFileSync(installedVideo, "utf8") : "";
 ok(/pingfusi publish/.test(videoText) && /asset_url/.test(videoText) && /Content-Range/.test(videoText),
   "packed video skill publishes a seekable hosted MP4 and uses its direct asset URL");
+const generalText = fs.existsSync(installedGeneral) ? fs.readFileSync(installedGeneral, "utf8") : "";
+ok(generalText.includes("Trigger even when the user does not mention Pingfusi")
+  && generalText.includes("pingfusi_quick_question") && generalText.includes("pingfusi_review_website")
+  && generalText.includes("pingfusi_compare_clone") && generalText.includes("pingfusi_review_video")
+  && generalText.includes("Use one reviewer by default"),
+  "packed universal skill proactively routes human-only questions to the current job-named tools");
+ok(generalText.includes("call `pingfusi_wait` with the same ping ID")
+  && generalText.includes("Never report `pending` as a timeout"),
+  "packed universal skill keeps raw MCP waits automatic and invisible to the user");
 ok([skillText, beautifyText, fixText, videoText].every((text) =>
   /automatically\s+chains client-safe wait/i.test(text)
   && /raw MCP leg returns pending[\s\S]{0,100}`pingfusi_wait`/i.test(text)

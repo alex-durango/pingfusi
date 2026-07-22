@@ -33,3 +33,7 @@ keeps it fast.
 API: `core.ping` / `core.pingResult` ([docs/CORE.md](../../docs/CORE.md)). `core.ping`
 automatically chains the wait; `core.pingResult` is only a passive snapshot. Answers cap at
 1 result; each delivered answer costs 1 credit.
+
+**Its routing skill:** [`pingfusi-review`](../../skill/pingfusi-review/SKILL.md), which
+teaches the agent that this job is advisory and selects it proactively for one human-only
+judgment call even when the user did not name Pingfusi.
