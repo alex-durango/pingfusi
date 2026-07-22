@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone fork.
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -104,7 +104,7 @@ Clone-target precedence: when the repository contains targets/<name>/workflow.js
 
 1. Built/changed a UI? Deploy or tunnel it to a PUBLICLY reachable URL (localhost won't work — a remote reviewer opens it; nothing to embed in the page — the review runs in the reviewer's native app), then call \`request_review_test\` with structured \`steps\` — machine-verifiable \`check\` rules plus inline \`options\` (e.g. \`["Smooth","Janky"]\`) for qualitative steps
 2. Quick taste/preference read with no build to test? Call \`ping_review\` (blocks ~50s)
-3. File tests early and keep working while the review happens — collect results with \`get_test_results\` at checkpoints, \`wait_for_results\` when blocked, or \`npx pingfusi wait <ping_id>\` as a background task (foreground in one-shot runs)
+3. Filing IS the wait: the send call owns the renewable wait through feedback or its transport ceiling. Do not issue a separate \`wait_for_results\` / \`pingfusi wait\` afterward; passive result snapshots do not renew idle work
 4. For the full QA workflow (verifiable steps, evidence, waiting modes, acting on results), use the pingfusi-review skill
 `;
 
@@ -150,13 +150,12 @@ When a step asks a question rather than performs an action, add \`options\` (2�
 
 ### Step 3: Wait the right way
 
-The call does NOT block (review takes minutes) — it returns \`status='pending'\` immediately. In order of preference:
+The filing call IS the wait. Keep that single operation alive; it owns the renewable wait and returns on feedback or when its transport budget ends:
 
 1. **File early, keep working.** Review happens in parallel — that time is free to you.
-2. **Interactive session with background shell tasks:** launch \`npx pingfusi wait <ping_id>\` in the background — it exits the moment results land, waking you with the results.
-3. **One-shot run (subagent / final answer due this run):** do NOT end your run while results are pending — nothing can wake you afterwards, and a backgrounded waiter dies with you. Run \`npx pingfusi wait <ping_id>\` in the FOREGROUND, or call \`wait_for_results(ping_id)\` in a loop until complete.
-4. **Checkpoint checks:** \`get_test_results(ping_id)\` at natural pauses.
-5. **Genuinely blocked:** \`wait_for_results(ping_id)\` blocks server-side (~45s per call, free) and returns early on news. Never hand-roll sleep loops.
+2. **Do not split send from wait:** no follow-up \`wait_for_results\` or shell waiter is required after a successful filing call.
+3. **Transport ceiling:** if the send returns pending, its active waiting window ended; abandoned work now expires naturally. Use the explicit waiter only to deliberately resume after an interruption.
+4. **Checkpoint checks:** \`get_test_results(ping_id)\` is a passive snapshot; it does not keep an idle task alive.
 
 ### Step 4: Act on the results
 
@@ -167,7 +166,7 @@ Each result has a verdict, notes, pinned comments, per-step truth, and a screens
 ## Guidelines
 
 - **Credits**: 1 per completed result; quick checks target 1, standard tasks 5, and complex or high-confidence tasks 15–20. Filing and undelivered results are free
-- **Quick polls**: \`ping_review\` for taste questions blocks ~50s; poll \`get_ping(ping_id)\` for late arrivals
+- **Quick polls**: \`ping_review\` is both send and wait; no follow-up waiter is required. \`get_ping(ping_id)\` is only a passive snapshot
 - **Pending isn't dead**: "a reviewer has claimed the task and is reviewing right now" means results are imminent — keep waiting
 `;
 
@@ -1019,9 +1018,8 @@ Usage:
   pingfusi setup [--client claude-code|claude-desktop|cursor|codex]
   pingfusi remove [--client claude-code|claude-desktop|cursor|codex]
   pingfusi wait <ping_id> [--timeout <seconds>]
-                       # block until the pingfusi test has results (exit 0 = news,
-                       # 2 = timed out). Run it in the background after filing
-                       # a test so your agent gets woken when results land.
+                       # manually resume a pending ping after an interruption
+                       # (normal send calls already own their wait)
   pingfusi whoami    # show which account this machine's token belongs to
   pingfusi rules     # refresh the installed agent rules to this version
   pingfusi version
@@ -1039,13 +1037,12 @@ Aliases: --claude (= --claude-desktop), --code (= --claude-code).
 `);
 }
 
-// ─── `pingfusi wait` — background-friendly result waiting ────────────────
+// ─── `pingfusi wait` — manual pending-ping resume ────────────────────────
 //
-// Turn-based coding agents can't poll on a timer. But harnesses with
-// background shell tasks (Claude Code etc.) re-invoke the agent when a
-// background command EXITS — so this command is the bridge to true async:
-// launch it in the background right after filing a test; it polls the MCP
-// endpoint client-side and exits the moment there's news.
+// Normal send calls already own their waiting loop. This command is the
+// deliberate recovery path after a caller-imposed timeout or interruption;
+// it polls the MCP endpoint and exits on news. The server-side wait call
+// renews the task lease, while an abandoned ping expires naturally.
 //
 // Exit codes: 0 = news (new result, or task complete/expired) — output has
 // the full results text; 2 = timed out still pending; 1 = error.
@@ -1185,8 +1182,17 @@ async function waitForResultsCli(rest) {
   }
 
   const deadline = Date.now() + timeoutSec * 1000;
-  let baseline = null;
+  const baseline = 0;
   for (;;) {
+    const remainingSeconds = Math.ceil((deadline - Date.now()) / 1000);
+    if (remainingSeconds <= 0) {
+      console.log(
+        `Timed out after ${timeoutSec}s — still pending. ` +
+          `Run \`pingfusi wait ${pingId}\` again to keep the task active.`
+      );
+      process.exit(2);
+    }
+    const maxWaitSeconds = Math.max(10, Math.min(240, remainingSeconds));
     const res = await fetch(`${APP_URL}/api/mcp`, {
       method: "POST",
       headers: {
@@ -1198,7 +1204,10 @@ async function waitForResultsCli(rest) {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "cpyany_test_results", arguments: { ping_id: pingId } },
+        params: {
+          name: "cpyany_wait",
+          arguments: { ping_id: pingId, max_wait_seconds: maxWaitSeconds },
+        },
       }),
     });
     const raw = await res.text();
@@ -1210,11 +1219,9 @@ async function waitForResultsCli(rest) {
     const status = sc.status ?? "pending";
     const received = sc.n_received ?? 0;
 
-    if (baseline === null) baseline = received;
-
     if (status === "not_found") {
       throw new Error(
-        "Ping not found for this account. Results are asker-scoped — `wait` only works on tests filed with the same pingfusi account."
+        "Ping not found for this account. Results are asker-scoped — `wait` only works on pings filed with the same pingfusi account."
       );
     }
     if (status !== "pending" || received > baseline) {
@@ -1226,14 +1233,13 @@ async function waitForResultsCli(rest) {
     if (Date.now() >= deadline) {
       console.log(
         `Timed out after ${timeoutSec}s — still pending (${received}/${sc.n_target ?? "?"} results). ` +
-          `Run \`pingfusi wait ${pingId}\` again or check later with cpyany_test_results.`
+          `Run \`pingfusi wait ${pingId}\` again to keep the task active.`
       );
       process.exit(2);
     }
     process.stderr.write(
       `… pending ${received}/${sc.n_target ?? "?"} (${Math.round((deadline - Date.now()) / 1000)}s left)\n`
     );
-    await new Promise((r) => setTimeout(r, 20000));
   }
 }
 

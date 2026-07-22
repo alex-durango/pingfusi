@@ -2,8 +2,9 @@
 // ping, review, draft, plus the wire underneath them).
 // Offline + socket-free via the same file:// transport pattern as
 // harness/review-qa-selftest.js: PPK_PINGHUMANS_URL=file://MOCK serves canned
-// request_review.json / get_test_results-<ping>.json / quick_poll.json /
-// get_ping-<ping>.json responses from disk. Asserts the contracts the extraction must
+// request_review.json / get_test_results-<ping>.json /
+// wait_for_results-<ping>.json / quick_poll.json / get_ping-<ping>.json responses
+// from disk. Asserts the contracts the extraction must
 // not bend:
 //   - the wire remap table (internal verb names → the service's cpyany_* namespace),
 //     the file:// fixture-filename contract, and the mirrored service caps
@@ -47,6 +48,7 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
   ok(wire.BASE === "file://" + MOCK, "BASE honours PPK_PINGHUMANS_URL (file:// transport)");
   ok(wire.LIVE_TOOL_NAME.request_review === "cpyany_test"
     && wire.LIVE_TOOL_NAME.get_test_results === "cpyany_test_results"
+    && wire.LIVE_TOOL_NAME.wait_for_results === "cpyany_wait"
     && wire.LIVE_TOOL_NAME.quick_poll === "cpyany_poll"
     && wire.LIVE_TOOL_NAME.get_ping === "cpyany_poll_results",
     "the live wire remap maps every internal verb into the service's own namespace");
@@ -54,15 +56,25 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
     "service caps mirrored kit-side: 20 steps / 300-char step text / 40-char options");
   ok(wire.DEFAULT_REVIEW_RESULTS === 1 && wire.MAX_REVIEW_RESULTS === 20,
     "review result depth: default 1, service range up to 20");
+  ok(wire.DEFAULT_AGENT_LEASE_SECONDS === 60,
+    "agent-filed work mirrors the service's one-minute renewable idle lease");
+  ok(wire.DEFAULT_SEND_WAIT_SECONDS === 0,
+    "a live send command has no arbitrary overall wait cutoff");
 
   // ── wire: the file:// fixture-filename contract rpc callers rely on ─────────
   const PING = "00000000-0000-4000-8000-00000000c0de";
   writeMock("request_review.json", { ping_id: PING, status: "pending" });
+  writeMock(`wait_for_results-${PING}.json`, { ping_id: PING, status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Ready" }] });
   const filedRaw = await wire.rpc("request_review", { url: "https://example.com/" });
-  ok(filedRaw.ping_id === PING, "rpc(request_review) reads request_review.json from the file:// base");
+  ok(filedRaw.ping_id === PING && filedRaw.status === "complete" && filedRaw.n_received === 1,
+    "rpc(request_review) turns a pending send into the active wait automatically");
   writeMock(`get_test_results-${PING}.json`, { status: "pending", n_received: 0, n_target: 1, responses: [] });
   const pendingRaw = await wire.rpc("get_test_results", { ping_id: PING });
   ok(pendingRaw.status === "pending", "rpc(get_test_results) reads get_test_results-<ping_id>.json");
+  writeMock(`wait_for_results-${PING}.json`, { ping_id: PING, status: "pending", n_received: 0, n_target: 1, responses: [], lease_renewed: true });
+  const waitingRaw = await wire.rpc("wait_for_results", { ping_id: PING, max_wait_seconds: 45 });
+  ok(waitingRaw.status === "pending" && waitingRaw.lease_renewed === true,
+    "rpc(wait_for_results) reads its fixture and maps live calls to the lease-renewing cpyany_wait tool");
 
   // ── review.file: every documented service cap is local, before transport ───
   const capStateFile = path.join(WORK, "review-cap-boundary.json");
@@ -156,7 +168,8 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
     require_evidence: "screenshot",
   };
   const filed = await core.review.file(stateFile, spec);
-  ok(filed.ping_id === PING && filed.round === 1, "review.file files via the wire and reports round 1 with the returned ping_id");
+  ok(filed.ping_id === PING && filed.round === 1 && filed.result.status === "pending",
+    "review.file files, owns the wait, and returns round 1 with the latest result envelope");
   const hq1 = JSON.parse(fs.readFileSync(stateFile, "utf8"));
   ok(JSON.stringify(Object.keys(hq1.rounds[0])) === JSON.stringify([
     "ping_id", "draft_url", "region", "n_target", "approve_verdicts", "verdict_options",
@@ -166,10 +179,10 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
     && hq1.rounds[0].region === spec.title && hq1.rounds[0].last === null,
     "…and its fields carry the spec's title/target/approve set with last/checked_at unset");
 
-  // ── review.wait: the raw result envelope, no state write ────────────────────
+  // ── review.wait: active lease-renewing wait, no state write ────────────────
   const waited = await core.review.wait(PING);
   ok(waited.status === "pending" && !JSON.parse(fs.readFileSync(stateFile, "utf8")).rounds[0].checked_at,
-    "review.wait fetches the envelope without touching the state file");
+    "review.wait uses the active service wait without touching the state file");
 
   // ── review.verify: pending → not ok; the state file records the check ───────
   const pend = await core.review.verify(stateFile);
@@ -357,9 +370,11 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
 
   // ── ping: the one-question poll verb ────────────────────────────────────────
   const POLL = "00000000-0000-4000-8000-00000000c0ff";
-  writeMock("quick_poll.json", { ping_id: POLL, status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Yes", free_text: "tiles look right now" }] });
+  writeMock("quick_poll.json", { ping_id: POLL, status: "pending", n_received: 0, n_target: 1, responses: [] });
+  writeMock(`wait_for_results-${POLL}.json`, { ping_id: POLL, status: "complete", n_received: 1, n_target: 1, responses: [{ choice: "Yes", free_text: "tiles look right now" }] });
   const answered = await core.ping("do the 3 tiles look right now?", { choices: ["Yes", "No"] });
-  ok(answered.ping_id === POLL && answered.responses[0].choice === "Yes", "ping files a 1-result poll and returns the answer envelope");
+  ok(answered.ping_id === POLL && answered.responses[0].choice === "Yes",
+    "ping turns its send into the renewable wait and returns the answer envelope");
   writeMock(`get_ping-${POLL}.json`, { status: "complete", n_received: 1, responses: [{ choice: null, free_text: "late answer" }] });
   const late = await core.pingResult(POLL);
   ok(late.responses[0].free_text === "late answer", "pingResult re-fetches a poll's answers for free (get_ping-<ping_id>.json)");

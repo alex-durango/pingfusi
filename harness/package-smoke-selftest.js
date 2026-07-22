@@ -149,6 +149,11 @@ ok(/pingfusi publish/.test(fixText) && /--target/.test(fixText) && /genuinely re
 const videoText = fs.existsSync(installedVideo) ? fs.readFileSync(installedVideo, "utf8") : "";
 ok(/pingfusi publish/.test(videoText) && /asset_url/.test(videoText) && /Content-Range/.test(videoText),
   "packed video skill publishes a seekable hosted MP4 and uses its direct asset URL");
+ok([skillText, beautifyText, fixText, videoText].every((text) =>
+  /filing command owns the\s+wait/i.test(text)
+  && /do not (?:launch|call)[\s\S]{0,80}`pingfusi wait`/i.test(text)
+  && /passive\s+(?:result\/verify|verify\/result)\s+reads\s+do\s+not/i.test(text)),
+  "every installed review skill teaches that filing owns the wait with no second command");
 
 const target = path.join(blank, "targets", "circle");
 writeJson(path.join(target, "workflow.json"), {

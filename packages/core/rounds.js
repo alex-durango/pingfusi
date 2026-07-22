@@ -38,7 +38,7 @@ function pushRound(stateFile, ping_id, spec, approve) {
 function pushDiagnostic(stateFile, ping_id, spec, region, assistMeta) {
   const hq = loadRounds(stateFile);
   hq.diagnostics = hq.diagnostics || [];
-  hq.diagnostics.push({ ping_id, kind: "diagnostic", region, draft_url: (spec && spec.draft_url) || null, n_target: (spec && spec.n_target) || null, filed_at: new Date().toISOString(), deadline_seconds: (spec && spec.deadline_seconds) || 86400, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) });
+  hq.diagnostics.push({ ping_id, kind: "diagnostic", region, draft_url: (spec && spec.draft_url) || null, n_target: (spec && spec.n_target) || null, filed_at: new Date().toISOString(), deadline_seconds: (spec && spec.deadline_seconds) || 60, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) });
   saveRounds(stateFile, hq);
   return hq.diagnostics.length;
 }

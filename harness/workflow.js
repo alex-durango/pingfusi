@@ -824,13 +824,13 @@ function cmdStatus(name, opts = {}) {
     console.log(`\n  next: ${nextRequired.key} — ${nextRequired.title}`);
     console.log(`  gate: ${g.ok ? "READY (gate passes) → advance it" : "blocked — " + g.reason}`);
     if (nextRequired.key === "review" && !g.ok) {
-      // A filed-and-pending round means WAIT (re-filing spends credits on duplicate results
-      // and re-enters the queue); no round at all means the file ritual hasn't happened — say which.
+      // A filed-and-pending round means the original send-owned wait hit its budget
+      // (re-filing spends credits on duplicate results); no round means filing has not happened.
       const pend = /pending[^(]*\(ping ([0-9a-f-]{36})\)/.exec(g.reason);
       if (pend) {
-        console.log(`  run:  pingfusi wait ${pend[1]}   (BACKGROUND task — round already filed; the verdict wakes you, do NOT refile)`);
+        console.log(`  run:  pingfusi wait ${pend[1]}   (manual resume only — round already filed; do NOT refile)`);
       } else {
-        console.log(`  run:  ${CMD} draft ${name} push   →   ${CMD} review ${name} file   →   pingfusi wait <ping_id> (background)`);
+        console.log(`  run:  ${CMD} draft ${name} push   →   ${CMD} review ${name} file   (filing owns the wait)`);
         console.log(`        (green machine gates are NOT done — a reviewer's approving verdict is the gate)`);
         if (blocked.length) console.log(`        file it NOW despite the blocked gate(s) — the round documents the gap to the reviewer automatically; a reviewer look at a partial clone beats no look.`);
       }
@@ -976,7 +976,7 @@ function cmdAdvance(name, phaseKey, opts) {
   if (rec.blocked) {
     console.log(`  ⚠ environment constraint receipted (${opts.blocked}) — NOT a verification; the done gate refuses blocked phases until each is re-advanced with a passing gate.`);
     console.log(`  → push to review with what you have — the round documents the gap to the reviewer automatically:`);
-    console.log(`    1. ${CMD} draft ${name} push       2. ${CMD} review ${name} file       3. pingfusi wait <ping_id> (background)`);
+    console.log(`    1. ${CMD} draft ${name} push       2. ${CMD} review ${name} file (filing owns the wait)`);
   } else if (rec.forced) console.log(`  ⚠ enforcement bypassed (${overrode.join(", ")}) — flagged in workflow.jsonl; the done gate refuses forced phases.`);
   const next = PHASES.find((p) => st.phases[p.key].status !== "pass");
   // The most dangerous moment in the pipeline is the LAST machine gate going green:
@@ -987,8 +987,7 @@ function cmdAdvance(name, phaseKey, opts) {
   else if (next.key === "review") {
     console.log(`  next: REVIEW — green machine gates are NOT done. The clone needs a reviewer's approving verdict:`);
     console.log(`    1. ${CMD} draft ${name} push       (hosted draft url for the round)`);
-    console.log(`    2. ${CMD} review ${name} file      (files the round — the reviewer gets a side-by-side)`);
-    console.log(`    3. pingfusi wait <ping_id>  as a BACKGROUND task — the verdict wakes you; fix + refile until approved.`);
+    console.log(`    2. ${CMD} review ${name} file      (sends the round and owns the wait; fix + refile until approved)`);
   } else console.log(`  next: ${CMD} advance ${name} ${next.key}`);
 }
 
@@ -1293,8 +1292,8 @@ THE EVERYDAY JOBS
   pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]
                                                      upload a self-contained website or video to Pingfusi
                                                      hosting; MP4 output includes a seekable video_url
-  pingfusi wait    <ping_id>                         block until a filed round resolves (wake-on-verdict) —
-                                                     arm it right after any review files
+  pingfusi wait    <ping_id>                         manually resume a pending ping after an interrupted
+                                                     or caller-timed-out send; normal filing owns the wait
   (REVIEW ANYTHING is the same loop against your own state file — core.review.file /
    verify over any published artifact; contracts in docs/CORE.md. The jobs below
    package that loop with their own reviewer surfaces.)

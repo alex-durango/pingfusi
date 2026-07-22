@@ -28,21 +28,29 @@ clone targets retain `pingfusi draft <name> push` because they also record workf
 
 ### `ping(question, { choices })` — one question, one reviewer
 
-Files a 1-result question (up to 1 credit). The server blocks up to ~300s while a
-reviewer answers, so the answer often comes back inside the call; `pingResult(ping_id)`
-re-fetches the answers later for free. **Advisory by doctrine:** a ping buys an answer,
-never an approval — it satisfies no gate anywhere.
+Files a 1-result question (up to 1 credit). The send operation stays open across
+renewable server-wait legs until feedback, expiry, or caller interruption, so the answer usually comes back
+inside the same call; `pingResult(ping_id)`
+re-fetches the answers later for free but is a passive snapshot. The normal send call
+already owns the full waiting lifecycle; no separate waiter is required.
+**Advisory by doctrine:** a ping buys an answer, never an approval —
+it satisfies no gate anywhere.
 
-### `review` — file → wait → verify, against a state file the caller owns
+### `review` — file (send + wait) → verify, against a state file the caller owns
 
-- `review.file(stateFile, spec)` files a full round (`spec` is request_review-shaped;
+- `review.file(stateFile, spec)` files a full round and owns the renewable wait until
+  feedback, expiry, or caller interruption
+  (`spec` is request_review-shaped;
   `approve_verdicts` and `review_contract` are local bookkeeping, stripped before the
   wire) and appends the round record to `stateFile`.
-- `review.wait(ping_id)` fetches the current result envelope; no state write.
+- `review.wait(ping_id)` manually resumes an already-pending ping after an interruption;
+  normal `review.file` callers do not need it. It renews the short idle lease and returns
+  the current result envelope; no state write.
 - `review.verify(stateFile)` re-fetches the LATEST round **fresh every time** (a cached
   approval is never trusted), persists the result envelope + receipts into `stateFile`,
   and returns a structured outcome (`{ ok, status, verdict, round, comments }`) — the
-  caller owns presentation and exit codes.
+  caller owns presentation and exit codes. It is a passive snapshot and does not renew
+  a pending round's lease.
 
 ### `draft` — push / status / delete a hosted public draft
 
@@ -95,14 +103,10 @@ any directory with only a review login. State lives per-ask in
 $ pingfusi ask "Which tagline reads better for a developer tool?" \
     --options "Draft first,Review everything" --context "two candidates for the launch page"
 ✓ ask filed — ping 3f2b… (1 result, advisory; recorded: ~/.pingfusi/asks/3f2b….json)
-  no answer arrived inside the call — collect (free): pingfusi ask result 3f2b…
-
-$ pingfusi ask result 3f2b…
-ask answered (1):
-  [Draft first] reads cleaner
+Ping complete: 1/1 responses received.
 ```
 
-An agent picking between taglines uses `ping` and nothing else — the same wire, caps,
-and record shape as a full clone review, with none of the pipeline. That is the
+An agent picking between taglines uses the send-and-wait `ping` operation —
+the same wire, caps, and record shape as a full clone review, with none of the pipeline. That is the
 extraction's acceptance test, and `harness/bin-dispatch-selftest.js` runs it end-to-end
 through the installed command against the `file://` mock transport.

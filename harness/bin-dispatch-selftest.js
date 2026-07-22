@@ -109,11 +109,14 @@ try {
   const ID = "00000000-0000-4000-8000-00000000a51d";
   const ID2 = "00000000-0000-4000-8000-00000000a52d";
   try {
-    // file: the server returned pending inside the call — print the id + the collect command
+    // file: the server and send-owned waiter both hit their fixture budgets —
+    // return pending without telling the agent to launch a second command.
     fs.writeFileSync(path.join(MOCK, "quick_poll.json"), JSON.stringify({ ping_id: ID, status: "pending", n_received: 0, n_target: 1, responses: [] }));
+    fs.writeFileSync(path.join(MOCK, `wait_for_results-${ID}.json`), JSON.stringify({ ping_id: ID, status: "pending", n_received: 0, n_target: 1, responses: [] }));
     let r = run(["ask", "Which tagline reads better?", "--options", "Draft first,Review everything", "--context", "two candidates for the launch page"]);
-    ok(r.status === 0 && r.stdout.includes(`ping ${ID}`) && r.stdout.includes(`pingfusi ask result ${ID}`),
-      "`pingfusi ask` files from an empty dir and prints the ping id + the collect command");
+    ok(r.status === 0 && r.stdout.includes(`ping ${ID}`) && /send-and-wait budget ended/.test(r.stdout)
+      && !r.stdout.includes(`pingfusi wait ${ID}`),
+      "`pingfusi ask` owns the wait and never asks the agent to run a second command");
     const rec = JSON.parse(fs.readFileSync(path.join(askHome, ".pingfusi", "asks", `${ID}.json`), "utf8"));
     ok(rec.ping_id === ID && rec.question === "Which tagline reads better?" && rec.n_target === 1
       && JSON.stringify(rec.options) === JSON.stringify(["Draft first", "Review everything"])
@@ -134,8 +137,9 @@ try {
     // a pending collect is exit 1 with the free re-check named
     fs.writeFileSync(path.join(MOCK, `get_ping-${ID2}.json`), JSON.stringify({ status: "pending", n_received: 0, responses: [] }));
     r = run(["ask", "result", ID2]);
-    ok(r.status === 1 && /0 answers yet/.test(r.stderr) && new RegExp(`pingfusi ask result ${ID2}`).test(r.stderr),
-      "a pending collect exits 1 and names the free re-check");
+    ok(r.status === 1 && /0 answers yet/.test(r.stderr) && /did not renew the lease/.test(r.stderr)
+      && !new RegExp(`pingfusi wait ${ID2}`).test(r.stderr),
+      "a pending passive collect exits 1 without creating a second-wait workflow");
     // usage/cap errors are exit 2, refused locally before any wire call
     ok(run(["ask"]).status === 2, "`pingfusi ask` with no question is a usage error (exit 2)");
     ok(run(["ask", "result"]).status === 2, "`pingfusi ask result` with no ping id is a usage error (exit 2)");
@@ -153,6 +157,12 @@ const chk = spawnSync(process.execPath, ["--check", vendor], { stdio: "pipe" });
 ok(chk.status === 0, "vendored installer parses (node --check)");
 const vendorText = fs.readFileSync(vendor, "utf8");
 ok(/install the pingfusi review MCP server/.test(vendorText), "vendored file is the real installer, not a stub");
+const waitStart = vendorText.indexOf("async function waitForResultsCli");
+const waitEnd = vendorText.indexOf("\n// ───", waitStart + 1);
+const waitText = waitStart >= 0 ? vendorText.slice(waitStart, waitEnd > waitStart ? waitEnd : undefined) : "";
+ok(/name: "cpyany_wait"/.test(waitText) && !/name: "cpyany_test_results"/.test(waitText)
+  && /for \(;;\)/.test(waitText) && /keep the task active/.test(waitText),
+  "`pingfusi wait` uses the lease-renewing server wait in a continuous heartbeat loop");
 ok(/Clone-target precedence:[\s\S]*Never call the raw review MCP tools/.test(vendorText) &&
   /Clone Targets: the CLI Owns Orchestration[\s\S]*Never call request_review_test/.test(vendorText),
   "installed generic guidance yields clone targets to CLI gates and typed motion routing");

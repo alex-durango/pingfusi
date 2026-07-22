@@ -79,7 +79,7 @@ const { activeMotionItems, readMotionItems, unownedMotionCandidates } = require(
 // handling, ping.js the one-question poll verb. This file keeps the CLONING pipeline
 // pieces — spec generation from coverage/receipts, gate integration, motion routing,
 // and the CLI — and re-exports the shared names so existing importers stay put.
-const { rpc, resolveToken, BASE, DEFAULT_REVIEW_RESULTS, MAX_REVIEW_RESULTS } = require("../packages/core/wire.js");
+const { rpc, resolveToken, BASE, DEFAULT_REVIEW_RESULTS, MAX_REVIEW_RESULTS, DEFAULT_AGENT_LEASE_SECONDS } = require("../packages/core/wire.js");
 const core = require("../packages/core/rounds.js");
 const { ping: corePing, pingResult: corePingResult } = require("../packages/core/ping.js");
 
@@ -288,7 +288,6 @@ function buildSpec(name, draftUrl, region, changelog, context, nTarget = DEFAULT
     verdict_options: verdicts,
     approve_verdicts: [verdicts[0]],
     n_target: nTarget,
-    deadline_seconds: 86400,
     require_evidence: "screenshot",
   };
 }
@@ -368,7 +367,7 @@ function buildDiagnosticSpec(name, draftUrl, region, ask, nTarget = DEFAULT_REVI
     verdict_options: verdicts,
     approve_verdicts: [], // none — a diagnostic can never approve anything
     n_target: nTarget,
-    deadline_seconds: 86400,
+    deadline_seconds: DEFAULT_AGENT_LEASE_SECONDS,
     require_evidence: "screenshot",
   };
 }
@@ -439,7 +438,7 @@ function composeAssist(name, phaseKey) {
     return { ok: false, reason: `the "${phaseKey}" phase fails mechanically (a missing or invalid artifact) — a reviewer cannot supply it. The gate names the fix: node harness/workflow.js gate ${name} ${phaseKey}` };
   }
   if (phaseKey === "review" || phaseKey === "done") {
-    return { ok: false, reason: `"${phaseKey}" is the review loop itself — wait on the filed round (pingfusi wait <ping_id>) or refile with --changelog after fixes; an assist adds nothing a round doesn't already carry.` };
+    return { ok: false, reason: `"${phaseKey}" is the review loop itself — the filing command already owns its wait; refile with --changelog after fixes. An assist adds nothing a round doesn't already carry.` };
   }
 
   if (phaseKey === "visual" || phaseKey === "strict") {
@@ -558,7 +557,7 @@ function pollReport(name, hq, sc, entry) {
 // The wire verb is packages/core/ping.js; the kit adds the draft/original url context.
 async function fileMicroPoll(name, hq, question, choices, assistMeta) {
   const sc = await corePing(question + pollContext(name), { choices });
-  const entry = { ping_id: sc.ping_id || null, question, n_target: 1, asked_at: new Date().toISOString(), deadline_seconds: 3600, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) };
+  const entry = { ping_id: sc.ping_id || null, question, n_target: 1, asked_at: new Date().toISOString(), deadline_seconds: DEFAULT_AGENT_LEASE_SECONDS, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) };
   hq.polls = hq.polls || [];
   hq.polls.push(entry);
   return { sc, entry };
@@ -575,7 +574,7 @@ function openAssist(hq) {
     const answered = e.last && (e.last.status === "complete" || received >= target);
     const expired = e.last && e.last.status === "expired";
     const askedAt = e.asked_at || e.filed_at;
-    const aged = askedAt ? Date.now() - Date.parse(askedAt) > ((e.deadline_seconds || 3600) * 1000) : false;
+    const aged = askedAt ? Date.now() - Date.parse(askedAt) > ((e.deadline_seconds || DEFAULT_AGENT_LEASE_SECONDS) * 1000) : false;
     if (!answered && !expired && !aged) return e;
   }
   return null;
@@ -741,7 +740,7 @@ async function main() {
     }
     const round = pushRound(name, r.ping_id, spec, approve_verdicts);
     receiptPaintOverride();
-    console.log(`✓ filed round ${round} — ping ${r.ping_id} (target ${nTarget} result${nTarget === 1 ? "" : "s"}, up to ${nTarget} credit${nTarget === 1 ? "" : "s"})\n  approve verdict: "${approve_verdicts[0]}"\n  gate: node harness/workflow.js gate ${name} review   (or: node harness/review-qa.js verify ${name})\n  wake on result: pingfusi wait ${r.ping_id}`);
+    console.log(`✓ filed round ${round} — ping ${r.ping_id} (target ${nTarget} result${nTarget === 1 ? "" : "s"}, up to ${nTarget} credit${nTarget === 1 ? "" : "s"})\n  filing owned the wait; no separate pingfusi wait command is needed\n  approve verdict: "${approve_verdicts[0]}"\n  gate: node harness/workflow.js gate ${name} review   (or: node harness/review-qa.js verify ${name})`);
     return;
   }
 

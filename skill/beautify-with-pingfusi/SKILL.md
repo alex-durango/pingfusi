@@ -84,19 +84,19 @@ content, brand, and behavior as constraints; there is no ground-truth design to 
      verdict_options: verdicts,
      approve_verdicts: [verdicts[0]],
      n_target: 1,
-     deadline_seconds: 86400,
      // The single-page reviewer stores sticky comments and drawings directly;
      // it does not upload a reviewer screenshot.
      require_evidence: "none",
    });
    ```
 
-6. Immediately arm `pingfusi wait <ping_id>` as a background task. If the environment
-   cannot wake itself, tell the user to answer the round and ask you to continue.
+6. The filing command owns the wait from send through feedback; do not launch a separate
+   `pingfusi wait` task. It renews the round's short idle lease while waiting; passive
+   result/verify reads do not.
 7. Fetch fresh with `core.review.verify(stateFile)`. Read every structured comment and
    selector, fix each pin in the project's own source, rebuild, republish to a new
    immutable current URL, and file another round. Put a concise “changed since the last
-   review” step near the start of each refile. Re-arm the waiter every time.
+   review” step near the start of each refile. Each refile owns its own wait.
 8. After approval, rerun the project's tests and capture the after screenshot at exactly
    the before viewport(s). Keep raw round state and comments private; publish only a
    sanitized before/after visual and approval receipt.

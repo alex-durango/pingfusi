@@ -111,15 +111,13 @@ not by the user, and never by you.
    LEARNINGS #20). The user's job is simply to wait; their taste enters through the
    result and through any change requests they give you directly.
 
-5. **Iterate until done — and never park without a waiter.** The single most common way
-   a run dies is HERE: the agent files a round, ends its turn "waiting", and nothing
-   wakes it when the verdict lands — the user sees a first draft and then silence.
-   So: immediately after FILING any round, start `pingfusi wait <ping_id>` as a
-   BACKGROUND task, before anything else — its exit is what wakes you to act. If your
-   environment can't run background tasks that re-invoke you, say so and tell the user
-   plainly: "answer the ping, then tell me to continue." Act on every verdict
+5. **Iterate until done.** The filing command owns the wait: keep that one command
+   alive from send through feedback and do not launch a separate `pingfusi wait` task.
+   It renews the short idle lease across server-wait legs until feedback, expiry, or
+   caller interruption; passive result/verify reads do not renew it. Act on every verdict
    immediately: fix from the site's own captured artifacts (authored mechanisms, never
-   invented values), re-green the gates, refile with a changelog, re-arm the waiter.
+   invented values), re-green the gates, and refile with a changelog; that filing owns
+   the next wait too.
    **When `pingfusi score` or `pingfusi status` prints STALLED, do not run another blind
    iteration**: run `pingfusi next <NAME>` first. If it reports layout, run
    `pingfusi assist <NAME> --compare` — a scoped side-by-side diagnostic round

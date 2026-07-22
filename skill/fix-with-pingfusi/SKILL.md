@@ -34,17 +34,16 @@ own source, repeat until an approving verdict.
 5. **The loop**: `pingfusi review <name> file [--region "…"] [--context "one line: what
    this site/page is"] [--results 1..20]` → tell the user the round is
    filed with an independent human reviewer on the pingfusi service (the reviewer pins what's
-   wrong + picks a verdict — the user does not review). Immediately after filing,
-   start `pingfusi wait <ping_id>` as a BACKGROUND task — a parked agent is not resumed
-   when the verdict lands, and the loop dies silently at round 1 (the most common failure).
-   Can't run self-waking background tasks? Tell the user: "answer the ping, then tell me
-   to continue." On each verdict:
+   wrong + picks a verdict — the user does not review). The filing command owns the
+   wait from send through feedback; do not launch a separate `pingfusi wait` task.
+   It renews the short idle lease while waiting, while passive result/verify reads do
+   not. On each verdict:
    - Approved → done; report with the round history.
    - Pins → fix each in the DRAFT'S OWN source (its components/styles — match its
      idioms; derive fixes from the original site's real markup/CSS, never invent),
      rebuild and publish a new immutable hosted draft (or, for the exceptional live-server
      path, run `pingfusi tunnel <name> --check`), refile with
-     `--changelog "what changed since your last review"`, re-arm the waiter. Repeat —
+     `--changelog "what changed since your last review"`; that refile owns its wait. Repeat —
      the run is not complete until an approving verdict is recorded. Full rounds default
      to 1 result; request 5 for a broader read and 15–20 only for complex work or when
      higher confidence is worth it. Each completed result costs 1 credit; undelivered

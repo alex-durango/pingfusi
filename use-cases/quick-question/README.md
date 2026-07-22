@@ -8,8 +8,9 @@ judgment calls that would otherwise be guesses.
 ```sh
 pingfusi ask "Which tagline reads better for a developer tool?" \
     --options "Draft first,Review everything" --context "two candidates for the launch page"
-pingfusi ask result <ping_id>   # collect later, free
 ```
+
+The ask command is both send and wait; do not follow it with `pingfusi wait`.
 
 **The one rule: advisory, never an approval.** A quick question buys an answer — it
 satisfies no gate, approves no work, and never substitutes for a review round with a
@@ -28,5 +29,6 @@ notes field. No custom UI, no publishing step, no verdict machinery — that is 
 keeps it fast.
 
 **Where it lives.** CLI: `pingfusi ask` (state in `~/.pingfusi/asks/<ping_id>.json`).
-API: `core.ping` / `core.pingResult` ([docs/CORE.md](../../docs/CORE.md)). Answers cap
-at 1 result; each delivered answer costs 1 credit.
+API: `core.ping` / `core.pingResult` ([docs/CORE.md](../../docs/CORE.md)). `core.ping`
+owns the wait; `core.pingResult` is only a passive snapshot. Answers cap at
+1 result; each delivered answer costs 1 credit.

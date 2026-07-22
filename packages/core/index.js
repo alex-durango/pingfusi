@@ -76,12 +76,15 @@ async function reviewFile(stateFile, spec) {
   const r = await wire.rpc("request_review", toolArgs);
   if (!r.ping_id) throw new Error("filing returned no ping_id");
   const round = rounds.pushRound(stateFile, r.ping_id, spec, approve_verdicts);
-  return { ping_id: r.ping_id, round };
+  return { ping_id: r.ping_id, round, result: r };
 }
 
-// ── review.wait — fetch a round's current result envelope (no state write) ────
-async function reviewWait(ping_id, { timeoutMs } = {}) {
-  return wire.rpc("get_test_results", { ping_id }, timeoutMs);
+// ── review.wait — manually resume a pending ping ─────────────────────────────
+// review.file already owns the normal waiting loop. This lower-level escape hatch
+// resumes a ping after a caller-imposed timeout or interruption; passive verify/get
+// remains non-renewing.
+async function reviewWait(ping_id, { maxWaitSeconds = 45, timeoutMs } = {}) {
+  return wire.rpc("wait_for_results", { ping_id, max_wait_seconds: maxWaitSeconds }, timeoutMs);
 }
 
 // ── review.verify — the LATEST round's verdict, persisted + judged ────────────

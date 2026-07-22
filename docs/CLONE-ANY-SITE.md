@@ -123,8 +123,9 @@ always tells you what's next):**
    clone as a hosted draft — stable public url, byte-verified before it's recorded,
    keeps serving even if this machine sleeps) → `pingfusi review {{NAME}} file`
    (scope-pinned template auto-generated from your coverage list; the draft url
-   defaults to the hosted draft). Wake on results with
-   `pingfusi wait <ping_id>` as a background task. On flags: run the
+   defaults to the hosted draft). The filing command owns the wait and renews the
+   round's short idle lease; do not start a separate `pingfusi wait` task. Passive
+   verify/result reads do not renew it. On flags: run the
    PLAYBOOK Phase 6 `--inspect` drill-down on the element that PAINTS the
    flagged mark, fix the whole mark in one shot, re-run the gates, then
    `pingfusi review {{NAME}} file` again — the refile loop is the product working,
