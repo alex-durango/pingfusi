@@ -98,12 +98,15 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
   ok(/pingfusi doctor/.test(body) && /pingfusi where/.test(body) && /independent reviewer/i.test(body) && /verdict/i.test(body), "skill teaches preflight, kit location, and the independent-reviewer contract");
   const fix = fs.readFileSync(destFix, "utf8");
   ok(/^---\nname: fix-with-pingfusi/.test(fix) && /fix it with pingfusi/.test(fix) && /polish this clone/.test(fix) && /ditto/.test(fix), "fix-with-pingfusi triggers on 'fix it with pingfusi' / polish this clone / ditto phrasing");
-  ok(/pingfusi adopt/.test(fix) && /--changelog/.test(fix) && /verdict/i.test(fix) && /DRAFT'S OWN source/.test(fix), "fix-with-pingfusi teaches adopt → tunnel --url → review loop, fixing in the draft's own source");
+  ok(/pingfusi adopt/.test(fix) && /pingfusi publish/.test(fix) && /--target/.test(fix)
+    && /tunnel[\s\S]*only when/i.test(fix) && /--changelog/.test(fix)
+    && /verdict/i.test(fix) && /DRAFT'S OWN source/.test(fix),
+    "fix-with-pingfusi teaches hosted production builds first, with a live-runtime tunnel fallback");
   const beautify = fs.readFileSync(destBeautify, "utf8");
   ok(/^---\nname: beautify-with-pingfusi/.test(beautify)
     && /beautify this website/.test(beautify) && /make this page look professional/.test(beautify),
     "beautify-with-pingfusi has discoverable beautify/professional-design triggers");
-  ok(/core\.draft\.push/.test(beautify) && /core\.review\.file/.test(beautify)
+  ok(/pingfusi publish/.test(beautify) && /--record/.test(beautify) && /core\.review\.file/.test(beautify)
     && /omit `draft_url`/.test(beautify) && /pingfusi wait/.test(beautify)
     && /core\.review\.verify/.test(beautify) && /project's own source/.test(beautify),
     "beautify teaches publish → custom single-page round → wait → verify/refile in owned source");
@@ -111,7 +114,8 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
   ok(/^---\nname: review-video-with-pingfusi/.test(videoSkill)
     && /review this video/.test(videoSkill) && /match the prompt\/brief/.test(videoSkill),
     "review-video-with-pingfusi has discoverable video-review triggers");
-  ok(/media_type: "video"/.test(videoSkill) && /core\.review\.file/.test(videoSkill)
+  ok(/pingfusi publish/.test(videoSkill) && /asset_url/.test(videoSkill)
+    && /media_type: "video"/.test(videoSkill) && /core\.review\.file/.test(videoSkill)
     && /Matches the prompt/.test(videoSkill) && /pingfusi wait/.test(videoSkill)
     && /core\.review\.verify/.test(videoSkill) && /Content-Range/.test(videoSkill),
     "video skill teaches seekable publish → video round → wait → verify with the fixed verdict pair");

@@ -67,6 +67,31 @@ async function verifyDraftServes(url, indexPath, slug) {
   return { ok: true, reason: `verified: ${url} serves clone/index.html byte-identically (rewrite-aware)`, sha256: sha(expected) };
 }
 
+// Re-check a hosted draft when its original build directory is unavailable. push() has
+// already compared the served index bytes to the local source and recorded their hash;
+// this proves the public URL still serves those same bytes immediately before a review
+// round is spent. It is the generic/adopted-build counterpart to verifyDraftServes().
+async function verifyDraftRecord(record) {
+  if (!record || !record.url) return { ok: false, reason: "hosted draft record has no url" };
+  if (!record.verifiedSha256) return { ok: false, reason: "hosted draft record has no verifiedSha256 receipt — publish it again" };
+  let got;
+  try {
+    if (record.url.startsWith("file://")) got = fs.readFileSync(fileURLToPath(record.url));
+    else {
+      const r = await fetch(record.url, { signal: AbortSignal.timeout(15_000), headers: { "cache-control": "no-cache" } });
+      if (!r.ok) return { ok: false, reason: `HTTP ${r.status} from ${record.url}` };
+      got = Buffer.from(await r.arrayBuffer());
+    }
+  } catch (e) {
+    return { ok: false, reason: `unreachable: ${record.url} — ${e.message}` };
+  }
+  const gotSha = sha(got);
+  if (gotSha !== record.verifiedSha256) {
+    return { ok: false, reason: `${record.url} responds but its index bytes changed (${gotSha} != recorded ${record.verifiedSha256}) — stale or replaced draft` };
+  }
+  return { ok: true, reason: `verified: ${record.url} still serves the recorded index bytes`, sha256: gotSha };
+}
+
 // node's fetch rejects with a bare "fetch failed" and hides the real cause in
 // e.cause — surface both plus WHICH request died, or a mid-push failure is
 // undiagnosable (the kit's own self-describing-errors contract).
@@ -94,4 +119,4 @@ async function api(pathname, opts = {}) {
   return payload;
 }
 
-module.exports = { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE };
+module.exports = { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, verifyDraftRecord, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE };

@@ -677,16 +677,17 @@ async function main() {
       process.exit(1);
     }
     let draft = opt("--draft");
+    let hostedDraft = null;
     let tunnelDraft = null;
     // Default --draft to the HOSTED draft this target RECORDED (harness/draft.js push
     // writes it only after byte-verifying the served bytes), then to a verified tunnel
-    // (adopted builds — a live dev server can't be pushed as static files).
+    // (fallback for an adopted build that genuinely requires a live server).
     const dp = path.join(targetDir(name), "draft.json");
     const tp = path.join(targetDir(name), "tunnel.json");
-    if (!draft && fs.existsSync(dp)) draft = readJson(dp).url;
+    if (!draft && fs.existsSync(dp)) { hostedDraft = readJson(dp); draft = hostedDraft.url; }
     if (!draft && fs.existsSync(tp)) { tunnelDraft = readJson(tp); draft = tunnelDraft.url; }
     if (!draft || /localhost|127\.0\.0\.1/.test(draft)) {
-      console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build on its own dev server? tunnel it instead: node harness/tunnel.js " + name + " --url <dev-url>\nor pass --draft <url> explicitly.");
+      console.error("need a PUBLIC draft url — a remote reviewer opens it. Push the clone as a hosted draft first:\n  node harness/draft.js push " + name + "   (records targets/" + name + "/draft.json, used as the default)\nadopted build? host its production output: pingfusi publish <built-dir> --target " + name + "\nonly if it truly needs a live server: pingfusi tunnel " + name + " --url <dev-url>\nor pass --draft <url> explicitly.");
       process.exit(1);
     }
     const nTarget = parseReviewResults(args);
@@ -707,6 +708,12 @@ async function main() {
         : await require("./tunnel.js").verifyServes(draft, idx);
       if (!v.ok && /unreachable|HTTP \d+/.test(v.reason)) { console.error(`❌ refusing to file — draft url is not serving: ${v.reason}`); process.exit(1); }
       if (!v.ok) console.error(`⚠ ${v.reason} — filing anyway (expected only when the draft is not the standalone clone)`);
+    } else if (hostedDraft) {
+      // Generic/adopted hosted builds have no clone/index.html left to compare. Their
+      // publish receipt pins the served index hash, so prove the URL still serves those
+      // exact bytes immediately before spending the round.
+      const v = await require("../packages/core/drafts.js").verifyDraftRecord(hostedDraft);
+      if (!v.ok) { console.error(`❌ refusing to file — hosted draft is no longer verified: ${v.reason}`); process.exit(1); }
     } else if (tunnelDraft) {
       // Adopted builds have no clone/index.html to byte-compare. Their tunnel record is
       // still only a historical fact, so repeat the same non-trivial-page reachability

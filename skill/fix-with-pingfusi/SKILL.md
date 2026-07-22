@@ -14,12 +14,23 @@ own source, repeat until an approving verdict.
 
 1. **Preflight**: `pingfusi doctor` (surface failures). Identify the ORIGINAL url — ask the
    user if it isn't obvious from the project (README, comments, git remote).
-2. **Run the draft**: its own dev server (`npm run dev` etc., background) or a static
-   server for plain HTML. Note the local URL.
+2. **Build the draft**: run its production build and identify a self-contained output
+   directory (`dist/`, `build/`, `out/`, or equivalent). A running dev server is useful
+   for editing, but it is not the preferred reviewer URL.
 3. **Register**: `pingfusi adopt <name> <original-url>` (name = short slug). This is the
    reviewer-loop-only path — no pixel gates, the review verdict is the check.
-4. **Publish**: `pingfusi tunnel <name> --url http://localhost:<port>` (byte-verified public
-   URL for the reviewer).
+4. **Publish through Pingfusi hosting by default**:
+
+   ```sh
+   pingfusi publish <built-dir> --target <name> --name <name>-review
+   ```
+
+   This records the immutable hosted URL where `pingfusi review` already looks for it.
+   Rebuild and publish again after each change. Use
+   `pingfusi tunnel <name> --url http://localhost:<port>` only when the production app
+   genuinely requires a live server (SSR, server actions, API routes, or authentication)
+   and cannot produce a self-contained build. Never choose a tunnel merely because a dev
+   server is already running.
 5. **The loop**: `pingfusi review <name> file [--region "…"] [--context "one line: what
    this site/page is"] [--results 1..20]` → tell the user the round is
    filed with an independent human reviewer on the pingfusi service (the reviewer pins what's
@@ -31,7 +42,8 @@ own source, repeat until an approving verdict.
    - Approved → done; report with the round history.
    - Pins → fix each in the DRAFT'S OWN source (its components/styles — match its
      idioms; derive fixes from the original site's real markup/CSS, never invent),
-     verify the dev server picked them up, `pingfusi tunnel <name> --check`, refile with
+     rebuild and publish a new immutable hosted draft (or, for the exceptional live-server
+     path, run `pingfusi tunnel <name> --check`), refile with
      `--changelog "what changed since your last review"`, re-arm the waiter. Repeat —
      the run is not complete until an approving verdict is recorded. Full rounds default
      to 1 result; request 5 for a broader read and 15–20 only for complex work or when

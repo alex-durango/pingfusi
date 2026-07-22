@@ -114,7 +114,7 @@ for (const { file, text } of catalogTexts.concat([{ file: "README.md", text: REA
 
 // ── the template's four verbs + core API calls are real ───────────────────────
 const template = read("use-cases/your-own/TEMPLATE.md");
-for (const verb of ["pingfusi ask", "pingfusi wait", "pingfusi draft", "pingfusi review"]) {
+for (const verb of ["pingfusi ask", "pingfusi wait", "pingfusi publish", "pingfusi draft", "pingfusi review"]) {
   ok(template.includes(verb), `TEMPLATE.md covers ${verb}`);
 }
 const core = require(path.join(KIT, "packages", "core", "index.js"));
@@ -133,6 +133,7 @@ ok(/sticky comments and drawing/i.test(beautify)
   && /require_evidence: ["`]none["`]/.test(beautify),
   "beautify's single-page reviewer exposes annotations without a screenshot-upload gate");
 ok(/immutable[^.]*before/i.test(beautify)
+  && beautify.includes("pingfusi publish")
   && beautify.includes("Professionally polished") && beautify.includes("Needs another pass"),
   "beautify preserves the before proof and declares exact approval/rework verdicts");
 const video = read("use-cases/video-review/README.md");
@@ -140,7 +141,7 @@ ok(video.includes("core.review.file") && video.includes('`media_type: "video"`')
   "video-review files through the generic core review verb in video mode");
 ok(video.includes("Matches the prompt") && video.includes("Needs another pass"),
   "video-review declares the service's fixed verdict pair");
-ok(/206/.test(video) && /Content-Range/.test(video),
+ok(/pingfusi publish/.test(video) && /206/.test(video) && /Content-Range/.test(video),
   "video-review demands a Range-serving seekable MP4 before a round is spent");
 ok(video.includes("current_brief") && video.includes("prompt_history") && video.includes("requirements"),
   "video-review carries the full review context (brief, prompt history, requirements)");

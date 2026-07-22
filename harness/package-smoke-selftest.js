@@ -78,13 +78,17 @@ for (const required of [
   "bin/pingfusi",
   "harness/capability-router.js",
   "harness/motion-sampler.js",
+  "harness/publish.js",
   "packages/motion/bin/motion-kit.js",
   "packages/motion/src/linked/builder.js",
   "packages/motion/player/linked.html",
   "packages/motion/package-lock.json",
   "skill/pixel-perfect-clone/SKILL.md",
   "skill/beautify-with-pingfusi/SKILL.md",
+  "skill/fix-with-pingfusi/SKILL.md",
+  "skill/review-video-with-pingfusi/SKILL.md",
   "use-cases/beautify/README.md",
+  "use-cases/video-review/README.md",
 ]) ok(names.has(required), `packed artifact contains ${required}`);
 // negative surface: local capture artifacts, recorded video, and the internal leak-guard
 // selftest must never ride along in a release tarball
@@ -115,6 +119,9 @@ const packed = path.join(extractDir, "package");
 }
 
 const entry = path.join(packed, "bin", "pingfusi");
+const publishHelp = run(entry, ["publish", "--help"], blank, home);
+ok(publishHelp.status === 0 && /built-dir\|video\.mp4/.test((publishHelp.stdout || "") + (publishHelp.stderr || "")),
+  "packed CLI exposes hosted website/video publishing without starting a tunnel");
 // LAZY WORLD — there is no postinstall anymore, so a fresh install has NO
 // packages/motion/node_modules. The core CLI must work in that world, and motion
 // commands must fail closed with the install remedy instead of an ESM stack.
@@ -125,13 +132,23 @@ ok(lazyMotion.status === 2 && /pingfusi motion install\b/.test((lazyMotion.stder
 const setup = run(entry, ["agent-setup", "codex", "--force"], blank, home);
 const installedSkill = path.join(home, ".codex", "skills", "pixel-perfect-clone", "SKILL.md");
 const installedBeautify = path.join(home, ".codex", "skills", "beautify-with-pingfusi", "SKILL.md");
-ok(setup.status === 0 && fs.existsSync(installedSkill) && fs.existsSync(installedBeautify), "packed setup installs clone + beautify skills into an isolated coding-agent home");
+const installedFix = path.join(home, ".codex", "skills", "fix-with-pingfusi", "SKILL.md");
+const installedVideo = path.join(home, ".codex", "skills", "review-video-with-pingfusi", "SKILL.md");
+ok(setup.status === 0 && fs.existsSync(installedSkill) && fs.existsSync(installedBeautify)
+  && fs.existsSync(installedFix) && fs.existsSync(installedVideo),
+  "packed setup installs clone, fix, beautify, and video skills into an isolated coding-agent home");
 const skillText = fs.existsSync(installedSkill) ? fs.readFileSync(installedSkill, "utf8") : "";
 ok(/pingfusi next/.test(skillText) && /motion pass/.test(skillText) && !/motion review\b/.test(skillText), "installed skill teaches the default-on motion pass and machine-check routing, with review-round motion machinery gone");
 const beautifyText = fs.existsSync(installedBeautify) ? fs.readFileSync(installedBeautify, "utf8") : "";
-ok(/core\.review\.file/.test(beautifyText) && /omit `draft_url`/.test(beautifyText)
+ok(/pingfusi publish/.test(beautifyText) && /core\.review\.file/.test(beautifyText) && /omit `draft_url`/.test(beautifyText)
   && /Professionally polished/.test(beautifyText),
   "packed beautify skill uses the generic single-page round with an exact approval verdict");
+const fixText = fs.existsSync(installedFix) ? fs.readFileSync(installedFix, "utf8") : "";
+ok(/pingfusi publish/.test(fixText) && /--target/.test(fixText) && /genuinely requires a live server/.test(fixText),
+  "packed fix skill defaults to hosted builds and keeps tunnels as a live-runtime fallback");
+const videoText = fs.existsSync(installedVideo) ? fs.readFileSync(installedVideo, "utf8") : "";
+ok(/pingfusi publish/.test(videoText) && /asset_url/.test(videoText) && /Content-Range/.test(videoText),
+  "packed video skill publishes a seekable hosted MP4 and uses its direct asset URL");
 
 const target = path.join(blank, "targets", "circle");
 writeJson(path.join(target, "workflow.json"), {

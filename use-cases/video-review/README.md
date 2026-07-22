@@ -31,10 +31,10 @@ brief. Video rounds file through `core.review.file` against a caller-owned state
 2. **Draft.** Publish the render as a public, long-lived, SEEKABLE MP4. The service
    probes `video_url` at file time and refuses the round unless the host answers
    Range requests with `206` + `Content-Range` — no burned rounds on a dead or
-   unseekable link. Hosted drafts serve byte ranges: `core.draft.push` a bundle
-   holding a stub `index.html` beside the render (25 MB per-file cap) and point
-   `video_url` at the MP4 inside the returned draft URL. Any other Range-serving
-   public host works too.
+   unseekable link. Use `pingfusi publish <render.mp4> --record <file> --json` by
+   default; it creates the wrapper and returns the hosted `asset_url` to use as
+   `video_url` (25 MB per-file cap). Only oversized renders need another
+   Range-serving public file host; a live-site tunnel is not appropriate for an MP4.
 3. **Review.** `core.review.file(stateFile, spec)` with `media_type: "video"`,
    `video_url`, and the full review context: `current_brief` (the one source of
    truth the video must match NOW), `prompt_history` (every prompt in authored

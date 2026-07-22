@@ -28,11 +28,10 @@ custom steps through `core.review.file` against a caller-owned state file.
 1. **Ping.** Use `pingfusi ask` only when one consequential choice would otherwise be a
    guess: two type directions, two color moods, or two hero compositions. A ping is
    advisory; it cannot approve the page.
-2. **Draft.** Before editing, publish an immutable copy of the untouched static build
-   with `core.draft.push` and save its record. Publish every current static build the
-   same way. For a live dev server, use the before draft URL as the bookkeeping URL for
-   `pingfusi adopt <name> <before-public-url>`, then run `pingfusi tunnel <name> --url
-   <local-dev-url>` and `pingfusi tunnel <name> --check`.
+2. **Draft.** Before editing, publish an immutable copy of the untouched production build
+   with `pingfusi publish <built-dir> --record <file> --json`. Publish every current build
+   the same way under a new URL. A tunnel is only the fallback for an app that genuinely
+   requires a live server and cannot produce a self-contained build.
 3. **Review.** File the current URL with `core.review.file`; omit `draft_url`. Ask about
    hierarchy, typography, spacing rhythm, alignment, color/contrast, composition,
    responsive polish, interaction states, and restrained motion. End with a tappable

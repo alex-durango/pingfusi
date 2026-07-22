@@ -455,7 +455,7 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   re-verifies at file time. Drafts expire after ~7 days; each push mints a new url.
 - `tunnel.json` — a public tunnel url (`harness/tunnel.js` records it only after
   byte-verifying it serves `clone/index.html`); the `--draft` fallback when no hosted
-  draft exists — mainly adopted builds, whose live dev servers can't be pushed.
+  draft exists — reserved for adopted builds that genuinely require a live server.
 - `sink-tunnel.json` (workspace-level, not per-target) — a public url in front of the
   snapshot sink (`harness/tunnel.js --sink`, verified by the sink's own empty-POST
   signature), so live pages deliver captures with one `pxSend` call even when the

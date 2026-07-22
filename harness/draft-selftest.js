@@ -10,9 +10,10 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const { pathToFileURL } = require("url");
-const { buildManifest, rewriteAssetRefs, verifyDraftServes } = require("./draft.js");
+const { buildManifest, rewriteAssetRefs, verifyDraftServes, verifyDraftRecord } = require("./draft.js");
 
 let failed = 0;
 const check = (label, ok, detail) => {
@@ -62,6 +63,17 @@ fs.writeFileSync(path.join(clone, ".DS_Store"), "junk");
   const dead = await verifyDraftServes(pathToFileURL(path.join(work, "gone.html")).href, idx, SLUG);
   check("missing/dead url → NOT ok, reported unreachable", !dead.ok && /unreachable/.test(dead.reason));
 
+  const genericPage = path.join(work, "generic.html");
+  fs.writeFileSync(genericPage, "<main>generic hosted build</main>");
+  const genericSha = crypto.createHash("sha256").update(fs.readFileSync(genericPage)).digest("hex").slice(0, 16);
+  const genericRecord = { url: pathToFileURL(genericPage).href, slug: "generic12345", verifiedSha256: genericSha };
+  const genericOk = await verifyDraftRecord(genericRecord);
+  check("a generic hosted record re-verifies without its original build directory", genericOk.ok && genericOk.sha256 === genericSha);
+  fs.writeFileSync(genericPage, "<main>replaced bytes</main>");
+  const genericChanged = await verifyDraftRecord(genericRecord);
+  check("a replaced generic hosted page fails its recorded-hash check", !genericChanged.ok && /changed/.test(genericChanged.reason));
+  fs.writeFileSync(genericPage, "<main>generic hosted build</main>");
+
   // ── CLI contract: usage + missing-clone errors are self-describing ──────────
   const run = (args, cwd) => {
     try { return { code: 0, out: execFileSync("node", [path.join(__dirname, "draft.js"), ...args], { cwd, stdio: "pipe" }).toString() }; }
@@ -70,8 +82,10 @@ fs.writeFileSync(path.join(clone, ".DS_Store"), "junk");
   { const r = run([], work); check("no args → exit 2 with usage", r.code === 2 && /usage/.test(r.out)); }
   { const r = run(["push", "nope"], work); check("unknown target → exit 1 naming the fix", r.code === 1 && /targets\/nope missing/.test(r.out)); }
   fs.mkdirSync(path.join(work, "targets", "t2"), { recursive: true });
-  { const r = run(["push", "t2"], work); check("no clone/index.html → exit 1 pointing at capture-build + the adopted-build tunnel path", r.code === 1 && /capture-build/.test(r.out) && /--url/.test(r.out)); }
+  { const r = run(["push", "t2"], work); check("no clone/index.html → exit 1 pointing at capture-build + hosted adopted-build publishing", r.code === 1 && /capture-build/.test(r.out) && /pingfusi publish/.test(r.out) && /--target/.test(r.out)); }
   { const r = run(["status", "t2"], work); check("status with no draft.json → exit 1 pointing at push", r.code === 1 && /push/.test(r.out)); }
+  fs.writeFileSync(path.join(work, "targets", "t2", "draft.json"), JSON.stringify(genericRecord));
+  { const r = run(["status", "t2"], work); check("status re-verifies a generically published adopted build by receipt hash", r.code === 0 && /recorded index bytes/.test(r.out), r.out); }
 
   // ── review-qa integration: draft.json wins the --draft default ──────────────
   // (offline: file 'template' just prints the spec — the draft url lands in draft_url)
@@ -124,6 +138,30 @@ fs.writeFileSync(path.join(clone, ".DS_Store"), "junk");
     const hq = JSON.parse(fs.readFileSync(path.join(t1, "review-qa.json"), "utf8"));
     const last = hq.rounds[hq.rounds.length - 1];
     check("the recorded round pins the hosted draft url", last && last.ping_id === "11111111-1111-1111-1111-111111111111" && /\/d\//.test(last.draft_url || ""));
+
+    // The adopted/generic path has no clone/index.html. It must still re-check the
+    // immutable hash from `pingfusi publish --target` before filing.
+    fs.writeFileSync(path.join(work, "targets", "t2", "target.json"), JSON.stringify({ name: "t2", url: "https://example.com/", width: 1280, adopted: true }));
+    let adoptedOut = "", adoptedCode = 0;
+    try {
+      adoptedOut = execFileSync("node", [path.join(__dirname, "review-qa.js"), "file", "t2"], {
+        cwd: work,
+        stdio: "pipe",
+        env: { ...process.env, PPK_PINGHUMANS_URL: pathToFileURL(fixtures).href, PINGFUSI_TOKEN: "" },
+      }).toString();
+    } catch (e) { adoptedCode = e.status; adoptedOut = (e.stdout || "").toString() + (e.stderr || "").toString(); }
+    check("`review file` re-verifies and files a generic hosted adopted build", adoptedCode === 0 && /filed round/.test(adoptedOut), adoptedOut.slice(0, 200));
+
+    fs.writeFileSync(genericPage, "<main>changed after publish</main>");
+    try {
+      adoptedOut = execFileSync("node", [path.join(__dirname, "review-qa.js"), "file", "t2"], {
+        cwd: work,
+        stdio: "pipe",
+        env: { ...process.env, PPK_PINGHUMANS_URL: pathToFileURL(fixtures).href, PINGFUSI_TOKEN: "" },
+      }).toString();
+      adoptedCode = 0;
+    } catch (e) { adoptedCode = e.status; adoptedOut = (e.stdout || "").toString() + (e.stderr || "").toString(); }
+    check("a changed generic hosted page is refused before a review round is spent", adoptedCode === 1 && /no longer verified/.test(adoptedOut), adoptedOut.slice(0, 200));
   }
 
   fs.rmSync(work, { recursive: true, force: true });

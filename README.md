@@ -113,9 +113,12 @@ No pixel pipeline, just the review loop:
 
 ```sh
 pingfusi adopt mydraft https://original-site.com/ 1728 # register your draft + the original it should match (1728 = viewport width in px — the default)
-pingfusi tunnel mydraft --url http://localhost:3000    # tunnel your own dev server
+pingfusi publish dist --target mydraft                 # host the production build with Pingfusi
 pingfusi review mydraft file                           # a human reviewer answers in minutes
 ```
+
+Use `pingfusi tunnel mydraft --url http://localhost:3000` only if the app truly
+requires a live server and cannot produce a self-contained build.
 
 </details>
 
@@ -156,6 +159,8 @@ pingfusi remove                         clean uninstall (also sweeps older-gener
 pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]
                                         one advisory question to a human reviewer, from any directory
 pingfusi ask result <ping_id>           collect the answer later (free)
+pingfusi publish <built-dir|video.mp4>  host a self-contained site or seekable MP4
+                                        (`--target`, `--record`, and `--json` available)
 
 pingfusi new     <name> <url> [width]   scaffold a clone target
 pingfusi adopt   <name> <url> [width]   register an external draft for review-only
@@ -164,7 +169,7 @@ pingfusi serve   <name> [port]          serve the clone + capture tools
 pingfusi draft   <name> push            upload the clone as a HOSTED draft — stable public
                                         url, survives your machine sleeping (review default)
 pingfusi draft   <name> status|delete   re-verify / delete the hosted draft
-pingfusi tunnel  <name> [--url <dev>]   verified public HTTPS tunnel (adopted dev servers)
+pingfusi tunnel  <name> [--url <dev>]   fallback for apps that truly require a live server
 pingfusi sink                           snapshot receiver (:7799)
 pingfusi score   <name>                 live-vs-clone score + delta vs last run
 pingfusi diff    <live> <clone>         raw numeric diff (--visual | strict)

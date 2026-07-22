@@ -16,9 +16,9 @@ have a specialized surface yet.
 
 **The contract** (the doctrine every job inherits — details in [docs/CORE.md](../../docs/CORE.md)):
 
-1. **Publish before review.** A reviewer is remote: host the artifact publicly and
-   byte-verified first (`core.draft.push` for static bundles, a verified tunnel for
-   dev servers). An unviewable draft burns the round.
+1. **Publish before review.** A reviewer is remote: host self-contained websites and
+   MP4s with `pingfusi publish`; use a verified tunnel only for an app that genuinely
+   requires a live server. An unviewable draft burns the round.
 2. **File structured asks, not prose.** Steps a reviewer can act on (≤20 steps,
    ≤300 chars each), inline options for judgment questions (≤40 chars each), and a
    verdict list where the approving verdict is unmistakable.

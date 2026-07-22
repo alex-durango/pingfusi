@@ -39,12 +39,18 @@ the source, re-render, and refile until the verdict is `Matches the prompt`.
    authored order (`active` / `replaced` / `context`), the distilled
    `current_brief`, and `requirements` with prompt provenance. The complete
    context caps at 250 KB.
-3. Render the MP4 and publish it:
-   - hosted draft: write a directory with a stub `index.html` beside the render
-     (25 MB per-file cap), `core.draft.push(dir)`, then point `video_url` at the
-     MP4 inside the returned draft URL; or
-   - any public host that serves Range requests — verify with
-     `curl -sI -r 0-1 <url>` → `206` + `Content-Range`.
+3. Render the MP4 and publish it through Pingfusi hosting by default:
+
+   ```sh
+   pingfusi publish <render.mp4> --name <name>-round-1 \
+     --record .pingfusi/video/<name>/round-1.json --json
+   ```
+
+   The command creates the player wrapper, uploads immutable bytes, and returns a direct
+   `asset_url`; use that value as `video_url`. Pingfusi serves it with `206` and
+   `Content-Range`, so the native player can scrub. The current hosted-video cap is 25 MB
+   per render. If a render cannot fit after reasonable encoding, use another long-lived
+   public host that serves Range requests; do not introduce a live-site tunnel for a file.
 4. File the round against a caller-owned state file:
 
    ```js
@@ -65,7 +71,7 @@ the source, re-render, and refile until the verdict is `Matches the prompt`.
    envelope: comments arrive sorted by `video_anchor.time_ms`, drawn annotations
    in normalized frame coordinates (0 = left/top, 1 = right/bottom), questionnaire
    answers attached to their questions. Fix every noted moment in the source,
-   re-render, publish the NEW file, and refile with the same context — update
+   re-render, publish the NEW file under a new receipt/URL, and refile with the same context — update
    `current_brief`/`requirements` only if the user's ask actually changed.
 6. Repeat until `core.review.verify(stateFile)` returns `ok === true` on
    `Matches the prompt`. Record the receipt; stop only on approval or when the

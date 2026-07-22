@@ -27,7 +27,7 @@ for (const cmd of ["remove", "uninstall", "wait", "whoami", "rules"]) {
 
 // the kit is the default — setup DELIBERATELY: the merged onboarding runs the MCP
 // device-flow install as its login step, so no installer surface is lost
-for (const cmd of ["setup", "new", "adopt", "review", "motion", "next", "behavior-worksheet", "tunnel", "doctor", "agent-setup", "status", "advance", "help", "ask"]) {
+for (const cmd of ["setup", "new", "adopt", "review", "motion", "next", "behavior-worksheet", "publish", "tunnel", "doctor", "agent-setup", "status", "advance", "help", "ask"]) {
   ok(route(cmd) === "kit", `'pingfusi ${cmd}' → kit workflow`);
 }
 ok(route(undefined) === "kit" && route("no-such-cmd") === "kit", "bare/unknown → kit (workflow.js owns help + unknown-command handling)");
@@ -35,7 +35,7 @@ ok(route("version") === "version" && route("-v") === "version", "version is answ
 ok(JSON.stringify([...MCP_COMMANDS].sort()) === JSON.stringify(["remove", "rules", "uninstall", "wait", "whoami"]),
   "MCP passthrough surface is exactly the installer's own commands");
 ok(!MCP_COMMANDS.has("motion") && !MCP_COMMANDS.has("next"), "motion/next cannot drift into the generic MCP passthrough");
-ok(/case "motion"/.test(wf) && /case "next"/.test(wf) && /case "behavior-worksheet"/.test(wf), "workflow owns motion routing and the installed behavior worksheet");
+ok(/case "motion"/.test(wf) && /case "next"/.test(wf) && /case "behavior-worksheet"/.test(wf) && /case "publish"/.test(wf), "workflow owns motion routing, hosted publishing, and the installed behavior worksheet");
 ok(!/name === "declare"/.test(wf) && !/motion-declare\.js/.test(wf) && !/motion-review\.js/.test(wf), "the motion declare/review dispatch entries are gone (first-draft doctrine)");
 
 // remove/uninstall sweep the kit's coding-agent skills in the same client scope.

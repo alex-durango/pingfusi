@@ -20,6 +20,10 @@ const core = require("pingfusi/packages/core");
 // primitives underneath: core.wire, core.rounds, core.drafts
 ```
 
+The public CLI wraps `core.draft.push` as `pingfusi publish <built-dir|video.mp4>`.
+Use that workspace-neutral command for Beautify, Video, and generic review artifacts;
+clone targets retain `pingfusi draft <name> push` because they also record workflow state.
+
 ## The verbs
 
 ### `ping(question, { choices })` — one question, one reviewer
@@ -48,6 +52,8 @@ never an approval — it satisfies no gate anywhere.
   `/assets/` → `/d/<slug>/assets/` rewrite applied. A push that doesn't verify throws —
   a record is returned only for a draft that provably serves.
 - `draft.status(record, indexPath)` re-runs that rewrite-aware verify on a recorded draft.
+- `drafts.verifyDraftRecord(record)` re-checks the recorded served-index hash when the
+  original build directory is unavailable, as with a generically published artifact.
 - `draft.delete(slug)` removes it.
 
 ### the wire underneath

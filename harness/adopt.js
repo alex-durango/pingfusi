@@ -5,12 +5,14 @@
 // verdicts, deviations disclosure, the fix-loop discipline) is useful to ANY builder —
 // ditto's capture-to-code output, a Lovable build, a hand-written recreation. Those
 // builders get you most of the way; the loop with real review closes the gap. Adopt
-// creates just enough target state for `pingfusi tunnel` + `pingfusi review <name> …` to run,
+// creates just enough target state for `pingfusi publish --target` + `pingfusi review
+// <name> …` to run,
 // WITHOUT the pixel pipeline (no workflow gates — there's no captured live.json/clone.json
 // pair to verify; the review verdict is the whole check).
 //
 // USAGE:  pingfusi adopt <name> <url> [width=1728]
-//   then: pingfusi tunnel <name> --url http://localhost:3000     (your dev server)
+//   then: pingfusi publish <built-dir> --target <name>            (preferred)
+//     or: pingfusi tunnel <name> --url http://localhost:3000      (live-runtime fallback)
 //         pingfusi review <name> file [--region "…"]              (the loop begins)
 "use strict";
 
@@ -47,8 +49,9 @@ pixel gates. Record each round: what the reviewer flagged, the root cause, the f
   console.log(`✓ adopted targets/${name}  (original: ${parsed.href})
 
 next:
-  1. run your build's dev server (e.g. ditto output: npm i && npm run dev)
-  2. pingfusi tunnel ${name} --url http://localhost:3000     # public, reachability-verified
+  1. run the production build and find its self-contained output (dist/, build/, out/)
+  2. pingfusi publish <built-dir> --target ${name}            # hosted, immutable, preferred
+     app cannot produce a self-contained build? fallback: pingfusi tunnel ${name} --url http://localhost:3000
   3. pingfusi review ${name} file [--region "…"]              # first review round
   loop: fix what the reviewer pins → refile with --changelog "…" → until the verdict approves.`);
 }

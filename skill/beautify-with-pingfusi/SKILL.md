@@ -31,23 +31,30 @@ content, brand, and behavior as constraints; there is no ground-truth design to 
 1. Run `pingfusi doctor`. Locate the real source, build/test commands, responsive
    breakpoints, and any brand constraints. If review login is missing, stop and have the
    user run `pingfusi setup`; there is no offline review substitute.
-2. Build the untouched page. Publish that static output with
-   `core.draft.push(beforeDir, { name: "<name>-before" })`, save the returned record,
-   and capture a screenshot at the viewport(s) the final proof will use.
+2. Build the untouched page. Publish that static output through Pingfusi hosting and
+   save the immutable receipt, then capture a screenshot at the viewport(s) the final
+   proof will use:
+
+   ```sh
+   pingfusi publish <built-dir> --name <name>-before \
+     --record .pingfusi/beautify/<name>/before.json --json
+   ```
 3. Improve the page in its own source. Work in this order: hierarchy and composition;
    typography; spacing and alignment rhythm; color, contrast, and surfaces; responsive
    behavior; states and finishing details. Prefer one coherent visual idea over a pile of
    effects. If motion materially helps, add one restrained, purposeful beat and honor
    `prefers-reduced-motion`.
-4. Build and test at desktop and phone widths. Publish the current static output with
-   `core.draft.push(currentDir, { name: "<name>-current" })`. For a live dev server,
-   register against the immutable before URL once, then tunnel and verify it:
+4. Build and test at desktop and phone widths. Publish the current static output through
+   Pingfusi hosting, using a new URL for every round:
 
    ```sh
-   pingfusi adopt <name> <before-public-url>
-   pingfusi tunnel <name> --url http://localhost:<port>
-   pingfusi tunnel <name> --check
+   pingfusi publish <built-dir> --name <name>-current \
+     --record .pingfusi/beautify/<name>/current.json --json
    ```
+
+   Use a verified tunnel only if the production app genuinely requires a live server
+   and cannot produce a self-contained build. Never tunnel merely because development
+   happens through `npm run dev`.
 
 5. File one custom round against the current public URL. Keep it within the service caps
    (20 steps; 300 characters per step; 40 per option). Use one result for the normal
@@ -61,6 +68,7 @@ content, brand, and behavior as constraints; there is no ground-truth design to 
    const core = require(path.join(kit, "packages/core"));
    const stateFile = path.resolve(".pingfusi/beautify/<name>/review.json");
    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+   const currentDraft = JSON.parse(fs.readFileSync(".pingfusi/beautify/<name>/current.json", "utf8"));
    const currentPublicUrl = currentDraft.url; // the just-published, verified record
    const verdicts = ["Professionally polished", "Needs another pass"];
    const { ping_id } = await core.review.file(stateFile, {

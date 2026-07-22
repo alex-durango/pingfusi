@@ -13,8 +13,11 @@ repo doc.
 |---|---|---|
 | ping | `pingfusi ask "<question>" [--options "A,B"] [--context "…"]` | one reviewer, one answer — advisory by doctrine, never an approval |
 | review | `pingfusi review <name> file` / `verify` (clone-shaped targets) or `core.review.file/verify` (any caller, own state file) | a full round: steps, pinned comments, a mandatory verdict from the round's declared list |
-| draft | `pingfusi draft <name> push` or `core.draft.push(dir)` | a hosted public page, byte-verified before any round may cite it |
+| draft | `pingfusi publish <built-dir|video.mp4>` or `core.draft.push(dir)` | a hosted public artifact, byte-verified before any round may cite it |
 | wait | `pingfusi wait <ping_id>` | blocks until the round resolves — arm it immediately after filing |
+
+Clone targets keep the shorter stateful alias `pingfusi draft <name> push`; `publish`
+is the workspace-neutral form for every other self-contained artifact.
 
 **Day-one reviewer surface: the generic round.** A question, optional tappable
 options, pinned comments, and a verdict — that is what a human reviewer answers for every
@@ -26,7 +29,8 @@ side-by-side compare view) is a later investment, not a prerequisite.
 1. **When to ping** — the moment in the agent's work where a judgment call appears
    and one advisory answer (1 credit) beats guessing.
 2. **What to publish** — the reviewable artifact, and how it becomes a public
-   byte-verified URL (hosted draft for static bundles, tunnel for dev servers).
+   byte-verified URL (Pingfusi hosting for self-contained builds and MP4s; a tunnel only
+   for an app that genuinely requires a live server).
    Publish-before-review is a contract: a reviewer is remote.
 3. **What steps and verdicts to file** — concrete steps a reviewer can act on
    (options for judgment questions, selectors for actions), and a verdict list where
@@ -59,7 +63,8 @@ The rules below are a complete use case an agent can follow verbatim.
 > ```sh
 > pingfusi adopt launch-copy https://your-product.example/
 > cp -R dist/. targets/launch-copy/clone/      # your rendered draft page
-> pingfusi draft launch-copy push              # hosted, byte-verified public URL
+> pingfusi publish targets/launch-copy/clone --name launch-copy \
+>   --record launch-copy-draft.json             # hosted, byte-verified public URL
 > ```
 >
 > (A live dev server publishes with `pingfusi tunnel launch-copy --url

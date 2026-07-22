@@ -7,8 +7,7 @@
 // hostname on every retry. A hosted draft is uploaded once, integrity-verified
 // server-side against a declared manifest, and served independently of this machine
 // until it expires (~7 days). This is the DEFAULT draft path; tunnels remain for
-// adopted builds (a live dev server can't be uploaded as static files) and for the
-// capture sink.
+// adopted builds that genuinely require a live server and for the capture sink.
 //
 // USAGE
 //   node harness/draft.js push   <name>   upload targets/<name>/clone/ → verify the
@@ -31,7 +30,7 @@ const path = require("path");
 // this file is the kit CLI over it — and re-exports the client so existing importers
 // stay put. BASE comes from core's wire (the same login review-qa.js uses).
 const { BASE } = require("../packages/core/wire.js");
-const { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE } = require("../packages/core/drafts.js");
+const { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, verifyDraftRecord, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE } = require("../packages/core/drafts.js");
 
 const WORK = process.cwd();
 const targetDir = (name) => path.join(WORK, "targets", name);
@@ -41,7 +40,7 @@ const draftPath = (name) => path.join(targetDir(name), "draft.json");
 async function push(name) {
   const dir = cloneDir(name);
   const idx = path.join(dir, "index.html");
-  if (!fs.existsSync(idx)) { console.error(`targets/${name}/clone/index.html missing — build the clone first (pingfusi capture-build ${name}). Adopted builds (live dev servers) can't be pushed as static drafts — tunnel those: node harness/tunnel.js ${name} --url <dev-url>`); process.exit(1); }
+  if (!fs.existsSync(idx)) { console.error(`targets/${name}/clone/index.html missing — build the clone first (pingfusi capture-build ${name}). For an adopted build, publish its production output instead: pingfusi publish <built-dir> --target ${name}. Tunnel only if it truly requires a live server.`); process.exit(1); }
 
   const files = buildManifest(dir);
   const total = files.reduce((n, f) => n + f.bytes, 0);
@@ -75,9 +74,14 @@ async function push(name) {
 async function status(name) {
   if (!fs.existsSync(draftPath(name))) { console.error(`no draft recorded — push one: node harness/draft.js push ${name}`); process.exit(1); }
   const d = JSON.parse(fs.readFileSync(draftPath(name), "utf8"));
-  const v = await verifyDraftServes(d.url, path.join(cloneDir(name), "index.html"), d.slug);
+  const idx = path.join(cloneDir(name), "index.html");
+  const v = fs.existsSync(idx)
+    ? await verifyDraftServes(d.url, idx, d.slug)
+    : await verifyDraftRecord(d);
   console.log(`${v.ok ? "✓" : "❌"} ${v.reason}`);
-  if (!v.ok) console.error(`  the clone changed since the push, or the draft expired — re-push: node harness/draft.js push ${name}`);
+  if (!v.ok) console.error(fs.existsSync(idx)
+    ? `  the clone changed since the push, or the draft expired — re-push: node harness/draft.js push ${name}`
+    : `  the hosted build changed or expired — publish it again: pingfusi publish <built-dir> --target ${name}`);
   process.exit(v.ok ? 0 : 1);
 }
 
@@ -104,4 +108,4 @@ if (require.main === module) main().catch((e) => { console.error(`draft: ${e.mes
 // Other publishers can reuse this same client so the byte-critical
 // rewrite regex, the service caps, and the slug contract exist exactly once kit-side
 // (the client itself lives in packages/core/drafts.js; re-exported here unchanged).
-module.exports = { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE };
+module.exports = { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, verifyDraftRecord, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE };

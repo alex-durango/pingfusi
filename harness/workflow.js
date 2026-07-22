@@ -1274,8 +1274,8 @@ THE MENU — pick a job (definitions: use-cases/README.md)
   Video review             timestamped judgment of a rendered video (skill: review-video-with-pingfusi)
 
   pingfusi setup                                     FIRST CONTACT — one interactive command: global
-                                                     install, cloudflared, the review login (required
-                                                     for review rounds), agent skills.
+                                                     install, review login (required for review rounds),
+                                                     and agent skills. cloudflared is an optional fallback.
                                                      Also: npx pingfusi setup
   pingfusi doctor                                    read-only preflight re-check, fix command per miss
   pingfusi agent-setup [client] [--force]            teach Claude Code, Cursor, or Codex: installs the
@@ -1290,6 +1290,9 @@ THE EVERYDAY JOBS
                                                      ~/.pingfusi/asks/<ping_id>.json). 1 result, advisory;
                                                      the answer often arrives inside the call (docs/CORE.md)
   pingfusi ask     result <ping_id>                  collect the ask's answer + notes (free re-fetch)
+  pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]
+                                                     upload a self-contained website or video to Pingfusi
+                                                     hosting; MP4 output includes a seekable video_url
   pingfusi wait    <ping_id>                         block until a filed round resolves (wake-on-verdict) —
                                                      arm it right after any review files
   (REVIEW ANYTHING is the same loop against your own state file — core.review.file /
@@ -1301,7 +1304,8 @@ COPY ANYTHING — the gated clone pipeline (also spoken job-first: pingfusi clon
   pingfusi adopt   <name> <original-url> [width]     register an EXTERNALLY-BUILT draft (ditto, lovable,
                                                      hand-built) for the review loop — no pixel
                                                      pipeline, the review verdict is the whole check;
-                                                     then: pingfusi tunnel <name> --url <dev-url> → pingfusi review file
+                                                     then publish its static build with --target <name>;
+                                                     tunnel only if it truly needs a live server
   pingfusi capture-build <name> [domFile]            build the clone FROM the captured live DOM (default
                                                      build strategy — LEARNINGS #19; needs targets/<name>/dom.html,
                                                      captured with pxSendDom, see RUNBOOK "Build by capture").
@@ -1320,8 +1324,8 @@ COPY ANYTHING — the gated clone pipeline (also spoken job-first: pingfusi clon
                                                      clone/index.html byte-identically before it's recorded
                                                      (fallback draft when a hosted push isn't possible)
   pingfusi tunnel  <name> --url <http://localhost:3000>   tunnel an adopted build's own dev server
-                                                     (reachability-verified; ditto/next/vite etc. — live
-                                                     dev servers can't be pushed as static drafts)
+                                                     (reachability-verified fallback only when the app
+                                                     cannot produce a self-contained production build)
   pingfusi capture-run <name> [--side auto|both|live|clone]   the DEFAULT capture: settle + measure +
                                                      DOM + coverage in a kit-owned INVISIBLE Chrome
                                                      (headless, probe-gated, viewport-normalized) —
@@ -1457,6 +1461,7 @@ function main() {
     // The workspace-free generic verb: no <name>, no targets/ — state lives under
     // ~/.pingfusi/asks/. Proof that the core's service verbs need zero cloning code.
     case "ask": { if (!name) { console.error('usage: pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]   |   pingfusi ask result <ping_id>'); process.exit(2); } return delegate("harness/ask.js", [name, ...rest]); }
+    case "publish": { if (!name) { console.error("usage: pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish.js", [name, ...rest]); }
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
     case "draft": { if (!name || !rest[0]) { console.error("usage: pingfusi draft <name> push|status|delete"); process.exit(2); } return delegate("harness/draft.js", [rest[0], name]); }
     case "tunnel": { if (!name) { console.error("usage: pingfusi tunnel <name> [port] [--check]"); process.exit(2); } return delegate("harness/tunnel.js", [name, ...rest]); }
