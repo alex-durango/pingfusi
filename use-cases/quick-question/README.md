@@ -5,6 +5,17 @@ workspace and nothing to publish. Options make it tappable; the answer often arr
 inside the call. This is the job an agent reaches for twenty times a day: mid-task
 judgment calls that would otherwise be guesses.
 
+**Just prompt your agent:**
+
+```txt
+Which name sounds better for a coffee shop app: BeanThere or SipHappens? use pingfusi
+```
+
+The agent files the question, a human answers, and the answer lands back in the
+agent's context.
+
+**Or by hand, from the CLI:**
+
 ```sh
 pingfusi ask "Which tagline reads better for a developer tool?" \
     --options "Draft first,Review everything" --context "two candidates for the launch page"

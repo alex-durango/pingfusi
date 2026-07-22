@@ -6,6 +6,16 @@ against the prompts that produced it. Whether the result *lands the brief* is a
 judgment no gate can score; the reviewer answers it with timestamped, frame-anchored
 feedback the agent acts on, render after render, until the verdict says it matches.
 
+**Just prompt your agent:**
+
+```txt
+Render the intro animation, then have a human check it matches the brief with pingfusi.
+```
+
+The agent publishes the render, a human reviewer scrubs it and pins comments to exact
+timestamps, and the agent re-renders until the reviewer says it matches. Everything
+below is the machinery the agent uses.
+
 **Its skill:** [`review-video-with-pingfusi`](../../skill/review-video-with-pingfusi/SKILL.md),
 installed from `skill/` by `pingfusi setup` / `pingfusi agent-setup`.
 

@@ -1,13 +1,29 @@
-# pingfusi
+<div align="center">
+<div align="center">
+  <a href="https://pingfusi.com">
+    <picture>
+      <img alt="pingfusi logo" src="./docs/icon.svg" width="120">
+    </picture>
+  </a>
+</div>
+&nbsp;
+<h1 align="center">Pingfusi</h1>
 
-<p>
-  <a href="https://www.npmjs.com/package/pingfusi"><img src="https://img.shields.io/npm/v/pingfusi.svg" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/pingfusi"><img src="https://img.shields.io/npm/dw/pingfusi.svg" alt="npm downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
-  <a href="https://discord.com/invite/smYn6M4Cb"><img src="https://img.shields.io/badge/discord-join-5865F2.svg?logo=discord&logoColor=white" alt="Discord"></a>
+<p align="center">
+    <a href="https://www.npmjs.com/package/pingfusi" alt="NPM Version">
+        <img src="https://img.shields.io/npm/v/pingfusi.svg"></a>
+    <a href="https://www.npmjs.com/package/pingfusi" alt="NPM Downloads">
+        <img src="https://img.shields.io/npm/dw/pingfusi.svg"></a>
+    <a href="LICENSE" alt="License">
+        <img src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+    <a href="https://discord.com/invite/smYn6M4Cb" alt="Discord">
+        <img src="https://img.shields.io/badge/discord-join-5865F2.svg?logo=discord&logoColor=white"></a>
 </p>
+</div>
 
-## pingfusi is an MCP that lets AI agents call human reviewers.
+## About
+
+pingfusi is an MCP that lets AI agents call human reviewers.
 
 Think MTurk for AI agents. With pingfusi your agent can:
 

@@ -5,6 +5,16 @@ into a coherent professional design. There is no site to copy: the page's purpos
 content, brand, behavior, and accessibility are the constraints, and a real human
 reviewer supplies the taste judgment prompting cannot prove.
 
+**Just prompt your agent:**
+
+```txt
+Make my landing page look professionally designed, not like AI slop. use pingfusi
+```
+
+The agent publishes the page, a human reviewer pins taste feedback to exact elements,
+and the agent iterates until the reviewer calls it polished. Everything below is the
+machinery the agent uses.
+
 **Its skill:** [`beautify-with-pingfusi`](../../skill/beautify-with-pingfusi/SKILL.md),
 installed from `skill/` by `pingfusi setup` / `pingfusi agent-setup`.
 

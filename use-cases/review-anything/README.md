@@ -7,6 +7,15 @@ the verdict is an approval. Every specialized job on the menu is this loop with 
 tailored reviewer surface; this row is the loop itself, for everything that doesn't
 have a specialized surface yet.
 
+**Just prompt your agent:**
+
+```txt
+Is my pricing page confusing anywhere? Have a human review it with pingfusi.
+```
+
+The agent publishes the page, files the round, and acts on the comments that come
+back. Everything below is the machinery it uses.
+
 **When to use it**
 
 - The artifact is a web page, doc, or build that none of the specialized jobs cover.
