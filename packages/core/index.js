@@ -79,10 +79,9 @@ async function reviewFile(stateFile, spec) {
   return { ping_id: r.ping_id, round, result: r };
 }
 
-// ── review.wait — manually resume a pending ping ─────────────────────────────
-// review.file already owns the normal waiting loop. This lower-level escape hatch
-// resumes a ping after a caller-imposed timeout or interruption; passive verify/get
-// remains non-renewing.
+// ── review.wait — one client-safe continuation leg ───────────────────────────
+// review.file chains these automatically. Exposed for direct MCP/CLI callers that
+// must repeat while pending; passive verify/get remains non-renewing.
 async function reviewWait(ping_id, { maxWaitSeconds = 45, timeoutMs } = {}) {
   return wire.rpc("wait_for_results", { ping_id, max_wait_seconds: maxWaitSeconds }, timeoutMs);
 }

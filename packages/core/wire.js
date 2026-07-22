@@ -22,6 +22,9 @@ const MAX_REVIEW_RESULTS = 20;
 // Mirrors the service's default renewable idle lease for agent-filed work.
 // Clients normally omit deadline_seconds so the service remains authoritative.
 const DEFAULT_AGENT_LEASE_SECONDS = 60;
+// One server leg must return before common MCP hosts' ~60s hard timeout.
+// The local send workflow automatically opens another leg while pending.
+const DEFAULT_WAIT_LEG_SECONDS = 45;
 // A send operation owns its waiter. After each service-side request reaches
 // its hosting ceiling, the same local command opens the next renewable wait.
 // Zero means no overall cutoff: interrupting the caller ends the wait.
@@ -92,8 +95,8 @@ async function finishSendWait(name, initial) {
   while (Date.now() < deadline) {
     const remaining = Number.isFinite(deadline)
       ? Math.ceil((deadline - Date.now()) / 1000)
-      : 240;
-    const maxWaitSeconds = Math.max(10, Math.min(240, remaining));
+      : DEFAULT_WAIT_LEG_SECONDS;
+    const maxWaitSeconds = Math.max(10, Math.min(DEFAULT_WAIT_LEG_SECONDS, remaining));
     const next = await rpc("wait_for_results", {
       ping_id: initial.ping_id,
       max_wait_seconds: maxWaitSeconds,
@@ -122,12 +125,11 @@ async function rpc(name, args, timeoutMs) {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}` },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: wireName, arguments: args } }),
-    // Filing is the first server-side leg of the send-owned wait (issue #24),
-    // and explicit recovery waits block by design. Give both route-safe
-    // headroom; passive reads stay snappy.
-    signal: AbortSignal.timeout(timeoutMs || (name === "request_review" ? 285_000
-      : name === "quick_poll" ? 320_000
-      : name === "wait_for_results" ? ((Number(args.max_wait_seconds) || 45) + 15) * 1000
+    // Filing and continuation use client-safe server legs. The local command
+    // chains pending legs until feedback; passive reads stay snappy.
+    signal: AbortSignal.timeout(timeoutMs || (name === "request_review" ? 60_000
+      : name === "quick_poll" ? 60_000
+      : name === "wait_for_results" ? ((Number(args.max_wait_seconds) || DEFAULT_WAIT_LEG_SECONDS) + 15) * 1000
       : 20_000)),
   });
   const raw = await res.text();
@@ -140,4 +142,4 @@ async function rpc(name, args, timeoutMs) {
   try { return finishSendWait(name, JSON.parse(r.content[0].text)); } catch (e) { throw new Error("unexpected RPC response shape"); }
 }
 
-module.exports = { BASE, DEFAULT_REVIEW_RESULTS, MAX_REVIEW_RESULTS, DEFAULT_AGENT_LEASE_SECONDS, DEFAULT_SEND_WAIT_SECONDS, SERVICE_CAPS, LIVE_TOOL_NAME, resolveToken, rpc };
+module.exports = { BASE, DEFAULT_REVIEW_RESULTS, MAX_REVIEW_RESULTS, DEFAULT_AGENT_LEASE_SECONDS, DEFAULT_WAIT_LEG_SECONDS, DEFAULT_SEND_WAIT_SECONDS, SERVICE_CAPS, LIVE_TOOL_NAME, resolveToken, rpc };

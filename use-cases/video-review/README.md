@@ -42,9 +42,9 @@ brief. Video rounds file through `core.review.file` against a caller-owned state
    silently dropped), and `requirements` (concrete checkable claims, each naming
    the `prompt_ids` it came from). The whole context caps at 250 KB. `url` and
    `draft_url` must be absent — video mode refuses them.
-4. **Wait.** The filing command owns the wait; do not call `pingfusi wait` separately.
-   It renews the short idle lease while waiting, while passive result/verify reads do
-   not. Then fetch fresh with `core.review.verify`, act
+4. **Wait.** Filing automatically chains client-safe wait legs until feedback. If a raw
+   MCP leg returns pending, immediately call `pingfusi_wait` again and never return
+   pending to the user. Passive result/verify reads do not renew the lease. Then fetch fresh with `core.review.verify`, act
    on every timestamped comment in the video's SOURCE —
    composition code, prompts, assets, never the frames — re-render, publish the new
    render at a new URL, refile. Done is `outcome.ok === true` on

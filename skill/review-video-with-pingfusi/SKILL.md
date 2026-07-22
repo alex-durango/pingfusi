@@ -67,9 +67,10 @@ the source, re-render, and refile until the verdict is `Matches the prompt`.
    ```
 
    `url` and `draft_url` must be absent — video mode refuses them.
-5. The filing command owns the wait from send through feedback; do not call
-   `pingfusi wait` separately. It renews the round's short idle lease while waiting,
-   while passive result/verify reads do not. When results land, read the
+5. The filing command automatically chains client-safe wait legs until feedback. If a
+   raw MCP leg returns pending, immediately call `pingfusi_wait` again; never return
+   pending to the user or file a duplicate. Each leg renews the short idle lease;
+   passive result/verify reads do not. When results land, read the
    envelope: comments arrive sorted by `video_anchor.time_ms`, drawn annotations
    in normalized frame coordinates (0 = left/top, 1 = right/bottom), questionnaire
    answers attached to their questions. Fix every noted moment in the source,

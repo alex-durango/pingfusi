@@ -47,10 +47,10 @@ Environment notes (operational, not workflow):
   you clone, and a surprise Chrome window is an interruption.
 - Long-running processes (sink, serve, tunnels, review filing) run as background
   Bash tasks. Sandboxed Bash may need the sandbox disabled for network commands.
-- The filing command owns the review wait from send through feedback. Keep that one
-  command alive; do not launch a separate `pingfusi wait` task. It renews the short idle
-  lease across server-wait legs until feedback, expiry, or interruption. Passive result/verify reads do
-  not renew idle work.
+- The filing command automatically chains client-safe wait legs until feedback. If a raw
+  MCP leg returns pending, immediately call `pingfusi_wait` again; never return pending
+  to the user or file a duplicate. Each leg renews the short idle lease. Passive
+  result/verify reads do not renew idle work.
 - Review drafts: `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified,
   stable url — no clone tunnel needed). Tunnels remain only for adopted builds running
   their own dev server (and optionally a sink POST loop, below).

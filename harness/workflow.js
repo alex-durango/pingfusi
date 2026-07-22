@@ -828,9 +828,9 @@ function cmdStatus(name, opts = {}) {
       // (re-filing spends credits on duplicate results); no round means filing has not happened.
       const pend = /pending[^(]*\(ping ([0-9a-f-]{36})\)/.exec(g.reason);
       if (pend) {
-        console.log(`  run:  pingfusi wait ${pend[1]}   (manual resume only — round already filed; do NOT refile)`);
+        console.log(`  run:  pingfusi wait ${pend[1]}   (continue the filed round; do NOT refile)`);
       } else {
-        console.log(`  run:  ${CMD} draft ${name} push   →   ${CMD} review ${name} file   (filing owns the wait)`);
+        console.log(`  run:  ${CMD} draft ${name} push   →   ${CMD} review ${name} file   (filing chains the wait)`);
         console.log(`        (green machine gates are NOT done — a reviewer's approving verdict is the gate)`);
         if (blocked.length) console.log(`        file it NOW despite the blocked gate(s) — the round documents the gap to the reviewer automatically; a reviewer look at a partial clone beats no look.`);
       }
@@ -976,7 +976,7 @@ function cmdAdvance(name, phaseKey, opts) {
   if (rec.blocked) {
     console.log(`  ⚠ environment constraint receipted (${opts.blocked}) — NOT a verification; the done gate refuses blocked phases until each is re-advanced with a passing gate.`);
     console.log(`  → push to review with what you have — the round documents the gap to the reviewer automatically:`);
-    console.log(`    1. ${CMD} draft ${name} push       2. ${CMD} review ${name} file (filing owns the wait)`);
+    console.log(`    1. ${CMD} draft ${name} push       2. ${CMD} review ${name} file (filing chains the wait)`);
   } else if (rec.forced) console.log(`  ⚠ enforcement bypassed (${overrode.join(", ")}) — flagged in workflow.jsonl; the done gate refuses forced phases.`);
   const next = PHASES.find((p) => st.phases[p.key].status !== "pass");
   // The most dangerous moment in the pipeline is the LAST machine gate going green:
@@ -987,7 +987,7 @@ function cmdAdvance(name, phaseKey, opts) {
   else if (next.key === "review") {
     console.log(`  next: REVIEW — green machine gates are NOT done. The clone needs a reviewer's approving verdict:`);
     console.log(`    1. ${CMD} draft ${name} push       (hosted draft url for the round)`);
-    console.log(`    2. ${CMD} review ${name} file      (sends the round and owns the wait; fix + refile until approved)`);
+    console.log(`    2. ${CMD} review ${name} file      (sends the round and chains wait legs; fix + refile until approved)`);
   } else console.log(`  next: ${CMD} advance ${name} ${next.key}`);
 }
 
@@ -1292,8 +1292,7 @@ THE EVERYDAY JOBS
   pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]
                                                      upload a self-contained website or video to Pingfusi
                                                      hosting; MP4 output includes a seekable video_url
-  pingfusi wait    <ping_id>                         manually resume a pending ping after an interrupted
-                                                     or caller-timed-out send; normal filing owns the wait
+  pingfusi wait    <ping_id>                         continue a pending ping through client-safe wait legs
   (REVIEW ANYTHING is the same loop against your own state file — core.review.file /
    verify over any published artifact; contracts in docs/CORE.md. The jobs below
    package that loop with their own reviewer surfaces.)

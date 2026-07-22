@@ -14,7 +14,7 @@ repo doc.
 | ping | `pingfusi ask "<question>" [--options "A,B"] [--context "…"]` | one reviewer, one answer — advisory by doctrine, never an approval |
 | review | `pingfusi review <name> file` / `verify` (clone-shaped targets) or `core.review.file/verify` (any caller, own state file) | a full round: steps, pinned comments, a mandatory verdict from the round's declared list |
 | draft | `pingfusi publish <built-dir|video.mp4>` or `core.draft.push(dir)` | a hosted public artifact, byte-verified before any round may cite it |
-| wait | `pingfusi wait <ping_id>` | manually resumes a pending ping after an interruption; normal filing already owns the wait |
+| wait | `pingfusi wait <ping_id>` | continues a pending ping through client-safe wait legs; filing/core normally chain these automatically |
 
 Clone targets keep the shorter stateful alias `pingfusi draft <name> push`; `publish`
 is the workspace-neutral form for every other self-contained artifact.
@@ -35,9 +35,9 @@ side-by-side compare view) is a later investment, not a prerequisite.
 3. **What steps and verdicts to file** — concrete steps a reviewer can act on
    (options for judgment questions, selectors for actions), and a verdict list where
    the approving verdict is unmistakable.
-4. **How to wait and act** — the filing command owns the wait from send through
-   feedback; do not call `pingfusi wait` separately. Passive result/verify reads do
-   not renew it. Act on every comment in the draft's own source, refile with
+4. **How to wait and act** — filing automatically chains client-safe wait legs until
+   feedback. If a raw MCP leg returns pending, immediately call `pingfusi_wait` again;
+   never return pending to the user. Passive result/verify reads do not renew it. Act on every comment in the draft's own source, refile with
    a changelog, repeat until an approving verdict is recorded. Done is a recorded
    verdict, never a feeling.
 
@@ -92,9 +92,9 @@ The rules below are a complete use case an agent can follow verbatim.
 > });
 > ```
 >
-> **How to wait and act.** `core.review.file` owns the wait from send through
-> feedback; do not start a separate waiter. Passive result/verify reads do not renew
-> an idle ping. When filing returns, verify fresh
+> **How to wait and act.** `core.review.file` automatically chains client-safe wait
+> legs until feedback. Direct MCP callers repeat `pingfusi_wait` while pending and never
+> return pending to the user. Passive result/verify reads do not renew an idle ping. When filing returns, verify fresh
 > (a cached approval is never trusted), fix what
 > the comments pin in the draft's own source, re-push, refile with a changelog:
 >

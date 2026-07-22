@@ -24,9 +24,9 @@ have a specialized surface yet.
    verdict list where the approving verdict is unmistakable.
 3. **Verdict-required.** The round passes only on an approving verdict from its own
    declared list — prose that merely sounds approving never passes.
-4. **Wait, fix, refile.** The filing command owns the wait from send through feedback;
-   do not call `pingfusi wait` separately. It renews the short idle lease while waiting,
-   while passive result/verify reads do not. Act on every comment in the artifact's
+4. **Wait, fix, refile.** Filing automatically chains client-safe wait legs until
+   feedback. If a raw MCP leg returns pending, immediately call `pingfusi_wait` again;
+   never return pending to the user. Passive result/verify reads do not renew the lease. Act on every comment in the artifact's
    own source, refile, repeat. Done is a recorded verdict, never a feeling.
 
 **How to run it.** `core.review.file(stateFile, spec)` (send + wait) →

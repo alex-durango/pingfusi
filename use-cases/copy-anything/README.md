@@ -25,8 +25,8 @@ when a gate stalls.
 
 **The core API underneath** ([docs/CORE.md](../../docs/CORE.md)):
 `pingfusi draft <name> push` hosts the clone as a byte-verified public page,
-`pingfusi review <name> file` sends the round and owns its wait, `verify` records the
-fresh verdict, `pingfusi wait <ping_id>` manually resumes only an interrupted ping, and
+`pingfusi review <name> file` sends the round and automatically chains client-safe wait
+legs, `verify` records the fresh verdict, `pingfusi wait <ping_id>` continues a pending ping, and
 `pingfusi ask` settles one-off judgment
 calls mid-run.
 

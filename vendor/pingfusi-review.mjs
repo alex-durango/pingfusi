@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone fork.
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -103,8 +103,8 @@ Clone-target precedence: when the repository contains targets/<name>/workflow.js
 ## Steps
 
 1. Built/changed a UI? Deploy or tunnel it to a PUBLICLY reachable URL (localhost won't work — a remote reviewer opens it; nothing to embed in the page — the review runs in the reviewer's native app), then call \`request_review_test\` with structured \`steps\` — machine-verifiable \`check\` rules plus inline \`options\` (e.g. \`["Smooth","Janky"]\`) for qualitative steps
-2. Quick taste/preference read with no build to test? Call \`ping_review\` (blocks ~50s)
-3. Filing IS the wait: the send call owns the renewable wait through feedback or its transport ceiling. Do not issue a separate \`wait_for_results\` / \`pingfusi wait\` afterward; passive result snapshots do not renew idle work
+2. Quick taste/preference read with no build to test? Call \`ping_review\` (starts a client-safe wait leg)
+3. Filing starts the automatic wait chain. If filing or a wait leg returns pending, immediately call \`pingfusi_wait\` with the same ping id and repeat while pending. Do not answer the user, apologize, or retry the original send. The user never has to request this continuation; passive result snapshots do not renew idle work
 4. For the full QA workflow (verifiable steps, evidence, waiting modes, acting on results), use the pingfusi-review skill
 `;
 
@@ -150,11 +150,11 @@ When a step asks a question rather than performs an action, add \`options\` (2�
 
 ### Step 3: Wait the right way
 
-The filing call IS the wait. Keep that single operation alive; it owns the renewable wait and returns on feedback or when its transport budget ends:
+Filing starts an automatic chain of client-safe wait legs:
 
 1. **File early, keep working.** Review happens in parallel — that time is free to you.
-2. **Do not split send from wait:** no follow-up \`wait_for_results\` or shell waiter is required after a successful filing call.
-3. **Transport ceiling:** if the send returns pending, its active waiting window ended; abandoned work now expires naturally. Use the explicit waiter only to deliberately resume after an interruption.
+2. **Continue automatically:** if filing returns pending, immediately call \`pingfusi_wait(ping_id)\`; repeat on every pending result until feedback arrives or the user cancels.
+3. **Never return pending:** continuation is part of the original request. Do not apologize, ask the user to retry, or file a duplicate ping.
 4. **Checkpoint checks:** \`get_test_results(ping_id)\` is a passive snapshot; it does not keep an idle task alive.
 
 ### Step 4: Act on the results
@@ -166,7 +166,7 @@ Each result has a verdict, notes, pinned comments, per-step truth, and a screens
 ## Guidelines
 
 - **Credits**: 1 per completed result; quick checks target 1, standard tasks 5, and complex or high-confidence tasks 15–20. Filing and undelivered results are free
-- **Quick polls**: \`ping_review\` is both send and wait; no follow-up waiter is required. \`get_ping(ping_id)\` is only a passive snapshot
+- **Quick polls**: \`ping_review\` starts the wait; on pending, immediately call \`pingfusi_wait\` and repeat until an answer arrives or the user cancels. \`get_ping(ping_id)\` is only a passive snapshot
 - **Pending isn't dead**: "a reviewer has claimed the task and is reviewing right now" means results are imminent — keep waiting
 `;
 
@@ -1018,8 +1018,7 @@ Usage:
   pingfusi setup [--client claude-code|claude-desktop|cursor|codex]
   pingfusi remove [--client claude-code|claude-desktop|cursor|codex]
   pingfusi wait <ping_id> [--timeout <seconds>]
-                       # manually resume a pending ping after an interruption
-                       # (normal send calls already own their wait)
+                       # continue a pending ping in client-safe wait legs
   pingfusi whoami    # show which account this machine's token belongs to
   pingfusi rules     # refresh the installed agent rules to this version
   pingfusi version
@@ -1037,12 +1036,11 @@ Aliases: --claude (= --claude-desktop), --code (= --claude-code).
 `);
 }
 
-// ─── `pingfusi wait` — manual pending-ping resume ────────────────────────
+// ─── `pingfusi wait` — continuous client-safe wait chain ────────────────
 //
-// Normal send calls already own their waiting loop. This command is the
-// deliberate recovery path after a caller-imposed timeout or interruption;
-// it polls the MCP endpoint and exits on news. The server-side wait call
-// renews the task lease, while an abandoned ping expires naturally.
+// Each server wait leg returns before common MCP clients time out. This local
+// command keeps opening those legs until news or its caller-selected overall
+// timeout. Every leg renews the task lease; cancellation stops the chain.
 //
 // Exit codes: 0 = news (new result, or task complete/expired) — output has
 // the full results text; 2 = timed out still pending; 1 = error.
@@ -1192,7 +1190,7 @@ async function waitForResultsCli(rest) {
       );
       process.exit(2);
     }
-    const maxWaitSeconds = Math.max(10, Math.min(240, remainingSeconds));
+    const maxWaitSeconds = Math.max(10, Math.min(45, remainingSeconds));
     const res = await fetch(`${APP_URL}/api/mcp`, {
       method: "POST",
       headers: {

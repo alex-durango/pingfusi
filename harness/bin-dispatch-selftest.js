@@ -109,14 +109,14 @@ try {
   const ID = "00000000-0000-4000-8000-00000000a51d";
   const ID2 = "00000000-0000-4000-8000-00000000a52d";
   try {
-    // file: the server and send-owned waiter both hit their fixture budgets —
-    // return pending without telling the agent to launch a second command.
+    // file fixtures are immutable, so the automatic chain stops after one
+    // continuation leg instead of busy-looping forever.
     fs.writeFileSync(path.join(MOCK, "quick_poll.json"), JSON.stringify({ ping_id: ID, status: "pending", n_received: 0, n_target: 1, responses: [] }));
     fs.writeFileSync(path.join(MOCK, `wait_for_results-${ID}.json`), JSON.stringify({ ping_id: ID, status: "pending", n_received: 0, n_target: 1, responses: [] }));
     let r = run(["ask", "Which tagline reads better?", "--options", "Draft first,Review everything", "--context", "two candidates for the launch page"]);
     ok(r.status === 0 && r.stdout.includes(`ping ${ID}`) && /send-and-wait budget ended/.test(r.stdout)
       && !r.stdout.includes(`pingfusi wait ${ID}`),
-      "`pingfusi ask` owns the wait and never asks the agent to run a second command");
+      "`pingfusi ask` owns the automatic wait chain without asking the user for another command");
     const rec = JSON.parse(fs.readFileSync(path.join(askHome, ".pingfusi", "asks", `${ID}.json`), "utf8"));
     ok(rec.ping_id === ID && rec.question === "Which tagline reads better?" && rec.n_target === 1
       && JSON.stringify(rec.options) === JSON.stringify(["Draft first", "Review everything"])

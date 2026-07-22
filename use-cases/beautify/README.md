@@ -37,9 +37,9 @@ custom steps through `core.review.file` against a caller-owned state file.
    responsive polish, interaction states, and restrained motion. End with a tappable
    verdict step whose exact options are `Professionally polished` and
    `Needs another pass`; declare only the first as approving.
-4. **Wait.** The filing command owns the wait; do not call `pingfusi wait` separately.
-   It renews the short idle lease while waiting, while passive result/verify reads do
-   not. Then fetch fresh with `core.review.verify`, act
+4. **Wait.** Filing automatically chains client-safe wait legs until feedback. If a raw
+   MCP leg returns pending, immediately call `pingfusi_wait` again and never return
+   pending to the user. Passive result/verify reads do not renew the lease. Then fetch fresh with `core.review.verify`, act
    on every sticky comment and drawing in the draft's own source, publish a
    new immutable current draft, and refile with a visible changelog. Repeat until
    `outcome.ok === true`.

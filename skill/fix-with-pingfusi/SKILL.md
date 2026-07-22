@@ -34,10 +34,10 @@ own source, repeat until an approving verdict.
 5. **The loop**: `pingfusi review <name> file [--region "…"] [--context "one line: what
    this site/page is"] [--results 1..20]` → tell the user the round is
    filed with an independent human reviewer on the pingfusi service (the reviewer pins what's
-   wrong + picks a verdict — the user does not review). The filing command owns the
-   wait from send through feedback; do not launch a separate `pingfusi wait` task.
-   It renews the short idle lease while waiting, while passive result/verify reads do
-   not. On each verdict:
+   wrong + picks a verdict — the user does not review). The filing command automatically
+   chains client-safe wait legs until feedback. If a raw MCP leg returns pending,
+   immediately call `pingfusi_wait` again; never return pending to the user or file a
+   duplicate. Passive result/verify reads do not renew the lease. On each verdict:
    - Approved → done; report with the round history.
    - Pins → fix each in the DRAFT'S OWN source (its components/styles — match its
      idioms; derive fixes from the original site's real markup/CSS, never invent),

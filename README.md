@@ -186,7 +186,7 @@ pingfusi motion  loop|nudge|tune …      converge difficult timing/spring/easin
 
 pingfusi review  <name> file [--results 1..20]  file a scope-pinned review round (default 1)
 pingfusi review  <name> poll "q"        1-result mid-round micro-check with a reviewer
-pingfusi wait    <ping_id>              manually resume a pending ping after interruption
+pingfusi wait    <ping_id>              continue a pending ping through client-safe wait legs
 pingfusi status  <name>                 phase table + next required action
 pingfusi gate    <name> <phase>         run one gate read-only (exit 0/1)
 pingfusi advance <name> <phase>         record a phase (gate must pass)

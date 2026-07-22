@@ -58,6 +58,8 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
     "review result depth: default 1, service range up to 20");
   ok(wire.DEFAULT_AGENT_LEASE_SECONDS === 60,
     "agent-filed work mirrors the service's one-minute renewable idle lease");
+  ok(wire.DEFAULT_WAIT_LEG_SECONDS === 45,
+    "automatic continuation legs return before common one-minute MCP timeouts");
   ok(wire.DEFAULT_SEND_WAIT_SECONDS === 0,
     "a live send command has no arbitrary overall wait cutoff");
 
@@ -169,7 +171,7 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
   };
   const filed = await core.review.file(stateFile, spec);
   ok(filed.ping_id === PING && filed.round === 1 && filed.result.status === "pending",
-    "review.file files, owns the wait, and returns round 1 with the latest result envelope");
+    "review.file files, chains the wait, and returns round 1 with the latest result envelope");
   const hq1 = JSON.parse(fs.readFileSync(stateFile, "utf8"));
   ok(JSON.stringify(Object.keys(hq1.rounds[0])) === JSON.stringify([
     "ping_id", "draft_url", "region", "n_target", "approve_verdicts", "verdict_options",

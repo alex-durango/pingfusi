@@ -90,9 +90,10 @@ content, brand, and behavior as constraints; there is no ground-truth design to 
    });
    ```
 
-6. The filing command owns the wait from send through feedback; do not launch a separate
-   `pingfusi wait` task. It renews the round's short idle lease while waiting; passive
-   result/verify reads do not.
+6. The filing command automatically chains client-safe wait legs until feedback. If a
+   raw MCP leg returns pending, immediately call `pingfusi_wait` again; never return
+   pending to the user or file a duplicate. The user does not request this continuation.
+   Passive result/verify reads do not renew the lease.
 7. Fetch fresh with `core.review.verify(stateFile)`. Read every structured comment and
    selector, fix each pin in the project's own source, rebuild, republish to a new
    immutable current URL, and file another round. Put a concise “changed since the last

@@ -107,7 +107,7 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
     && /beautify this website/.test(beautify) && /make this page look professional/.test(beautify),
     "beautify-with-pingfusi has discoverable beautify/professional-design triggers");
   ok(/pingfusi publish/.test(beautify) && /--record/.test(beautify) && /core\.review\.file/.test(beautify)
-    && /omit `draft_url`/.test(beautify) && /filing command owns the wait/i.test(beautify)
+    && /omit `draft_url`/.test(beautify) && /automatically\s+chains client-safe wait/i.test(beautify)
     && /core\.review\.verify/.test(beautify) && /project's own source/.test(beautify),
     "beautify teaches publish → custom single-page send-and-wait → verify/refile in owned source");
   const videoSkill = fs.readFileSync(destVideo, "utf8");
@@ -116,7 +116,7 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
     "review-video-with-pingfusi has discoverable video-review triggers");
   ok(/pingfusi publish/.test(videoSkill) && /asset_url/.test(videoSkill)
     && /media_type: "video"/.test(videoSkill) && /core\.review\.file/.test(videoSkill)
-    && /Matches the prompt/.test(videoSkill) && /filing command owns the wait/i.test(videoSkill)
+    && /Matches the prompt/.test(videoSkill) && /automatically\s+chains client-safe wait/i.test(videoSkill)
     && /core\.review\.verify/.test(videoSkill) && /Content-Range/.test(videoSkill),
     "video skill teaches seekable publish → video send-and-wait → verify with the fixed verdict pair");
   const r2 = install(home, false);

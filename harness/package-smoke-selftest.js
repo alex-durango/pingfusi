@@ -150,10 +150,11 @@ const videoText = fs.existsSync(installedVideo) ? fs.readFileSync(installedVideo
 ok(/pingfusi publish/.test(videoText) && /asset_url/.test(videoText) && /Content-Range/.test(videoText),
   "packed video skill publishes a seekable hosted MP4 and uses its direct asset URL");
 ok([skillText, beautifyText, fixText, videoText].every((text) =>
-  /filing command owns the\s+wait/i.test(text)
-  && /do not (?:launch|call)[\s\S]{0,80}`pingfusi wait`/i.test(text)
+  /automatically\s+chains client-safe wait/i.test(text)
+  && /raw MCP leg returns pending[\s\S]{0,100}`pingfusi_wait`/i.test(text)
+  && /never return\s+pending to the user/i.test(text)
   && /passive\s+(?:result\/verify|verify\/result)\s+reads\s+do\s+not/i.test(text)),
-  "every installed review skill teaches that filing owns the wait with no second command");
+  "every installed review skill teaches automatic client-safe continuation until feedback");
 
 const target = path.join(blank, "targets", "circle");
 writeJson(path.join(target, "workflow.json"), {

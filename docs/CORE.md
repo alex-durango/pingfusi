@@ -30,9 +30,9 @@ clone targets retain `pingfusi draft <name> push` because they also record workf
 
 Files a 1-result question (up to 1 credit). The send operation stays open across
 renewable server-wait legs until feedback, expiry, or caller interruption, so the answer usually comes back
-inside the same call; `pingResult(ping_id)`
-re-fetches the answers later for free but is a passive snapshot. The normal send call
-already owns the full waiting lifecycle; no separate waiter is required.
+inside the same command; `pingResult(ping_id)`
+re-fetches the answers later for free but is a passive snapshot. The normal send command
+automatically chains 45-second wait legs until feedback or caller cancellation.
 **Advisory by doctrine:** a ping buys an answer, never an approval —
 it satisfies no gate anywhere.
 
@@ -43,9 +43,9 @@ it satisfies no gate anywhere.
   (`spec` is request_review-shaped;
   `approve_verdicts` and `review_contract` are local bookkeeping, stripped before the
   wire) and appends the round record to `stateFile`.
-- `review.wait(ping_id)` manually resumes an already-pending ping after an interruption;
-  normal `review.file` callers do not need it. It renews the short idle lease and returns
-  the current result envelope; no state write.
+- `review.wait(ping_id)` performs one client-safe continuation leg. `review.file` chains
+  these automatically; direct MCP callers repeat it while pending. It renews the short
+  idle lease and returns the current result envelope; no state write.
 - `review.verify(stateFile)` re-fetches the LATEST round **fresh every time** (a cached
   approval is never trusted), persists the result envelope + receipts into `stateFile`,
   and returns a structured outcome (`{ ok, status, verdict, round, comments }`) — the

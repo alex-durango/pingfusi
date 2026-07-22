@@ -10,7 +10,8 @@ pingfusi ask "Which tagline reads better for a developer tool?" \
     --options "Draft first,Review everything" --context "two candidates for the launch page"
 ```
 
-The ask command is both send and wait; do not follow it with `pingfusi wait`.
+The ask command automatically chains client-safe wait legs until an answer arrives or
+the caller cancels; the user never has to request a separate wait.
 
 **The one rule: advisory, never an approval.** A quick question buys an answer — it
 satisfies no gate, approves no work, and never substitutes for a review round with a
@@ -30,5 +31,5 @@ keeps it fast.
 
 **Where it lives.** CLI: `pingfusi ask` (state in `~/.pingfusi/asks/<ping_id>.json`).
 API: `core.ping` / `core.pingResult` ([docs/CORE.md](../../docs/CORE.md)). `core.ping`
-owns the wait; `core.pingResult` is only a passive snapshot. Answers cap at
+automatically chains the wait; `core.pingResult` is only a passive snapshot. Answers cap at
 1 result; each delivered answer costs 1 credit.

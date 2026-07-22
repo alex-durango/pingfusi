@@ -111,10 +111,10 @@ not by the user, and never by you.
    LEARNINGS #20). The user's job is simply to wait; their taste enters through the
    result and through any change requests they give you directly.
 
-5. **Iterate until done.** The filing command owns the wait: keep that one command
-   alive from send through feedback and do not launch a separate `pingfusi wait` task.
-   It renews the short idle lease across server-wait legs until feedback, expiry, or
-   caller interruption; passive result/verify reads do not renew it. Act on every verdict
+5. **Iterate until done.** The filing command automatically chains client-safe wait
+   legs until feedback. If a raw MCP leg returns pending, immediately call
+   `pingfusi_wait` again; never return pending to the user or file a duplicate. Each leg
+   renews the short idle lease; passive result/verify reads do not. Act on every verdict
    immediately: fix from the site's own captured artifacts (authored mechanisms, never
    invented values), re-green the gates, and refile with a changelog; that filing owns
    the next wait too.
