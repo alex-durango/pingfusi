@@ -86,6 +86,9 @@ function semanticResponsesOf(sc) {
 // comments. A field dropped here is a reviewer's mark the agent never sees.
 // `alignDeltas` is derived: the tx/ty/scale a "move" comment carries only inside
 // its prose, parsed by parseAlignDeltas (null when unparseable — never guessed).
+// `video_anchor` is the same doctrine for video rounds: {time_ms, x, y, category,
+// requirement_ids}. Dropping it left the agent holding comment prose with no idea
+// WHICH MOMENT it marked — the one thing a video round exists to tell you.
 function semanticCommentsOf(sc) {
   return (Array.isArray(sc.comments) ? sc.comments : []).map((comment) => {
     const kept = {
@@ -93,7 +96,7 @@ function semanticCommentsOf(sc) {
       text: comment.text || null,
       text_sha256: comment.text ? crypto.createHash("sha256").update(String(comment.text)).digest("hex") : null,
     };
-    for (const key of ["side", "selector", "target", "op", "kind", "annotation", "viewport", "rect", "other", "position"]) {
+    for (const key of ["side", "selector", "target", "op", "kind", "annotation", "viewport", "rect", "other", "position", "video_anchor"]) {
       if (comment[key] !== undefined && comment[key] !== null) kept[key] = comment[key];
     }
     const alignDeltas = parseAlignDeltas(comment.text);

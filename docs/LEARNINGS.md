@@ -1156,3 +1156,58 @@ channel), and make every refusal state what is actually accepted — including t
 > that judgment is exactly what the compare round exists for, and the deep machine checks
 > (`verify-introspected`, sample → apply-sampled → verify-sampled) are the operator utilities
 > the advisory's `next` route points at.
+
+---
+
+## 38. THE "FIX" NEVER SHIPPED — a find-and-replace that matched nothing built green three times
+Paid for on the **video-review** dogfood run (2026-07-22/23): the tool's own launch film,
+built in Remotion and driven entirely through review rounds instead of watching one's own
+work. Three separate lessons, one shape.
+
+**(a) A silent no-op edit ships an un-shipped fix.** A beat was meant to be dropped from one
+cut. The edit that removed it was a string replacement targeting a snippet an *earlier* edit
+had already changed, so it matched **nothing** and did nothing — and nobody checked. `tsc`
+passed (the flag it should have set is optional), `eslint` passed, the render succeeded, and
+the brief + commit message both stated the beat was gone. It was still playing. The reviewer
+flagged it for **three consecutive rounds** — "get rid of that section", "this doesn't flow",
+and finally *"are you even seeing my comments?? I told you to fix this"* — and was right every
+time. The tell was in plain sight and unread: the runtime **duration** was 8s longer than the
+sum of the beats that were supposed to be there.
+
+**(b) `tsc` / `eslint` / render-success / an adversarial agent pre-flight are all ONE witness
+class.** They inspect the *source and the spec* — never whether the intended change reached the
+*artifact*. A 51-agent adversarial pass over the render even *generated* the "too much text,
+too fast" finding and then a skeptic agent argued it away as cosmetic; a reviewer confirmed the
+exact defect in one round. This is #37 one layer over: a gate stack built on instruments that
+all read the code inherits the same blind spot on both sides. The only witness that the frame
+shows the intended change is the **rendered frame** — and for a review that a remote reviewer
+will watch, the only fully honest witness is the **served bytes**, not the local render.
+
+**(c) A field dropped from the result envelope is a reviewer's mark the agent never sees.** The
+core review client rebuilt each returned comment from a fixed key list of web-clone geometry;
+a video comment's `video_anchor` (its `time_ms`, category, drawn-annotation coordinates) was
+not in the list, so it was silently discarded before `review.verify` returned it. Filing would
+have "worked" and delivered the agent 14 rounds of prose with **no idea which moment any note
+marked**. Fixed at the top of the run (add `video_anchor` to the kept keys); the payoff landed
+when a reviewer *drew* on a frame and the strokes arrived with their coordinates intact, so the
+exact dead-space they circled could be found and fixed.
+
+**Lesson: verify the EDIT against the ARTIFACT, never against the intent.** "The code says so",
+"`tsc`/`eslint` passed", "the render succeeded", and "an agent panel approved" are all the same
+class of witness and none of them proves the change is *in the frame*. After a source edit that
+is supposed to change what renders, extract the frame and look; before filing a video round,
+pull the **served** bytes, confirm they hash-match the local render, and read the moment the
+change was supposed to land. And a result-envelope key list is load-bearing: a field missing
+there is not a smaller answer, it is a **wrong** one that reads as complete.
+
+> 🔒 **Practised on this run, not yet mechanically enforced.** Every eyes-cut round after the
+> silent no-op was gated the honest way: `curl` the published `asset_url`, `shasum` it against
+> the local mp4, `ffmpeg -ss` the exact second the fix targeted, and `Read` that PNG — *then*
+> file. It caught, in later rounds, a stale on-screen draft number and a mis-scoped scroll the
+> source looked correct for. The general kit already embodies (b) for clones — the paint probe
+> (#37) exists precisely because one instrument's agreement is not proof — and (c) is now
+> covered by `core-selftest`. What has no fixture yet is (a): a byte-shape assertion that a
+> named edit is present in the *output*, not merely in the source. 👁 **Still yours:** whether
+> a launch film actually lands — the whole reason this run existed. Fourteen rounds on one cut,
+> a big share of them spent because a fix the machine reported as done was not; the reviewer
+> watching was the only thing that knew.
