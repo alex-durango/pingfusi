@@ -8,6 +8,14 @@
 // ~/.claude.json's review MCP entry, else PPK_PINGHUMANS_TOKEN / PINGFUSI_TOKEN.
 // PPK_PINGHUMANS_URL / PINGFUSI_APP_URL overrides the API base; a file:// value serves
 // canned responses from disk (offline selftests; sandboxes that block sockets).
+//
+// SHARED HALF: everything below that the SERVICE also has to agree on — the wire tool
+// names, the request caps, the lease/wait defaults, the credential + MCP search orders —
+// is no longer retyped here. It comes from ./wire-contract.gen.js, generated from
+// packages/wire-contract/contract.json (the monorepo's one source of truth) and checked in
+// beside this file so the npm tarball stays self-contained. Change a value in the contract
+// and regenerate; never edit the .gen.js, and never require the workspace package from
+// here — a require() reaching outside apps/kit breaks the published package on install.
 "use strict";
 
 const fs = require("fs");
@@ -15,27 +23,34 @@ const os = require("os");
 const path = require("path");
 const { fileURLToPath } = require("url");
 
+const contract = require("./wire-contract.gen.js");
+
 const readJson = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
 const BASE = process.env.PPK_PINGHUMANS_URL || process.env.PINGFUSI_APP_URL || process.env.PINGHUMANS_APP_URL || "https://pingfusi.com";
-const DEFAULT_REVIEW_RESULTS = 1;
-const MAX_REVIEW_RESULTS = 20;
+// Both ends of the service's n_target range: the default it applies when a filing does not
+// say, and the ceiling it refuses past. The credit TIERS between them are the service's
+// pricing policy and stay there — only the range is contract.
+const DEFAULT_REVIEW_RESULTS = contract.DEFAULT_REVIEW_RESULTS;
+const MAX_REVIEW_RESULTS = contract.MAX_REVIEW_RESULTS;
 // Mirrors the service's default renewable idle lease for agent-filed work.
 // Clients normally omit deadline_seconds so the service remains authoritative.
-const DEFAULT_AGENT_LEASE_SECONDS = 60;
+const DEFAULT_AGENT_LEASE_SECONDS = contract.DEFAULT_AGENT_LEASE_SECONDS;
 // One server leg must return before common MCP hosts' ~60s hard timeout.
 // The local send workflow automatically opens another leg while pending.
-const DEFAULT_WAIT_LEG_SECONDS = 45;
+const DEFAULT_WAIT_LEG_SECONDS = contract.DEFAULT_WAIT_LEG_SECONDS;
 // A send operation owns its waiter. After each service-side request reaches
 // its hosting ceiling, the same local command opens the next renewable wait.
-// Zero means no overall cutoff: interrupting the caller ends the wait.
+// Zero means no overall cutoff: interrupting the caller ends the wait. Kit-local
+// policy, not a service value — it stays a literal here.
 const DEFAULT_SEND_WAIT_SECONDS = 0;
 
 // The review service's round-filing caps, mirrored kit-side so a too-big filing is a
 // named local failure before any bytes move (same doctrine as drafts.js's upload caps).
 // Paid for twice before they were budgeted: a round past 20 steps or a step past 300
 // chars is rejected WHOLE with a Zod "too_big" — not a graceful degrade (lelabo's 80
-// leaves, chrono24's 396; harness/review-qa.js buildSpec packs to these numbers).
-const SERVICE_CAPS = { maxSteps: 20, maxStepTextChars: 300, maxOptionChars: 40 };
+// leaves, chrono24's 396; harness/review-qa.js buildSpec packs to these numbers). Paid
+// for ONCE now: the numbers live in the contract and the service reads the same ones.
+const SERVICE_CAPS = contract.SERVICE_CAPS;
 
 function resolveToken() {
   // explicit empty = "behave as if no login exists" (selftests; deliberate opt-out)
@@ -43,7 +58,7 @@ function resolveToken() {
   if (process.env.PINGFUSI_TOKEN) return process.env.PINGFUSI_TOKEN;
   if (process.env.PPK_PINGHUMANS_TOKEN) return process.env.PPK_PINGHUMANS_TOKEN;
   // login writes {token}; read the current dir first, legacy dirs after (no re-login on upgrade)
-  for (const dir of ["pingfusi", "pinghumans", "cpyany"]) {
+  for (const dir of contract.CREDS_DIRS) {
     try {
       const t = readJson(path.join(os.homedir(), ".config", dir, "credentials.json")).token;
       if (t) return t;
@@ -52,7 +67,9 @@ function resolveToken() {
   try {
     const cfg = readJson(path.join(os.homedir(), ".claude.json"));
     const s = cfg.mcpServers || {};
-    const entry = s.pingfusi || s.cpyany || s.pinghumans;
+    // first key present wins, in contract order (which is NOT the credential-dir order)
+    let entry = null;
+    for (const key of contract.MCP_SERVER_KEYS) { if (s[key]) { entry = s[key]; break; } }
     const m = /Bearer\s+(\S+)/.exec((entry && entry.headers && (entry.headers.Authorization || entry.headers.authorization)) || "");
     if (m) return m[1];
   } catch (e) {}
@@ -72,7 +89,12 @@ function resolveToken() {
 // `cpyany_wait`/`cpyany_check_source`. Kept the internal names (and the file:// fixture
 // filenames / selftest) unchanged — only the wire method name sent to the LIVE endpoint
 // is remapped, right before the fetch.
-const LIVE_TOOL_NAME = { request_review: "cpyany_test", get_test_results: "cpyany_test_results", wait_for_results: "cpyany_wait", quick_poll: "cpyany_poll", get_ping: "cpyany_poll_results" };
+//
+// The table itself is generated from the contract now, so the service's registration list
+// and this remap can no longer drift apart silently. cpyany_check_source is in the
+// contract but not in this table: nothing kit-side calls it yet, so it has no internal
+// verb to remap from.
+const LIVE_TOOL_NAME = contract.LIVE_TOOL_NAME;
 
 const sendOwnsWait = (name) => name === "request_review" || name === "quick_poll";
 const hasPingNews = (result) => {

@@ -133,7 +133,12 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
     && /media_type: "video"/.test(videoSkill) && /core\.review\.file/.test(videoSkill)
     && /Matches the prompt/.test(videoSkill) && /automatically\s+chains client-safe wait/i.test(videoSkill)
     && /core\.review\.verify/.test(videoSkill) && /Content-Range/.test(videoSkill),
-    "video skill teaches seekable publish → video send-and-wait → verify with the fixed verdict pair");
+    "video skill teaches seekable publish → video send-and-wait → verify");
+  ok(/OPTIONAL/.test(videoSkill) && /video_intro/.test(videoSkill)
+    && /verdict_options/.test(videoSkill) && /steps:/.test(videoSkill),
+    "video skill teaches the briefless shape and caller-authored questions");
+  ok(/PUBLIC/.test(videoSkill) && /private until claim/i.test(videoSkill),
+    "video skill draws the public/private line so a brief cannot leak through title");
   const r2 = install(home, false);
   ok(!r2.ok && /--force/.test(r2.message), "refuses to overwrite an existing install without --force");
   ok(install(home, true).ok, "--force overwrites");

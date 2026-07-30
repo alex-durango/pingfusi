@@ -4,7 +4,10 @@
 // clone" must be a CHECKED fact. Tests the pure halves offline (file:// — socket-free):
 //   - parseTunnelUrl finds the quick-tunnel url in cloudflared's log noise
 //   - verifyServes: byte-identical → ok; different bytes → named mismatch; missing → unreachable
-//   - review-qa file-time integration: no tunnel.json + no --draft → refusal names tunnel.js
+//   - review-qa file-time integration: no draft/tunnel record + no --draft → the refusal
+//     leads with the hosted-draft push and keeps the tunnel as the live-server fallback
+// The transport itself (named → ngrok → quick, and the 429 warning) is guarded next door
+// in packages/core/tunnel-selftest.js — this file owns the clone-workflow policy around it.
 // Run: node harness/tunnel-selftest.js   (regression.js runs it too)
 "use strict";
 
@@ -68,7 +71,15 @@ fs.writeFileSync(other, "<html><body>something else entirely</body></html>");
   let out = "", status = 0;
   try { out = execFileSync("node", [path.join(__dirname, "review-qa.js"), "file", "t1"], { cwd: work, stdio: "pipe" }).toString(); }
   catch (e) { status = e.status; out = (e.stdout || "").toString() + (e.stderr || "").toString(); }
-  check("review-qa file with no tunnel.json and no --draft refuses, pointing at tunnel.js", status === 1 && /tunnel\.js/.test(out));
+  // The refusal used to name tunnel.js; since hosted drafts became the review default
+  // (2026-07-10) it leads with the draft push and keeps the tunnel as the live-server
+  // fallback. Assert BOTH rungs — that ordering is the doctrine, not a wording detail.
+  check(
+    "review-qa file with no draft.json/tunnel.json and no --draft refuses, leading with the hosted-draft push",
+    status === 1 && /draft\.js push/.test(out) && out.indexOf("draft.js push") < out.indexOf("tunnel"),
+    out.slice(0, 200)
+  );
+  check("…and still names the tunnel as the live-server fallback", status === 1 && /pingfusi tunnel/.test(out), out.slice(0, 200));
 
   // with a recorded tunnel.json pointing at DEAD content, file-time re-verify refuses
   fs.writeFileSync(path.join(tdir, "tunnel.json"), JSON.stringify({ url: pathToFileURL(path.join(work, "gone.html")).href, port: 8080 }));

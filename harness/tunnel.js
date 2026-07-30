@@ -28,7 +28,14 @@
 // public DNS (1.1.1.1/8.8.8.8) when the system resolver can't see a fresh name — a run that
 // still fails after that is genuinely broken (dead cloudflared, wrong port, blocked network).
 //
-// Needs `cloudflared` on PATH (brew install cloudflared). Quick tunnels need no account.
+// TRANSPORT comes from packages/core/tunnel.js: a named cloudflared tunnel if the operator
+// provisioned one, else ngrok, else an anonymous quick tunnel (last resort, and it says so
+// — those are rate-limited and 429 under real use, which burns a round as surely as a dead
+// link). This file owns the clone-workflow policy around it: the local pre-check, the DNS
+// warm-up, the byte-compare gate, and the recorded receipt.
+//
+// Needs `cloudflared` on PATH (brew install cloudflared) or an authenticated ngrok. For a
+// STATIC clone you need no tunnel at all — `pingfusi draft <name> push` hosts it.
 "use strict";
 
 const fs = require("fs");
@@ -36,7 +43,7 @@ const path = require("path");
 const crypto = require("crypto");
 const dns = require("dns");
 const https = require("https");
-const { spawn } = require("child_process");
+const { startPublicTunnel, parseQuickTunnelUrl } = require("../packages/core/tunnel.js");
 
 const WORK = process.cwd();
 const targetDir = (name) => path.join(WORK, "targets", name);
@@ -44,10 +51,24 @@ const tunnelPath = (name) => path.join(targetDir(name), "tunnel.json");
 const indexPath = (name) => path.join(targetDir(name), "clone", "index.html");
 const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 
-// The quick-tunnel url is printed to cloudflared's stderr. Pure + exported for the selftest.
-function parseTunnelUrl(logText) {
-  const m = logText.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-  return m ? m[0] : null;
+// Re-exported (not re-implemented) so the quick-tunnel url is parsed by exactly one regex
+// kit-wide; harness/tunnel-selftest.js keeps testing it from here.
+const parseTunnelUrl = parseQuickTunnelUrl;
+
+// A tunnel for one local origin, best transport first. The three call sites below share
+// this: the failure is fatal and its remedy is the same everywhere, and every mode prints
+// which transport it got so a quick-tunnel round is never a surprise after the fact.
+const NO_TUNNEL_HINT =
+  "install cloudflared (brew install cloudflared) or authenticate ngrok — and note a STATIC clone needs no tunnel at all: `pingfusi draft <name> push` hosts it on the service";
+async function openTunnel(origin) {
+  try {
+    const t = await startPublicTunnel({ origin, allowQuick: true, timeoutMs: 30_000, hint: NO_TUNNEL_HINT });
+    console.error(`  transport: ${t.detail}`);
+    return t;
+  } catch (e) {
+    console.error(`❌ ${e.message}`);
+    process.exit(1);
+  }
 }
 
 // cloudflared is pointed at the dev server's ORIGIN, but the URL handed to the reviewer
@@ -166,29 +187,19 @@ async function sinkMain(port) {
   const local = await probeSink(`http://localhost:${port}/pxprobe.json`);
   if (!local.ok) { console.error(`❌ no sink on :${port} before tunneling: ${local.reason}\n   start it first: node tools/sink.js  (PPK_SINK_PORT=${port} if non-default)`); process.exit(1); }
 
-  const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate"], { stdio: ["ignore", "pipe", "pipe"] });
-  child.on("error", (e) => {
-    console.error(e.code === "ENOENT" ? "cloudflared not found — install it: brew install cloudflared" : `cloudflared failed: ${e.message}`);
-    process.exit(1);
-  });
-  let log = "", url = null;
-  const onChunk = (d) => { if (!url) { log += d; url = parseTunnelUrl(log); } };
-  child.stdout.on("data", onChunk);
-  child.stderr.on("data", onChunk);
-  const deadline = Date.now() + 30_000;
-  while (!url && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 300));
-  if (!url) { console.error(`❌ no tunnel url within 30s — cloudflared output:\n${log.slice(-800)}`); child.kill(); process.exit(1); }
+  const tunnel = await openTunnel(`http://localhost:${port}`);
+  const url = tunnel.url;
 
   const v = await warmUp(() => probeSink(`${url}/pxprobe.json`));
-  if (!v.ok) { console.error(`❌ tunnel came up but the sink never answered through it: ${v.reason}`); child.kill(); process.exit(1); }
+  if (!v.ok) { console.error(`❌ tunnel came up but the sink never answered through it: ${v.reason}`); tunnel.stop(); process.exit(1); }
 
-  fs.writeFileSync(path.join(WORK, "sink-tunnel.json"), JSON.stringify({ url, port, startedAt: new Date().toISOString() }, null, 2) + "\n");
+  fs.writeFileSync(path.join(WORK, "sink-tunnel.json"), JSON.stringify({ url, port, transport: tunnel.kind, startedAt: new Date().toISOString() }, null, 2) + "\n");
   console.log(`✓ sink tunnel ready: ${url}\n  ${v.reason}\n  recorded → ./sink-tunnel.json\n  live-page delivery (no stash/chunk fallback needed):\n    await pxSend('${url}/live.json')\n    await pxSendDom('${url}/dom.html')`);
 
-  const stop = () => { child.kill(); process.exit(0); };
+  const stop = () => { tunnel.stop(); process.exit(0); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  child.on("exit", (code) => { console.error(`cloudflared exited (${code}) — sink tunnel is DOWN`); process.exit(code || 1); });
+  tunnel.onExit((code) => { console.error(`tunnel process exited (${code}) — sink tunnel is DOWN`); process.exit(code || 1); });
 }
 
 // Can `url` serve a real page? For a LIVE DEV SERVER (an adopted external build — ditto's
@@ -221,30 +232,19 @@ async function urlMain(name, localUrl) {
   const local = await probeUrl(parsed.href);
   if (!local.ok) { console.error(`❌ local server check failed before tunneling: ${local.reason}\n   start your build's dev server first (e.g. npm run dev)`); process.exit(1); }
 
-  const child = spawn("cloudflared", ["tunnel", "--url", parsed.origin, "--no-autoupdate"], { stdio: ["ignore", "pipe", "pipe"] });
-  child.on("error", (e) => {
-    console.error(e.code === "ENOENT" ? "cloudflared not found — install it: brew install cloudflared" : `cloudflared failed: ${e.message}`);
-    process.exit(1);
-  });
-  let log = "", url = null;
-  const onChunk = (d) => { if (!url) { log += d; url = parseTunnelUrl(log); } };
-  child.stdout.on("data", onChunk);
-  child.stderr.on("data", onChunk);
-  const deadline = Date.now() + 30_000;
-  while (!url && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 300));
-  if (!url) { console.error(`❌ no tunnel url within 30s — cloudflared output:\n${log.slice(-800)}`); child.kill(); process.exit(1); }
+  const tunnel = await openTunnel(parsed.origin);
 
-  const publicUrl = publicUrlForLocal(url, parsed);
+  const publicUrl = publicUrlForLocal(tunnel.url, parsed);
   const v = await warmUp(() => probeUrl(publicUrl));
-  if (!v.ok) { console.error(`❌ tunnel came up but never served the page: ${v.reason}`); child.kill(); process.exit(1); }
+  if (!v.ok) { console.error(`❌ tunnel came up but never served the page: ${v.reason}`); tunnel.stop(); process.exit(1); }
 
-  fs.writeFileSync(tunnelPath(name), JSON.stringify({ url: publicUrl, localUrl: parsed.href, startedAt: new Date().toISOString(), verified: "reachable" }, null, 2) + "\n");
+  fs.writeFileSync(tunnelPath(name), JSON.stringify({ url: publicUrl, localUrl: parsed.href, transport: tunnel.kind, startedAt: new Date().toISOString(), verified: "reachable" }, null, 2) + "\n");
   console.log(`✓ tunnel ready: ${publicUrl}\n  ${v.reason}\n  recorded → targets/${name}/tunnel.json (review-qa uses it as the default --draft)\n  next: node harness/review-qa.js file ${name}`);
 
-  const stop = () => { child.kill(); process.exit(0); };
+  const stop = () => { tunnel.stop(); process.exit(0); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  child.on("exit", (code) => { console.error(`cloudflared exited (${code}) — tunnel is DOWN; restart before filing review rounds`); process.exit(code || 1); });
+  tunnel.onExit((code) => { console.error(`tunnel process exited (${code}) — tunnel is DOWN; restart before filing review rounds`); process.exit(code || 1); });
 }
 
 async function main() {
@@ -280,32 +280,20 @@ async function main() {
   const local = await verifyServes(`http://localhost:${port}/`, indexPath(name));
   if (!local.ok) { console.error(`❌ local serve check failed before tunneling: ${local.reason}\n   start it: node harness/serve.js ${name} ${port}`); process.exit(1); }
 
-  const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate"], { stdio: ["ignore", "pipe", "pipe"] });
-  child.on("error", (e) => {
-    console.error(e.code === "ENOENT" ? "cloudflared not found — install it: brew install cloudflared" : `cloudflared failed: ${e.message}`);
-    process.exit(1);
-  });
-
-  let log = "", url = null;
-  const onChunk = (d) => { if (!url) { log += d; url = parseTunnelUrl(log); } };
-  child.stdout.on("data", onChunk);
-  child.stderr.on("data", onChunk);
-
-  const deadline = Date.now() + 30_000;
-  while (!url && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 300));
-  if (!url) { console.error(`❌ no tunnel url within 30s — cloudflared output:\n${log.slice(-800)}`); child.kill(); process.exit(1); }
+  const tunnel = await openTunnel(`http://localhost:${port}`);
+  const url = tunnel.url;
 
   // DNS/edge warm-up: retry the public fetch before declaring the tunnel usable.
   const v = await warmUp(() => verifyServes(url, indexPath(name)));
-  if (!v.ok) { console.error(`❌ tunnel came up but never served the clone: ${v.reason}`); child.kill(); process.exit(1); }
+  if (!v.ok) { console.error(`❌ tunnel came up but never served the clone: ${v.reason}`); tunnel.stop(); process.exit(1); }
 
-  fs.writeFileSync(tunnelPath(name), JSON.stringify({ url, port, startedAt: new Date().toISOString(), verifiedSha256: v.sha256 }, null, 2) + "\n");
+  fs.writeFileSync(tunnelPath(name), JSON.stringify({ url, port, transport: tunnel.kind, startedAt: new Date().toISOString(), verifiedSha256: v.sha256 }, null, 2) + "\n");
   console.log(`✓ tunnel ready: ${url}\n  ${v.reason}\n  recorded → targets/${name}/tunnel.json (review-qa.js uses it as the default --draft)\n  next: node harness/review-qa.js file ${name}`);
 
-  const stop = () => { child.kill(); process.exit(0); };
+  const stop = () => { tunnel.stop(); process.exit(0); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  child.on("exit", (code) => { console.error(`cloudflared exited (${code}) — tunnel is DOWN; restart before filing review rounds`); process.exit(code || 1); });
+  tunnel.onExit((code) => { console.error(`tunnel process exited (${code}) — tunnel is DOWN; restart before filing review rounds`); process.exit(code || 1); });
 }
 
 if (require.main === module) main();

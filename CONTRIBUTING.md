@@ -1,0 +1,10 @@
+# Contributing to pingfusi
+
+This repository is **generated** from a private source repo, so pull requests here cannot be
+merged directly — a merge would be overwritten by the next release.
+
+Contributions are still very welcome. Open an issue, or open a PR to show the change: a
+maintainer ports it into the next release, and your authorship credit comes along with it
+(`Co-Authored-By:` on the release commit).
+
+Bug reports are most useful with the failing command and the output of `pingfusi doctor`.

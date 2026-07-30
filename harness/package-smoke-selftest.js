@@ -45,11 +45,21 @@ const blank = path.join(temp, "blank-repo");
 const home = path.join(temp, "home");
 for (const dir of [publicDir, packDir, extractDir, blank, home]) fs.mkdirSync(dir, { recursive: true });
 
-const built = spawnSync(process.execPath, [BUILD, publicDir, "0.0.0-smoke"], { cwd: KIT, encoding: "utf8" });
+// The released version is the SOURCE package.json's — passing it as argv[3] exercises the
+// generator's version assertion in its passing direction (a mismatch exits 2).
+const SRC_VERSION = JSON.parse(fs.readFileSync(path.join(KIT, "package.json"), "utf8")).version;
+const built = spawnSync(process.execPath, [BUILD, publicDir, SRC_VERSION], { cwd: KIT, encoding: "utf8" });
 ok(built.status === 0, "public generator accepts the integrated motion package and its neutral review vocabulary");
 if (built.status !== 0) {
   process.stdout.write((built.stdout || "") + (built.stderr || ""));
   process.exit(1);
+}
+ok(JSON.parse(fs.readFileSync(path.join(publicDir, "package.json"), "utf8")).version === SRC_VERSION,
+  "generated package.json carries the source package.json version (not a typed argv)");
+{
+  const wrong = spawnSync(process.execPath, [BUILD, path.join(temp, "version-assert"), "9.9.9-not-the-version"], { cwd: KIT, encoding: "utf8" });
+  ok(wrong.status === 2 && /version assertion failed/.test((wrong.stderr || "") + (wrong.stdout || "")),
+    "a version argv that disagrees with package.json aborts instead of overriding it");
 }
 
 let packInfo = null;

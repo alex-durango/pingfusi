@@ -24,6 +24,8 @@ pingfusi draft   <name> push            upload the clone as a HOSTED draft — s
                                         url, survives your machine sleeping (review default)
 pingfusi draft   <name> status|delete   re-verify / delete the hosted draft
 pingfusi tunnel  <name> [--url <dev>]   fallback for apps that truly require a live server
+                                        (named cloudflared tunnel → ngrok → anonymous quick
+                                        tunnel; the last is rate-limited and says so)
 pingfusi sink                           snapshot receiver (:7799)
 pingfusi score   <name>                 live-vs-clone score + delta vs last run
 pingfusi diff    <live> <clone>         raw numeric diff (--visual | strict)

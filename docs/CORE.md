@@ -17,7 +17,7 @@ const core = require("pingfusi/packages/core");
 // core.ping / core.pingResult                          — one question
 // core.review.file / core.review.wait / core.review.verify — a full round
 // core.draft.push / core.draft.status / core.draft.delete  — a hosted draft
-// primitives underneath: core.wire, core.rounds, core.drafts
+// primitives underneath: core.wire, core.rounds, core.drafts, core.tunnel
 ```
 
 The public CLI wraps `core.draft.push` as `pingfusi publish <built-dir|video.mp4>`.
@@ -63,6 +63,20 @@ it satisfies no gate anywhere.
 - `drafts.verifyDraftRecord(record)` re-checks the recorded served-index hash when the
   original build directory is unavailable, as with a generically published artifact.
 - `draft.delete(slug)` removes it.
+
+### `tunnel` — a public url for a LOCAL server (only when a static draft can't do it)
+
+`core.tunnel.startPublicTunnel({ origin | port, allowQuick, hint })` opens the most stable
+transport available — an operator-provisioned **named** cloudflared tunnel, then **ngrok**,
+then (only with `allowQuick`, and with a printed warning) an **anonymous quick tunnel**.
+Anonymous quick tunnels are rate-limited: they 429 under real use, and a throttled url
+mid-round burns a paid round exactly like a dead one. It returns
+`{ url, kind, detail, stop(), onExit(cb) }` and verifies nothing — proving the url serves
+the right bytes is the caller's gate (`harness/tunnel.js` byte-compares; the motion loop
+probes its player). Named-tunnel config comes from `PINGFUSI_TUNNEL_NAME` +
+`PINGFUSI_TUNNEL_HOSTNAME` or `~/.cloudflared/pingfusi-tunnel.json` (`{name, hostname}`);
+it is only ever *run*, never minted. Reach for a tunnel only when a live server is
+genuinely required — static output belongs on `draft.push`.
 
 ### the wire underneath
 

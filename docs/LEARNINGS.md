@@ -121,7 +121,7 @@ sibling, so detect it by what's rendered near the text (`text-decoration` on
 self/ancestor, a short ancestor's `border-bottom`, or a thin rule painted just below
 the text), never by one property on the one element you labelled.
 
-## 12. THE OTHER BIG ONE — an underline measured as a *boolean*, not a *box* (3 review rounds)
+## 12. THE OTHER BIG ONE — an underline measured as a *boolean*, not a *box* (3 human rounds)
 A sign-in label's underline was wrong **three ways in a row** — too thin (1px vs the
 live 2px), too short (it spanned only the text, not the icon+text group → 185px vs
 211px), and vertically drifting — yet **every `--visual` and strict run stayed green**.
@@ -129,8 +129,8 @@ Cause: the capture records `font.underline` as a **boolean** (present / absent).
 sides had *an* underline, so the gate said "match" while the painted line differed in
 thickness, width, and Y. And the underline is drawn by an **ancestor** group's
 `border-bottom` (`.loyalty-name-part`), so `--inspect` on the *text* element never saw
-it either. Each round I patched the one facet the reviewer named with a **hand-tuned
-offset** (`bottom:-3.6px`), so the next facet surfaced and the reviewer had to point
+it either. Each round I patched the one facet the human named with a **hand-tuned
+offset** (`bottom:-3.6px`), so the next facet surfaced and the human had to point
 again — and the positioned `<span>` rasterised unlike a real `border`, failing the
 flicker test even when the number was ~0.01px.
 **Lesson (general — this is the durable one):** *any* painted mark that isn't the text
@@ -153,22 +153,22 @@ never one property on the element you labelled.
 `-webkit-font-smoothing: antialiased` (lighter); the clone defaulted to `auto`
 (subpixel, heavier). The capture's font metrics didn't include smoothing, so the
 regression sweep was **blind**; only the full-computed-style `--inspect` surfaced it —
-after a reviewer pointed.
+after a human pointed.
 **Lesson:** `-webkit-font-smoothing` / `-moz-osx-font-smoothing` change *perceived
 weight* without changing `font-weight`. Set `antialiased` / `grayscale` on the clone
 root by default (most design systems do).
 > 🔒 **Enforced now:** captured as `font.smoothing` and compared by `--visual`.
 
-## 14. Patched the symptom, not the mark — one review round per facet
-The pattern behind #12: when a reviewer flags a mark, the cheap move is to fix exactly the
+## 14. Patched the symptom, not the mark — one human round per facet
+The pattern behind #12: when a human flags a mark, the cheap move is to fix exactly the
 property they named. But a mark has several painted dimensions (a decoration: thickness,
-width, offset, colour, technique), and fixing one leaves the others — so the reviewer
+width, offset, colour, technique), and fixing one leaves the others — so the human
 iterates once per facet. The fixes were hand-tuned offsets that landed the number but
 mismatched the *technique*.
-**Lesson:** on any reviewer flag, **localise the element that actually paints the mark and
+**Lesson:** on any human flag, **localise the element that actually paints the mark and
 reproduce its whole box model + technique in one shot** (PLAYBOOK Phase 6) — same
 element type, `height`, `border`, `box-sizing` — instead of nudging the text with magic
-offsets. Detection is the reviewer; the *first* fix should be measured and complete, not a
+offsets. Detection is the human; the *first* fix should be measured and complete, not a
 one-property patch that guarantees another round.
 > 👁 **The gate can't do this.** The diff tells you *what's* wrong on the element you
 > inspected — not that you inspected the wrong element, patched one facet, or drew it
@@ -210,7 +210,7 @@ This is #10 (invisible blue-on-blue text) generalised from the glyph to its back
 > mark that sits on it (its text leaf now carries the backdrop).
 
 ## 17. The STRUT positioned the text — every leaf property matched, the container's didn't
-Found on the Hacker News header, flagged by a reviewer **after** a green `--visual`
+Found on the Hacker News header, flagged by a human tester **after** a green `--visual`
 (165 comparisons, 0 fails): "the text of the header is a little lower than it should be."
 Live authors `line-height:12pt` (16px) **inline on the td**; the clone matched every
 *measured leaf* exactly — the links' own `line-height` was 12 vs 12 ✓ — but left the td
@@ -237,7 +237,7 @@ painting to **positioning**.
 > on your machine plus a technique mismatch can still be a visible miss on another OS.
 
 ## 18. The DOCUMENT MODE moved the pixels — every computed style was byte-identical
-Found on the Hacker News header, same review round as #17's fix: after byte-matching the
+Found on the Hacker News header, same human round as #17's fix: after byte-matching the
 markup and the strut, the login line still sat 0.25px lower — with the td, span, and
 anchor **identical in every computed property** on both pages (same font, line-height,
 padding, valign, rects). The cause was above CSS entirely: live HN ships **no doctype**,
@@ -265,7 +265,7 @@ hand-tuned offset vs a real border (#12/#14), the sub-tolerance drift that's rea
 rasterisation difference (#15), the strut authored on an ancestor (#17), the quirks-mode
 doctype (#18), plus stripe's `font-feature-settings` and missing element — is
 **self-inflicted by hand-rebuilding**: a reconstruction lands the same numbers by a
-different construction. The evidence: the two hand-rebuilt targets with review burned
+different construction. The evidence: the two hand-rebuilt targets with human QA burned
 **3 rounds (hn)** and **8 rounds (stripe, never converged)** on exactly these misses
 *after* fully green gates — while the one clone built **from the captured DOM** (github)
 passed 3136 comparisons with **0 fails and 0 structural deltas in a single pipeline pass**.
@@ -279,12 +279,12 @@ real CSS + self-hosted fonts); reconstruct only what capture can't express — b
 > the rest, strips scripts/CSP, and **preserves the doctype or its absence byte-for-byte**
 > (#18). Failed downloads exit 1. `harness/capture-build-selftest.js` locks the contract in.
 > 👁 **Still yours:** JS-driven behavior and animated/generative content (a WebGL hero, a
-> marquee) can't be captured statically — reproduce them separately, and spend review
+> marquee) can't be captured statically — reproduce them separately, and spend human QA
 > rounds *there*, not on statics the gate proves. And when the deliverable is a component
 > in your own stack, you're back on the rebuild path — every rule above applies in full.
 
-## 20. The review tool's viewport altered the REFERENCE — the reviewer was comparing against Apple's own fallback
-Found on iphone17, review round 9 — and it was the *reviewer* who solved it. For four
+## 20. The review tool's viewport altered the REFERENCE — the human was comparing against Apple's own fallback
+Found on iphone17, human round 9 — and it was the *reviewer* who solved it. For four
 rounds the reviewer described the camera intro as a static two-part layout (frozen
 phone still + tabs panel below) while insisting a normal browser shows a scroll-morph
 (the phone rotates and *becomes* the tabs panel). Round 9 they caught the mechanism:
@@ -293,12 +293,12 @@ two-part variant** — and the side-by-side compare view's iframe/viewport sizin
 triggers exactly that degradation on the *reference* side. The clone had been judged
 against Apple's own fallback all along ("which is probably why you weren't seeing it
 on your end").
-**Lesson:** the reference the reviewer compares against is not automatically the
+**Lesson:** the reference the human compares against is not automatically the
 experience the designer meant — a responsive/resize-degrading site can serve its
 fallback variant *inside the review tool*, making a correct clone of the full
 experience read as WRONG and a clone of the degraded variant read as RIGHT. This is
-the environment-inversion doctrine (automation sees no-js; the reviewer is the live-side
-instrument) extended one level: **the reviewer's instrument has an environment too.**
+the environment-inversion doctrine (automation sees no-js; the human is the live-side
+instrument) extended one level: **the human's instrument has an environment too.**
 When a reviewer's description of live keeps contradicting what any browser you control
 shows, ask which *variant* of live their tool is rendering before engineering anything.
 > 🔒 **Enforced now:** nothing — this lives above the capture/diff layer entirely.
@@ -664,7 +664,7 @@ tool guarantees and eyeball what it can't:
   `gap`; presence & `text.present`. If the diff is green on
   these, they match — pushing further is fitting sub-pixel noise (#15). *When you find a
   new class of miss, add it to the tool (as underline/smoothing were added), not to a
-  reviewer checklist — that's how it stops recurring.*
+  human checklist — that's how it stops recurring.*
   Before the diff ever runs, the **capture** is gated too: the settle sweeps with an **instant**
   scroll (a smooth-scrolling page would otherwise never move under it — **#27**), refuses a page
   still growing (`stable:false` — RUNBOOK "Build by capture", locked by
@@ -711,7 +711,7 @@ tool guarantees and eyeball what it can't:
 10. **A colour / visibility / underline delta is never "structural."** Read every
     strict row; if `--visual` is green while strict shows a colour miss, `--visual`
     has a hole — a finder resolved a wrapper and the gate narrowed what it compared.
-11. When a reviewer flags one element, run `--inspect` (full computed-style diff), not a
+11. When a human flags one element, run `--inspect` (full computed-style diff), not a
     guess — the paint bucket is the fix list, and "fixed" means it's empty. Resolve
     the element that actually **paints** the flagged mark — it may be an ancestor
     (the underline lived on `.loyalty-name-part`, not the text) — and fix the **whole
@@ -1177,10 +1177,10 @@ sum of the beats that were supposed to be there.
 **(b) `tsc` / `eslint` / render-success / an adversarial agent pre-flight are all ONE witness
 class.** They inspect the *source and the spec* — never whether the intended change reached the
 *artifact*. A 51-agent adversarial pass over the render even *generated* the "too much text,
-too fast" finding and then a skeptic agent argued it away as cosmetic; a reviewer confirmed the
+too fast" finding and then a skeptic agent argued it away as cosmetic; a human confirmed the
 exact defect in one round. This is #37 one layer over: a gate stack built on instruments that
 all read the code inherits the same blind spot on both sides. The only witness that the frame
-shows the intended change is the **rendered frame** — and for a review that a remote reviewer
+shows the intended change is the **rendered frame** — and for a review that a remote human
 will watch, the only fully honest witness is the **served bytes**, not the local render.
 
 **(c) A field dropped from the result envelope is a reviewer's mark the agent never sees.** The
@@ -1209,5 +1209,5 @@ there is not a smaller answer, it is a **wrong** one that reads as complete.
 > covered by `core-selftest`. What has no fixture yet is (a): a byte-shape assertion that a
 > named edit is present in the *output*, not merely in the source. 👁 **Still yours:** whether
 > a launch film actually lands — the whole reason this run existed. Fourteen rounds on one cut,
-> a big share of them spent because a fix the machine reported as done was not; the reviewer
+> a big share of them spent because a fix the machine reported as done was not; the human
 > watching was the only thing that knew.

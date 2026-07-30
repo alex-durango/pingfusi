@@ -140,7 +140,11 @@ const video = read("use-cases/video-review/README.md");
 ok(video.includes("core.review.file") && video.includes('`media_type: "video"`'),
   "video-review files through the generic core review verb in video mode");
 ok(video.includes("Matches the prompt") && video.includes("Needs another pass"),
-  "video-review declares the service's fixed verdict pair");
+  "video-review names the fallback verdict pair used when the round authors none");
+ok(/optional/i.test(video) && video.includes("video_intro") && video.includes("verdict_options"),
+  "video-review teaches that the brief is optional and the questions are the caller's to author");
+ok(/private/i.test(video) && /`title`/.test(video),
+  "video-review warns which field is public on the browsing row");
 ok(/pingfusi publish/.test(video) && /206/.test(video) && /Content-Range/.test(video),
   "video-review demands a Range-serving seekable MP4 before a round is spent");
 ok(video.includes("current_brief") && video.includes("prompt_history") && video.includes("requirements"),

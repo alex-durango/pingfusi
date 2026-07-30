@@ -50,7 +50,7 @@ inner-loop progress signal.
 
 ## Outer loop — the miss protocol (this is the engine)
 
-The valuable event is a reviewer (or your own eyes) flagging something **that a green
+The valuable event is a human (or your own eyes) flagging something **that a green
 `--visual` did not catch**. Don't just patch that one clone — that's how you iterate once
 per site forever. Convert the miss into a kit improvement so it's caught *everywhere, next
 time, automatically*:
@@ -92,7 +92,7 @@ pushing misses down into 🔒 whenever they can be measured.
 Run the **same inner loop** on a new target. Because A's misses became tool checks, B
 starts with a stronger gate — a wrong-thickness underline or a heavier smoothing fails on
 B's first score without anyone re-noticing. B's *new* misses feed the same outer loop.
-Over several sites the pattern converges: fewer review rounds per site, because the gate
+Over several sites the pattern converges: fewer human rounds per site, because the gate
 keeps absorbing what used to need eyes.
 
 Pick diverse targets on purpose — a site with `text-decoration` underlines, one with
@@ -106,7 +106,7 @@ different corner and surfaces a different class of miss to absorb.
 - **Per target:** `scores.jsonl` — `visualFails` trending to 0, then coverage empty, then
   strict deltas each fixed-or-documented. A later run with fewer visual fails is better.
 - **Per kit:** `node harness/regression.js` stays green (no known class of miss can
-  recur), and the **number of review rounds to green trends down** across successive
+  recur), and the **number of human rounds to green trends down** across successive
   targets. That downward trend *is* the kit getting better.
 - **Per gate change:** `node harness/benchmarks/detection-power.js` scores the gate at
   **all-defects-caught / 0-false-positives** (absolute mode, run by regression), and a
@@ -130,7 +130,7 @@ pixel-perfect-kit/
 ├── harness/          the dev framework
 │   ├── new-target.js  scaffold targets/<name>/
 │   ├── capture-build.js  DEFAULT build: clone from the captured live DOM (LEARNINGS #19)
-│   ├── review-qa.js    the review phase: scope-pinned pingfusi rounds as a gate
+│   ├── review-qa.js    the human phase: scope-pinned pingfusi rounds as a gate
 │   ├── serve.js       static server (clone + /tools)
 │   ├── score.js       score live-vs-clone, compare to last run
 │   ├── regression.js  selftest + every fixture + the detection battery

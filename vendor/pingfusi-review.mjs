@@ -2,6 +2,24 @@
 // pingfusi — install the pingfusi review MCP server in your AI client.
 // One command: shows a one-time code, you approve it in the browser
 // (RFC 8628 device flow), your client configs get patched, you're done.
+//
+// THIS FILE IS THE SOURCE — edit it here. It is the single, hand-maintained
+// definition of the pingfusi installer, and nothing regenerates it. It used to
+// be a GENERATED brand fork: scripts/fork-vendor.js rebuilt it from the service
+// repo's cli/index.mjs through a declared transform table, and a selftest failed
+// the suite on any hand-edit. That backend CLI has been retired and the pipeline
+// deleted, so the "never hand-edit" doctrine inverted with it.
+//
+// Two invariants the pipeline used to hold are now kept by
+// harness/installer-selftest.js: VERSION tracks the kit's package.json version
+// (the installer no longer has its own lineage), and the SKILL_BODY payload
+// below must stay byte-in-sync with skill/pingfusi-review/SKILL.md — edit the
+// Markdown first, then mirror it into the payload.
+//
+// What this writes is real state on a user's machine: MCP entries in client
+// configs, rule + skill files, a credentials stash, plus the LEGACY sweep table
+// that cleans up installs from the two earlier brand generations. Change those
+// shapes carefully — an install already on disk is the other half of the contract.
 
 import { writeFile, readFile, mkdir, stat } from "node:fs/promises";
 import { homedir, platform, hostname, userInfo } from "node:os";
@@ -11,9 +29,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 // `open` is imported LAZILY at its single call site (device-flow browser launch): a
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
-// a browser — crash on load in a dependency-less checkout of the standalone fork.
+// a browser — crash on load in a dependency-less checkout of the standalone installer.
 
-const VERSION = "0.3.3";
+const VERSION = "0.13.0";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs

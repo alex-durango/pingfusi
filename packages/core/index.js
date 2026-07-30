@@ -13,6 +13,10 @@ const path = require("path");
 const wire = require("./wire.js");
 const rounds = require("./rounds.js");
 const drafts = require("./drafts.js");
+// Local transport, not a service wire: a public url for a LOCAL server, best provider
+// first. Only builds that truly need a live server should reach for it — static output
+// is `draft.push`, which needs no local process at all.
+const tunnel = require("./tunnel.js");
 const { ping, pingResult } = require("./ping.js");
 
 // ── review.file — file a round and record it in the caller's state file ───────
@@ -64,6 +68,23 @@ function validateReviewSpec(spec) {
   validateOptions(spec.verdict_options, "verdict_options");
   if (spec.n_target !== undefined && (!Number.isInteger(spec.n_target) || spec.n_target < 1 || spec.n_target > wire.MAX_REVIEW_RESULTS)) {
     throw new ReviewSpecError(`n_target must be a whole number from 1 to ${wire.MAX_REVIEW_RESULTS}; got ${JSON.stringify(spec.n_target)}`);
+  }
+  if (spec.media_type === "video") {
+    if (!spec.video_url) {
+      throw new ReviewSpecError("video rounds need a video_url — a public, seekable MP4");
+    }
+    if (spec.url || spec.draft_url) {
+      throw new ReviewSpecError("video rounds refuse url and draft_url; the video is the artifact");
+    }
+    // The brief, the requirements and the questions are each optional, but a
+    // reviewer handed none of them has a player and a verdict button and no
+    // idea what you wanted. The service refuses this too; catching it here
+    // costs no round trip and no credits.
+    if (!spec.current_brief && !spec.requirements && !steps.length && !spec.video_intro) {
+      throw new ReviewSpecError(
+        "a video round needs something for the reviewer to answer: current_brief, requirements, steps, or video_intro"
+      );
+    }
   }
 }
 
@@ -174,7 +195,7 @@ async function draftDelete(slug) {
 }
 
 module.exports = {
-  wire, rounds, drafts,
+  wire, rounds, drafts, tunnel,
   ping, pingResult,
   review: { file: reviewFile, wait: reviewWait, verify: reviewVerify },
   draft: { push: draftPush, status: draftStatus, delete: draftDelete },
