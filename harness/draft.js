@@ -33,6 +33,37 @@ const { BASE } = require("../packages/core/wire.js");
 const { api, buildManifest, fetchOrExplain, rewriteAssetRefs, verifyDraftServes, verifyDraftRecord, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, SLUG_RE } = require("../packages/core/drafts.js");
 
 const WORK = process.cwd();
+
+// Uploads ride pooled HTTP sockets, and a socket the far side already closed
+// surfaces as UND_ERR_SOCKET / EPIPE mid-PUT — transient by nature (observed
+// dropping a 3.9MB video from an otherwise-clean 56-file push, which then
+// shipped a draft with no mp4 fallback). Signed upload urls stay valid across
+// attempts, so a same-url retry is safe; only network-layer failures and
+// 5xx/429 retry — a 4xx is a real refusal and still throws immediately.
+// A file that exhausts its attempts fails the WHOLE push: a hosted draft with
+// a silently missing file verifies clean at index.html and then lies to every
+// browser that needed that file.
+async function putWithRetry(relPath, url, buf, { attempts = 4, delayMs = 500 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    let r;
+    try {
+      r = await fetchOrExplain(`upload ${relPath}`, url, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: buf, signal: AbortSignal.timeout(120_000) });
+    } catch (e) {
+      if (attempt >= attempts) throw new Error(`${e.message} — after ${attempts} attempts; nothing uploaded for this file, push aborted`);
+      console.log(`  retrying ${relPath} (${attempt}/${attempts - 1}): ${e.message}`);
+      await new Promise((res) => setTimeout(res, delayMs * 2 ** (attempt - 1)));
+      continue;
+    }
+    if (r.ok) return r;
+    if ((r.status >= 500 || r.status === 429) && attempt < attempts) {
+      console.log(`  retrying ${relPath} (${attempt}/${attempts - 1}): HTTP ${r.status}`);
+      await new Promise((res) => setTimeout(res, delayMs * 2 ** (attempt - 1)));
+      continue;
+    }
+    throw new Error(`upload ${relPath} → HTTP ${r.status}${attempt > 1 ? ` (after ${attempt} attempts)` : ""}`);
+  }
+}
+
 const targetDir = (name) => path.join(WORK, "targets", name);
 const cloneDir = (name) => path.join(targetDir(name), "clone");
 const draftPath = (name) => path.join(targetDir(name), "draft.json");
@@ -56,8 +87,7 @@ async function push(name) {
 
   for (const u of created.uploads) {
     const buf = fs.readFileSync(path.join(dir, u.path));
-    const r = await fetchOrExplain(`upload ${u.path}`, u.url, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: buf, signal: AbortSignal.timeout(120_000) });
-    if (!r.ok) throw new Error(`upload ${u.path} → HTTP ${r.status}`);
+    await putWithRetry(u.path, u.url, buf);
   }
   await api(`/api/draft/${slug}/finalize`, { method: "POST" });
 
