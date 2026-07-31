@@ -128,7 +128,7 @@ const DEFAULT_REVIEW_RESULTS = 1;
 const MAX_REVIEW_RESULTS = 20;
 
 /** The service's default renewable idle lease for agent-filed work. */
-const DEFAULT_AGENT_LEASE_SECONDS = 60;
+const DEFAULT_AGENT_LEASE_SECONDS = 120;
 
 /** One server leg must return before common MCP hosts' ~60s hard timeout. */
 const DEFAULT_WAIT_LEG_SECONDS = 45;

@@ -132,6 +132,15 @@ always tells you what's next):**
    not a failure. The gate passes only on an explicit approving verdict pick;
    comments alone never pass, however positive.
 
+   **Everything a reviewer opens is HOSTED — reach for a tunnel last.** If the thing
+   under review is NOT this clone target — a page or route in your OWN app, an
+   externally-built draft, any static export or file — build/export it and
+   `pingfusi publish <built-dir>` (hosted, immutable, preferred; `--target {{NAME}}`
+   records it as this target's draft), then file against the url it prints. No tunnel,
+   no preview deploy, no deployment-protection detour. A tunnel is the LAST resort and
+   only when the thing under review genuinely requires a live server — login, session,
+   backend.
+
    **A pre-review gate blocked by the ENVIRONMENT never ends the run unfiled.** The
    ladder, in order: (1) the remedy the gate's refusal names (e.g. hidden tabs →
    `pingfusi behavior-capture {{NAME}}`); (2) `pingfusi assist {{NAME}} --compare` when a

@@ -6,6 +6,7 @@
 //   - verifyServes: byte-identical → ok; different bytes → named mismatch; missing → unreachable
 //   - review-qa file-time integration: no draft/tunnel record + no --draft → the refusal
 //     leads with the hosted-draft push and keeps the tunnel as the live-server fallback
+//   - the publish nudge's detector: one obvious built dir → name it; ambiguous → silence
 // The transport itself (named → ngrok → quick, and the 429 warning) is guarded next door
 // in packages/core/tunnel-selftest.js — this file owns the clone-workflow policy around it.
 // Run: node harness/tunnel-selftest.js   (regression.js runs it too)
@@ -16,7 +17,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { pathToFileURL } = require("url");
-const { parseTunnelUrl, publicUrlForLocal, verifyServes, looksLikeSink } = require("./tunnel.js");
+const { parseTunnelUrl, publicUrlForLocal, verifyServes, looksLikeSink, publishableBuildDir } = require("./tunnel.js");
 
 let failed = 0;
 const check = (label, ok, detail) => {
@@ -45,6 +46,25 @@ check(
 check("400 + 'empty body' IS the sink", looksLikeSink(400, "empty body for pxprobe.json — capture returned nothing (the finder/injection likely failed)."));
 check("200 from some other server is NOT the sink", !looksLikeSink(200, "ok"));
 check("a 400 with different text is NOT the sink", !looksLikeSink(400, "Bad Request"));
+
+// ── the publish nudge's detector ──────────────────────────────────────────────
+// Paid for by a real run: an agent whose deliverable was a route in its OWN app never
+// discovered `pingfusi publish`, so it reached for a tunnel, then a preview deploy, then a
+// deployment-protection bypass token — to host a static build the kit hosts for free. The
+// tunnel now says so when it can see the build. It must stay a HINT, which means the
+// detector must never guess: exactly one obvious built dir, or silence.
+{
+  const bd = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-build-"));
+  check("no built dir → no nudge (nothing to publish, say nothing)", publishableBuildDir(bd) === null);
+  fs.mkdirSync(path.join(bd, "dist"));
+  check("a dist/ with no index.html is not a publishable build", publishableBuildDir(bd) === null);
+  fs.writeFileSync(path.join(bd, "dist", "index.html"), "<html></html>");
+  check("exactly one obvious built dir → nudge names it", publishableBuildDir(bd) === "dist");
+  fs.mkdirSync(path.join(bd, "out"));
+  fs.writeFileSync(path.join(bd, "out", "index.html"), "<html></html>");
+  check("two candidates is AMBIGUOUS → silence, never a guessed path", publishableBuildDir(bd) === null);
+  fs.rmSync(bd, { recursive: true, force: true });
+}
 
 // ── verifyServes (file:// — offline) ─────────────────────────────────────────
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-tunnel-"));

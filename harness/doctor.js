@@ -206,7 +206,7 @@ function main() {
     checkNode(process.versions.node),
     checkMotionEngine(process.versions.node, require("path").join(__dirname, "..", "packages", "motion")),
     checkKitVersion(require(require("path").join(__dirname, "..", "package.json")).version, npmLatestVersion()),
-    checkBinary("cloudflared", ["--version"], "OPTIONAL — only `pingfusi tunnel --url` (live dev-server drafts) needs it; the default clone flow is tunnel-free", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
+    checkBinary("cloudflared", ["--version"], "OPTIONAL — most flows never need it: `pingfusi publish <built-dir>` hosts any static build with no tunnel at all; cloudflared is only for `pingfusi tunnel --url`, when an app genuinely requires its own live dev server", "brew install cloudflared   (or https://developers.cloudflare.com/cloudflared)", false),
     checkReviewToken(resolveToken),
     checkChrome(require("./chrome.js").resolveChrome),
     checkBinary("ffmpeg", ["-version"], "optional — frame-level video verification", "brew install ffmpeg", false),

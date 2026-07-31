@@ -56,8 +56,8 @@ console.log("core-selftest — the extracted four-verb core (wire/rounds/drafts/
     "service caps mirrored kit-side: 20 steps / 300-char step text / 40-char options");
   ok(wire.DEFAULT_REVIEW_RESULTS === 1 && wire.MAX_REVIEW_RESULTS === 20,
     "review result depth: default 1, service range up to 20");
-  ok(wire.DEFAULT_AGENT_LEASE_SECONDS === 60,
-    "agent-filed work mirrors the service's one-minute renewable idle lease");
+  ok(wire.DEFAULT_AGENT_LEASE_SECONDS === 120,
+    "agent-filed work mirrors the service's two-minute renewable idle lease (one wait leg plus turnaround of slack)");
   ok(wire.DEFAULT_WAIT_LEG_SECONDS === 45,
     "automatic continuation legs return before common one-minute MCP timeouts");
   ok(wire.DEFAULT_SEND_WAIT_SECONDS === 0,

@@ -34,8 +34,10 @@
 // link). This file owns the clone-workflow policy around it: the local pre-check, the DNS
 // warm-up, the byte-compare gate, and the recorded receipt.
 //
-// Needs `cloudflared` on PATH (brew install cloudflared) or an authenticated ngrok. For a
-// STATIC clone you need no tunnel at all — `pingfusi draft <name> push` hosts it.
+// Needs `cloudflared` on PATH (brew install cloudflared) or an authenticated ngrok. For
+// anything STATIC you need no tunnel at all — `pingfusi draft <name> push` hosts a clone
+// target, `pingfusi publish <built-dir>` hosts any other build or file (a route in your
+// own app, an external build, an export). Tunnel only what genuinely needs a live server.
 "use strict";
 
 const fs = require("fs");
@@ -59,7 +61,7 @@ const parseTunnelUrl = parseQuickTunnelUrl;
 // this: the failure is fatal and its remedy is the same everywhere, and every mode prints
 // which transport it got so a quick-tunnel round is never a surprise after the fact.
 const NO_TUNNEL_HINT =
-  "install cloudflared (brew install cloudflared) or authenticate ngrok — and note a STATIC clone needs no tunnel at all: `pingfusi draft <name> push` hosts it on the service";
+  "install cloudflared (brew install cloudflared) or authenticate ngrok — and note anything STATIC needs no tunnel at all: `pingfusi draft <name> push` hosts a clone target, `pingfusi publish <built-dir>` hosts any other build or file";
 async function openTunnel(origin) {
   try {
     const t = await startPublicTunnel({ origin, allowQuick: true, timeoutMs: 30_000, hint: NO_TUNNEL_HINT });
@@ -70,6 +72,22 @@ async function openTunnel(origin) {
     process.exit(1);
   }
 }
+
+// A tunnel keeps THIS machine in the loop for as long as the round is open; a hosted push
+// does not. Every mode below is entered with something static already on disk often enough
+// that the nudge is worth one line — an agent that never learns `publish` exists reaches
+// for tunnels, preview deploys and deployment-protection bypasses to solve a problem the
+// kit hosts for free. Strictly a HINT: it prints and the tunnel proceeds, unchanged and
+// undelayed. Detection is deliberately dumb — exactly one obvious built dir with an
+// index.html in it. Two candidates, or none, and we say nothing rather than guess wrong.
+const BUILD_DIR_NAMES = ["dist", "build", "out"];
+function publishableBuildDir(root = WORK) {
+  const found = BUILD_DIR_NAMES
+    .map((d) => path.join(root, d))
+    .filter((d) => fs.existsSync(path.join(d, "index.html")));
+  return found.length === 1 ? path.relative(root, found[0]) || found[0] : null;
+}
+function nudgePublish(line) { if (line) console.error(`  tip: ${line}`); }
 
 // cloudflared is pointed at the dev server's ORIGIN, but the URL handed to the reviewer
 // must still name the page the operator adopted. Without carrying this suffix across,
@@ -232,6 +250,9 @@ async function urlMain(name, localUrl) {
   const local = await probeUrl(parsed.href);
   if (!local.ok) { console.error(`❌ local server check failed before tunneling: ${local.reason}\n   start your build's dev server first (e.g. npm run dev)`); process.exit(1); }
 
+  const built = publishableBuildDir();
+  nudgePublish(built && `${built}/ looks like a self-contained build — \`pingfusi publish ${built} --target ${name}\` hosts it with no tunnel at all`);
+
   const tunnel = await openTunnel(parsed.origin);
 
   const publicUrl = publicUrlForLocal(tunnel.url, parsed);
@@ -280,6 +301,9 @@ async function main() {
   const local = await verifyServes(`http://localhost:${port}/`, indexPath(name));
   if (!local.ok) { console.error(`❌ local serve check failed before tunneling: ${local.reason}\n   start it: node harness/serve.js ${name} ${port}`); process.exit(1); }
 
+  // The clone dir IS a static build — this mode refused to start without it (above).
+  nudgePublish(`targets/${name}/clone is static — \`pingfusi draft ${name} push\` hosts it with no tunnel at all (or \`pingfusi publish targets/${name}/clone --target ${name}\`)`);
+
   const tunnel = await openTunnel(`http://localhost:${port}`);
   const url = tunnel.url;
 
@@ -297,4 +321,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { parseTunnelUrl, publicUrlForLocal, verifyServes, looksLikeSink, probeSink, probeUrl };
+module.exports = { parseTunnelUrl, publicUrlForLocal, verifyServes, looksLikeSink, probeSink, probeUrl, publishableBuildDir };

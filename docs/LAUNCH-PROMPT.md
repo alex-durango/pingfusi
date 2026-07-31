@@ -51,9 +51,14 @@ Environment notes (operational, not workflow):
   MCP leg returns pending, immediately call `pingfusi_wait` again; never return pending
   to the user or file a duplicate. Each leg renews the short idle lease. Passive
   result/verify reads do not renew idle work.
-- Review drafts: `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified,
-  stable url — no clone tunnel needed). Tunnels remain only for adopted builds running
-  their own dev server (and optionally a sink POST loop, below).
+- Review drafts: whatever the reviewer opens is HOSTED. For the clone target,
+  `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified, stable url — no
+  tunnel). For ANY other static build or file — a page or route in your OWN app, an
+  external build, an exported page, an mp4 — build/export it and
+  `pingfusi publish <built-dir>` (hosted, immutable, preferred; add `--target {{NAME}}`
+  to record it on a target), then file the review against the url it prints. Tunnels are
+  the LAST resort: only when the thing under review genuinely requires a live server
+  (login, session, backend). The sink POST loop below is the one other tunnel use.
 - Delivery: `pingfusi capture open {{NAME}}` FIRST (hosted capture session — the
   default), then every capture delivers in one call from any page:
   pxSend / pxSendDom / pxBehaviorSend to the printed sink_url, and

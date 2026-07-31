@@ -47,6 +47,9 @@ not by the user, and never by you.
      (Phased = settle → freeze animation phase → measure: both sides must measure at a
      FIXED animation phase or never-settling animations fail gates on a correct clone.)
      Drafts are hosted too: `pingfusi draft <NAME> push`. No cloudflared needed.
+     Anything static that is NOT the clone target — a page or route in your own app, any
+     built dir — hosts the same way: `pingfusi publish <built-dir>`. No tunnel, no preview
+     deploy; tunnel only what genuinely needs its own live server.
    - Behavior discovery needs `document.hidden === false`. If your browser tooling reports
      tabs hidden PERMANENTLY (some automation stacks do), skip in-tab discovery — it can
      never pass the gate, and `--force` poisons `done`. Run
