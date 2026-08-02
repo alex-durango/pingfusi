@@ -12,13 +12,17 @@
 //     what a released kit can check is that the file it actually ships is internally
 //     coherent with the code that reads it.
 //
-// Three things are checked:
+// Four things are checked:
 //   1. the generated wire names are exactly the six canonical service tool names
 //   2. the caps + timing in the generated file are the ones wire.js actually exports
 //      (i.e. wire.js really derives them, and did not quietly go back to literals)
 //   3. DOCS DRIFT: every tool name mentioned in shipped prose is a real registered name.
 //      A doc that names a tool the service does not register sends an agent to a
 //      "Tool not found" it cannot diagnose — the docs are part of the wire surface.
+//      Shipped prose includes the vendored installer's RULE_BODY: it is the always-loaded
+//      rules text every agent reads, and unlike SKILL_BODY it has no byte-pinned .md twin.
+//   4. DEAD NAMES: tool names from retired pre-pingfusi generations must never reappear
+//      anywhere in that prose — an installed rules file naming them shipped once already.
 "use strict";
 
 const fs = require("fs");
@@ -179,6 +183,45 @@ ok(
   unknown.length === 0,
   "every tool name in shipped prose is a registered wire name or job alias",
   unknown.slice(0, 20).join("\n      ")
+);
+
+// RULE_BODY lives inside vendor/pingfusi-review.mjs, so the .md walk cannot see it.
+// installer-selftest pins SKILL_BODY to skill/pingfusi-review/SKILL.md (linted above);
+// RULE_BODY has no such twin, so lint the extracted template here.
+const vendorSource = fs.readFileSync(path.join(KIT, "vendor", "pingfusi-review.mjs"), "utf8");
+// Match to the first UNESCAPED closing backtick — RULE_BODY contains escaped
+// backticks (\`), and a lazy [\s\S]*? would silently truncate at one that
+// happened to precede a semicolon, leaving the lints below scanning a stub.
+const ruleBody =
+  vendorSource.match(/const RULE_BODY = `((?:[^`\\]|\\[\s\S])*)`;/)?.[1] ?? "";
+ok(ruleBody.length > 0, "extracted RULE_BODY from the vendored installer");
+const ruleNames = [...ruleBody.matchAll(TOOL_TOKEN)].map((m) => m[0]);
+// Liveness, mirroring the docs lint: RULE_BODY names tools today; a lint over an
+// extraction that stopped matching them would pass vacuously.
+ok(ruleNames.length > 0, `the RULE_BODY lint is live — ${ruleNames.length} tool mention(s)`);
+const ruleUnknown = ruleNames.filter((n) => !KNOWN.has(n));
+ok(
+  ruleUnknown.length === 0,
+  "every tool name in the installer's RULE_BODY is a registered wire name or job alias",
+  ruleUnknown.join(", ")
+);
+
+// ── 4. dead names: retired generations may never return to shipped prose ────
+const DEAD_NAMES = ["ping_review", "request_review_test", "get_test_results", "wait_for_results"];
+const deadHits = [];
+for (const rel of docFiles) {
+  const text = fs.readFileSync(path.join(KIT, rel), "utf8");
+  for (const name of DEAD_NAMES) {
+    if (new RegExp(`\\b${name}\\b`).test(text)) deadHits.push(`${rel}: ${name}`);
+  }
+}
+for (const name of DEAD_NAMES) {
+  if (new RegExp(`\\b${name}\\b`).test(ruleBody)) deadHits.push(`vendor RULE_BODY: ${name}`);
+}
+ok(
+  deadHits.length === 0,
+  "no retired tool name (pre-pingfusi generations) appears in shipped prose",
+  deadHits.join("; ")
 );
 
 console.log(

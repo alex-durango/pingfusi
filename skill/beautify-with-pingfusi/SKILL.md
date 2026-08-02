@@ -102,5 +102,9 @@ content, brand, and behavior as constraints; there is no ground-truth design to 
    the before viewport(s). Keep raw round state and comments private; publish only a
    sanitized before/after visual and approval receipt.
 
-Use `pingfusi ask` only for a consequential mid-build choice with 2–3 concrete options.
-It is advisory and never replaces the approving round.
+Use `pingfusi ask` only for a consequential mid-build choice with 2–3 concrete options,
+and only when the choice is fully expressible in words (a headline's tone, which copy
+angle to lead with). The ask reviewer sees only your question text — never the page or
+the candidates — so a visual choice (type directions, palettes, hero compositions) is
+never an ask: publish the variants (`pingfusi publish` each, or one page showing both)
+and file a review round instead. It is advisory and never replaces the approving round.

@@ -526,16 +526,18 @@ function temporalReviewShaped(question) {
   return /\b(?:animat(?:e|ed|es|ing|ion|ions)|motion|transition|keyframes?|tweens?|springs?|easing|duration|timing|trajectory|velocity|parallax|marquee|scroll[- ](?:linked|driven)|scrolling|playback|frame[- ]by[- ]frame|fps|loop(?:ing|ed)?|stagger(?:ed|ing)?|expand(?:s|ed|ing)|shrink(?:s|ing)?|mov(?:e|es|ed|ing)|rotat(?:e|es|ed|ing|ion)|scal(?:e|es|ed|ing)|fad(?:e|es|ed|ing)|slid(?:e|es|ing)|morph(?:s|ed|ing)|bounc(?:e|es|ed|ing)|puls(?:e|es|ed|ing))\b/i.test(String(question || ""));
 }
 
-// Context the reviewer needs to answer a visual question: the draft + original urls.
-// Draft resolution mirrors `file`'s: the hosted draft first, then the verified tunnel.
+// Context for a text-only poll: name the ORIGINAL site the question is about, as plain
+// text (host + path, no scheme). Polls are one-sided by doctrine, so the draft URL is
+// never sent — on the reviewer's card a URL renders as dead, unclickable text (the
+// retired text-only assist proved a reviewer can't judge a draft from a poll), and the
+// service now warns on scheme-bearing URLs in poll questions. The original's host+path
+// stays: it tells the reviewer WHICH live site the question is about, and they can
+// reach a public site themselves.
 function pollContext(name) {
-  let ctx = "";
-  let draftUrl = null;
-  try { draftUrl = readJson(path.join(targetDir(name), "draft.json")).url; } catch (e) {}
-  if (!draftUrl) { try { draftUrl = readJson(path.join(targetDir(name), "tunnel.json")).url; } catch (e) {} }
-  if (draftUrl) ctx += `\nDraft: ${draftUrl}`;
-  try { ctx += `\nOriginal: ${readJson(path.join(targetDir(name), "target.json")).url}`; } catch (e) {}
-  return ctx;
+  let site = null;
+  try { site = readJson(path.join(targetDir(name), "target.json")).url; } catch (e) {}
+  if (!site) return "";
+  return `\nOriginal site: ${String(site).replace(/^https?:\/\//i, "")}`;
 }
 
 // Shared printer for poll-style answers: 0 once ≥1 answer exists, 1 while pending/expired.
@@ -554,7 +556,7 @@ function pollReport(name, hq, sc, entry) {
 
 // File one micro-poll (shared by `poll` and `assist`): targets 1 completed result (up to
 // 1 credit); the server blocks up to ~300s, so an answer often arrives inside the call.
-// The wire verb is packages/core/ping.js; the kit adds the draft/original url context.
+// The wire verb is packages/core/ping.js; the kit adds the original-site context line.
 async function fileMicroPoll(name, hq, question, choices, assistMeta) {
   const sc = await corePing(question + pollContext(name), { choices });
   const entry = { ping_id: sc.ping_id || null, question, n_target: 1, asked_at: new Date().toISOString(), deadline_seconds: DEFAULT_AGENT_LEASE_SECONDS, last: null, checked_at: null, ...(assistMeta ? { assist: assistMeta } : {}) };

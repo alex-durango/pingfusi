@@ -58,7 +58,9 @@ own source, repeat until an approving verdict.
      refile the page round. Motion never blocks filing or refiling; the reviewer's
      side-by-side look IS the motion review.
 6. **Rules**: all review contact through `pingfusi review <name> …` (never any MCP
-   directly); polls one-sided only; never submit or open a review yourself; screenshots
-   for triage, never as proof of a match. No login? Stop and have the user run
+   directly); polls one-sided only — a poll is text-only and the reviewer sees no page,
+   so it may only ask what the ORIGINAL site does, described in words; never ask a poll
+   to compare, judge, or look at anything (that is the review round's job); never submit
+   or open a review yourself; screenshots for triage, never as proof of a match. No login? Stop and have the user run
    `pingfusi setup` — review rounds require it; there is no offline review path. If
    anything else blocks a round, stop and tell the user what failed.

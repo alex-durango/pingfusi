@@ -373,17 +373,21 @@ Two tools that keep iteration at seconds/minutes instead of full-round scale:
 - **Micro-polls before full rounds.** With a responsive reviewer, ask a 1-result question
   (up to 1 credit)
   mid-round instead of spending a whole test round discovering the answer:
-  `node harness/review-qa.js poll <name> "do the 3 template tiles look right now?"
-  --choices "Yes,No"` (draft+original urls auto-appended; blocks up to ~5 min; answers
-  recorded in review-qa.json). Polls are ADVISORY — the review gate still requires an
-  approving verdict on a full scope-pinned round. Use them to decide, not to certify.
-- **Stalled? The kit composes the poll for you.** When `score`/`status` print STALLED
-  (3 iterations with no progress on one gate), run `pingfusi assist <name>` — it picks the
-  worst failing mark from the gate's own artifacts and files the one-sided question a
-  reviewer can answer in one look. `--compare` files a scoped side-by-side diagnostic
-  round instead (1 result by default — poll first; never satisfies the review gate). One open
-  assist per target; re-check answers free with the printed poll-result/assist-result
-  command between iterations.
+  `node harness/review-qa.js poll <name> "on the real page, does the ticker pause on
+  hover?" --choices "Yes,No"` (blocks up to ~5 min; answers recorded in
+  review-qa.json). Polls are TEXT-ONLY — the reviewer sees just the question, never the
+  draft — so they may only ask what the ORIGINAL site does, described in words; anything
+  about how the draft LOOKS goes through `pingfusi assist <name> --compare` or a refiled
+  round. Polls are ADVISORY — the review gate still requires an approving verdict on a
+  full scope-pinned round. Use them to decide, not to certify.
+- **Stalled? The kit composes the question for you.** When `score`/`status` print STALLED
+  (3 iterations with no progress on one gate), run `pingfusi assist <name> --compare` —
+  it picks the worst failing mark from the gate's own artifacts and files a scoped
+  side-by-side diagnostic round (1 result by default; never satisfies the review gate).
+  `--compare` is required: bare `pingfusi assist` refuses — the text-only assist format
+  is retired ("I don't understand. Send a comparison"). One open assist per target;
+  re-check answers free with the printed poll-result/assist-result command between
+  iterations.
 
 ## A flagged element → exhaustive drill-down (`--inspect`)
 When a reviewer says "*this* looks wrong" (not a full sweep), don't guess the property —

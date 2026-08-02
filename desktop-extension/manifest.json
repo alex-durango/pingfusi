@@ -1,0 +1,60 @@
+{
+  "manifest_version": "0.3",
+  "name": "pingfusi",
+  "display_name": "pingfusi",
+  "version": "0.2.2",
+  "description": "Put a real human reviewer in your agent's loop — your coding agent ships a change, a human reviews it, structured results flow back.",
+  "long_description": "pingfusi puts a review step in your agent's loop. After you build or change a UI you can't *see* the rendered page, *feel* whether an animation is smooth, *use* a real device, or *reach* real third-party side-effects — file those with `pingfusi_review_website` (or `pingfusi_compare_clone` for a clone against its original, `pingfusi_review_video` for a rendered video) and collect verdicts, pinned component comments (with CSS selectors), per-step proof-of-work, and screenshots via `pingfusi_review_results`. `pingfusi_quick_question` is the lighter sibling for quick subjective gut-checks — text-only: the reviewer sees only your question and options, never a page, so anything a reviewer could look at (a website, build, design, draft, or video) gets published (`npx pingfusi publish`) and filed as a review instead.\n\nThis extension connects Claude Desktop to the hosted pingfusi MCP server. Generate a token in one click at pingfusi.com/connect/token, paste it once — it's stored in your OS keychain — and you're done. (Prefer no token at all? Add pingfusi as a remote connector via Settings → Connectors and sign in with OAuth.)",
+  "author": {
+    "name": "pingfusi",
+    "email": "alex@pinghumans.com",
+    "url": "https://github.com/alex-durango"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alex-durango/pingfusi"
+  },
+  "homepage": "https://pingfusi.com",
+  "documentation": "https://pingfusi.com/connect",
+  "support": "https://pingfusi.com/support",
+  "privacy_policies": ["https://pingfusi.com/privacy"],
+  "icon": "icon.png",
+  "license": "MIT",
+  "keywords": ["qa", "verification", "testing", "mcp", "agents"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.mjs"],
+      "env": {
+        "PINGFUSI_TOKEN": "${user_config.token}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "pingfusi_review_website", "description": "Publish your build at a public URL (npx pingfusi publish), then file it — a real human opens it and returns a verdict plus pinned comments." },
+    { "name": "pingfusi_compare_clone", "description": "Compare a clone against its original, side by side, for element-anchored differences." },
+    { "name": "pingfusi_review_video", "description": "Have a rendered video reviewed against its brief, with timestamped comments." },
+    { "name": "pingfusi_review_results", "description": "Collect verdicts, pinned comments, per-step proof, and screenshots." },
+    { "name": "pingfusi_wait", "description": "Block until the review has news (free)." },
+    { "name": "pingfusi_quick_question", "description": "Ask a real human one text-only question — the reviewer sees only your question and optional choices, never a page or URL. If a website or build exists, use pingfusi_review_website instead." },
+    { "name": "pingfusi_quick_question_results", "description": "Read the latest snapshot of a quick question." },
+    { "name": "pingfusi_check_source", "description": "After a compare round flags elements, read the original's authored HTML for exactly those elements (free)." }
+  ],
+  "tools_generated": false,
+  "user_config": {
+    "token": {
+      "type": "string",
+      "title": "pingfusi token",
+      "description": "Generate one in a click at pingfusi.com/connect/token, then paste it here. Stored in your OS keychain, never in plain text. (Prefer no token? Add pingfusi as a remote connector instead — Settings → Connectors.)",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  }
+}

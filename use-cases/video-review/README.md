@@ -45,9 +45,12 @@ brief. Video rounds file through `core.review.file` against a caller-owned state
 
 ## How the loop runs on the core API
 
-1. **Ping.** `pingfusi ask` settles one-off judgment mid-render — two cuts, two
-   pacings — with the candidate URLs in the question context. Advisory; never an
-   approval.
+1. **Ping.** `pingfusi ask` settles one-off judgment mid-render — but only for calls
+   expressible in words (title wording, a VO script line, which brief requirement to
+   prioritize). A ping is text-only: the reviewer cannot open a URL in the question, so
+   "which cut is better?" is never a ping — publish each cut and file a review round
+   per cut (a video round carries exactly one MP4; to compare in one round,
+   concatenate the cuts into a single MP4 first). Advisory; never an approval.
 2. **Draft.** Publish the render as a public, long-lived, SEEKABLE MP4. The service
    probes `video_url` at file time and refuses the round unless the host answers
    Range requests with `206` + `Content-Range` — no burned rounds on a dead or

@@ -111,6 +111,8 @@ when a gate stalls.
 `pingfusi draft <name> push` hosts the clone as a byte-verified public page,
 `pingfusi review <name> file` sends the round and automatically chains client-safe
 wait legs, `verify` records the fresh verdict, `pingfusi wait <ping_id>` continues a
-pending ping, and `pingfusi ask` settles one-off judgment calls mid-run.
+pending ping, and `pingfusi ask` settles one-off judgment calls mid-run — words-only:
+the ask reviewer sees just the question text, so anything about how the clone looks
+goes through the compare view or a review round.
 
 </details>

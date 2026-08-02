@@ -203,7 +203,7 @@ reinvention:
 
 ## Phase 6 — The reviewer-flagged fix loop (detection → measure → fix → verify)
 Detection stays with a reviewer (or a vision reviewer) — they're the best perceptual
-detector. **The workflow enforces this as the `reviewer` phase**: `node harness/review-qa.js
+detector. **The workflow enforces this as the `review` phase**: `node harness/review-qa.js
 file <name> --draft <public-url>` files a scope-pinned pingfusi side-by-side (per-leaf
 steps from coverage.json; one structured temporal answer reroutes to motion declaration), and the gate passes only on
 a fetched approving verdict — a rejection's notes are your flag list for the loop below,

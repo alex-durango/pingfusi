@@ -26,8 +26,10 @@ side-by-side compare view) is a later investment, not a prerequisite.
 
 ## The four sections every use case defines
 
-1. **When to ping** — the moment in the agent's work where a judgment call appears
-   and one advisory answer (1 credit) beats guessing.
+1. **When to ping** — the moment in the agent's work where a judgment call appears,
+   one advisory answer (1 credit) beats guessing, and the question is answerable from
+   its text alone (the ping card carries no URL or media; a judgment about something
+   visible belongs in section 2's published artifact and a review round).
 2. **What to publish** — the reviewable artifact, and how it becomes a public
    byte-verified URL (Pingfusi hosting for self-contained builds and MP4s; a tunnel only
    for an app that genuinely requires a live server).

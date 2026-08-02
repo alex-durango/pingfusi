@@ -35,6 +35,10 @@ re-fetches the answers later for free but is a passive snapshot. The normal send
 automatically chains 45-second wait legs until feedback or caller cancellation.
 **Advisory by doctrine:** a ping buys an answer, never an approval —
 it satisfies no gate anywhere.
+**Text-only by wire:** the ping carries the question string, optional choices, and
+context text — no URL, no media, no draft reference, and the reviewer's card renders it
+all as plain text. Anything a reviewer must see goes through `draft.push` +
+`review.file`.
 
 ### `review` — file (send + wait) → verify, against a state file the caller owns
 

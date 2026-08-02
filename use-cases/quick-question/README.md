@@ -29,16 +29,28 @@ satisfies no gate, approves no work, and never substitutes for a review round wi
 verdict. When the ask is "is this DONE?", that is the [Review anything](../review-anything/README.md)
 job (or a specialized one), not a quick question.
 
+**The other rule: text-only.** The reviewer receives ONLY the question string and the
+tappable options — no URL opens, no image renders, no page loads. A question about
+anything a reviewer would need to SEE (a page, design, build, or video) is not a quick
+question: publish it (`pingfusi publish`) and file [Review anything](../review-anything/README.md)
+or the specialized job instead, however small the question.
+
 **When to use it**
 
-- Two candidates, one judgment: taglines, type directions, color moods, hero crops.
-- A gut-check a machine can't score: "is this copy clear?", "does this feel premium?"
-- Anywhere in ANY job's loop: mid-clone, mid-beautify, mid-render — one credit,
-  one answer, keep moving.
+- Two candidates, one judgment — when both fit in the question text: taglines, names,
+  copy angles, error-message wording, pricing-tier labels.
+- A gut-check a machine can't score and words can carry: "which of these two intros
+  reads clearer?", "is $12/mo a believable price for this?"
+- NOT: two hero crops, color directions, or "does this feel premium?" about a page —
+  the reviewer can't see them. Publish the variants and file a review round.
+- Anywhere in ANY job's loop — for questions answerable from the text alone; mid-loop
+  questions about how the draft LOOKS go through the loop's own review or compare
+  channel.
 
 **Reviewer surface: the generic card.** The question, optional tappable options, and a
 notes field. No custom UI, no publishing step, no verdict machinery — that is what
-keeps it fast.
+keeps it fast. "No publishing step" also means the reviewer sees nothing but your
+words: a question that needs eyes on the work is a review, not a quick question.
 
 **Where it lives.** CLI: `pingfusi ask` (state in `~/.pingfusi/asks/<ping_id>.json`).
 API: `core.ping` / `core.pingResult` ([docs/CORE.md](../../docs/CORE.md)). `core.ping`

@@ -11,7 +11,10 @@ pingfusi where                          print the installed kit's directory
 pingfusi remove                         clean uninstall (also sweeps older-generation installs)
 
 pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]
-                                        one advisory question to a human reviewer, from any directory
+                                        one advisory question to a human reviewer, from any
+                                        directory. text-only: the reviewer sees just the question
+                                        string — anything they must look at goes through
+                                        `pingfusi publish` + a review round instead
 pingfusi ask result <ping_id>           passive answer snapshot (free; does not renew)
 pingfusi publish <built-dir|video.mp4>  host a self-contained site or seekable MP4
                                         (`--target`, `--record`, and `--json` available)

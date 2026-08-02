@@ -35,10 +35,13 @@ minutes, so the agent is the bottleneck, not the reviewer:**
 - After a scoped fix, re-capture only the affected targets and fold them in with
   `node tools/merge-snapshot.js` — full N-target re-captures are for the final
   pass only (the done gate enforces one clean full capture at the end).
-- When a fix's acceptability is uncertain (contested content, blur quality,
-  "is this what they meant?"), use a 1-result micro-poll (up to 1 credit) —
-  `pingfusi review {{NAME}} poll "…" --choices "Yes,No"` — BEFORE burning a full test
-  round on it. Polls advise; only full rounds satisfy the review gate.
+- When a question about the LIVE page is uncertain and words can carry it ("does the
+  ticker pause on hover on the real site?", "does the original autoplay muted?"), use a
+  1-result micro-poll (up to 1 credit) — `pingfusi review {{NAME}} poll "…" --choices
+  "Yes,No"` — BEFORE burning a full test round on it. Polls are text-only: the reviewer
+  sees just the question, never the clone, so anything about how a fix LOOKS (blur
+  quality, "is this what they meant?") is `pingfusi assist {{NAME}} --compare` or a
+  refiled round, not a poll. Polls advise; only full rounds satisfy the review gate.
 - Stalled on a gate (score/status print STALLED after 3 no-progress iterations)?
   `pingfusi assist {{NAME}} --compare` composes the question FOR you from the failing
   gate's own artifacts and files a scoped side-by-side diagnostic round (1 result by
@@ -57,11 +60,13 @@ minutes, so the agent is the bottleneck, not the reviewer:**
   the review MCP tools directly.** Direct calls are invisible to the
   workflow (no recorded round → the review gate can't verify the answer) and
   skip the kit's template. And know the two shapes: **a poll may reference ONE
-  side only** (a live-observation or taste question — "on the real page, does
-  X scrub?"); any question naming BOTH the clone and the live page is a
-  COMPARISON and must be a **filed test** (`pingfusi review {{NAME}} file
-  [--region "…"]`) so the reviewer gets the side-by-side + align view +
-  pinned comments. The poll command refuses comparison-shaped questions.
+  side only, in words** (a live-observation question — "on the real page, does
+  X scrub?" — the poll is text-only, so the reviewer answers from what the
+  question says and what they can check on the live site themselves); any
+  question naming BOTH the clone and the live page is a COMPARISON and must be
+  a **filed test** (`pingfusi review {{NAME}} file [--region "…"]`) so the
+  reviewer gets the side-by-side + align view + pinned comments. The poll
+  command refuses comparison-shaped questions.
 - Before every `reviewer file`: self-QA the dynamics (overlay/flicker-compare the
   clone vs live at 2–3 rotation/reveal states) — a defect you catch yourself
   costs seconds; one the reviewer catches costs a round.

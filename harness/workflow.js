@@ -1266,7 +1266,8 @@ function finalMotionLifecyclePatch(managed, item, workDir = WORK) {
 const HELP = `pingfusi — put your agent's work in front of a real human, and iterate until they approve
 
 THE MENU — pick a job (definitions: use-cases/README.md)
-  Quick question           one answer to one question, fast — advisory, never an approval
+  Quick question           one answer to one TEXT-ONLY question (the reviewer sees just
+                           your words — anything to look at is a review) — advisory, never an approval
   Review anything          pinned comments + a verdict on whatever you publish
   Copy Anything            clone a site pixel-perfect — the gated pipeline below
   Website beautification   professional polish, no reference design (skill: beautify-with-pingfusi)
@@ -1285,8 +1286,10 @@ THE MENU — pick a job (definitions: use-cases/README.md)
 THE EVERYDAY JOBS
   pingfusi ask     "question" [--options "A,B,C"] [--context "…"]   QUICK QUESTION: one human, one answer,
                                                      from ANY directory — no target, no workspace (state:
-                                                     ~/.pingfusi/asks/<ping_id>.json). 1 result, advisory;
-                                                     the answer often arrives inside the call (docs/CORE.md)
+                                                     ~/.pingfusi/asks/<ping_id>.json). 1 result, advisory,
+                                                     TEXT-ONLY (a pasted URL is dead text — publish + review
+                                                     for anything visible); the answer often arrives inside
+                                                     the call (docs/CORE.md)
   pingfusi ask     result <ping_id>                  collect the ask's answer + notes (free re-fetch)
   pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]
                                                      upload a self-contained website or video to Pingfusi

@@ -7,7 +7,7 @@ its own rules, its own reviewer surface.
 
 | job | status | what a human sends back |
 |---|---|---|
-| [quick-question/](quick-question/README.md) | **available** | one answer to one question — fast, advisory, never an approval |
+| [quick-question/](quick-question/README.md) | **available** | one answer to one text-only question — fast, advisory, never an approval; the reviewer sees only your words, so anything they must look at routes to a review job |
 | [review-anything/](review-anything/README.md) | **available** | pinned comments + a verdict on whatever you publish |
 | [copy-anything/](copy-anything/README.md) | **available** | approval only when the clone truly matches — animations included |
 | [beautify/](beautify/README.md) | coming | element-pinned taste feedback until the page looks professionally designed |

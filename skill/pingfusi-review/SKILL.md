@@ -1,6 +1,6 @@
 ---
 name: pingfusi-review
-description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route quick questions, generic website or artifact reviews, clone comparisons, and video reviews to the matching Pingfusi utility. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
+description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route by what the reviewer must see: text-only judgments to the quick question; websites, builds, and artifacts to a website review against a published URL; clone comparisons and video reviews to their matching Pingfusi utilities. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
 ---
 
 # Route human judgment through Pingfusi
@@ -12,17 +12,23 @@ local browser.
 
 ## Choose the job
 
-Use the smallest job that can answer the question:
+Use the smallest job whose reviewer can actually see the subject:
 
 | Need | Use |
 |---|---|
-| One subjective answer with no approval gate | MCP `pingfusi_quick_question`, or shell `pingfusi ask` |
-| Verdict and pinned feedback on a published website, build, document, or other current artifact | MCP `pingfusi_review_website` |
-| Clone compared side by side with its original | Managed clone CLI when present; otherwise MCP `pingfusi_compare_clone` |
-| Rendered video judged against its current brief and prompt history | MCP `pingfusi_review_video` |
+| One subjective answer, fully expressible in text, with nothing to look at | MCP `pingfusi_quick_question`, or shell `pingfusi ask` |
+| Verdict and pinned feedback on a website, build, document, or other artifact the reviewer must see — publish it first | MCP `pingfusi_review_website` |
+| Clone compared side by side with its original (the reviewer opens both) | Managed clone CLI when present; otherwise MCP `pingfusi_compare_clone` |
+| Rendered video judged against its current brief and prompt history (the reviewer watches the MP4) | MCP `pingfusi_review_video` |
 
 A quick question is advisory. Never use it to declare work finished. Work that needs a
 real DONE/NOT-DONE decision requires a review round with an explicit verdict.
+
+A quick question is also blind: the reviewer receives only the question text and options —
+no URL opens, no image renders, and a pasted link is dead text on their device. The moment
+there is anything to look at (a page, build, design, or draft), publish it and file a
+review round instead, however small or subjective the question. A reviewer cannot act on a
+question about something they cannot see.
 
 Use one reviewer by default. Increase the reviewer count only when the user asks for
 broader confidence or the decision's risk clearly justifies the extra cost.

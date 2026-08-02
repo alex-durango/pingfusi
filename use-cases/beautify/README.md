@@ -36,8 +36,11 @@ custom steps through `core.review.file` against a caller-owned state file.
 ## How the loop runs on the core API
 
 1. **Ping.** Use `pingfusi ask` only when one consequential choice would otherwise be a
-   guess: two type directions, two color moods, or two hero compositions. A ping is
-   advisory; it cannot approve the page.
+   guess AND the choice is fully expressible in words: a headline's tone, which copy
+   angle leads, whether the page should feel playful or corporate. A ping is text-only —
+   the reviewer sees just the question, never the page — so visual choices (type
+   directions, color moods, hero compositions) are review rounds: publish the variants
+   and let the reviewer look. A ping is advisory; it cannot approve the page.
 2. **Draft.** Before editing, publish an immutable copy of the untouched production build
    with `pingfusi publish <built-dir> --record <file> --json`. Publish every current build
    the same way under a new URL. A tunnel is only the fallback for an app that genuinely

@@ -27,7 +27,7 @@ see **Benchmark vs gajae-code** below for what we borrowed and what we deliberat
 | 6 | `coverage` | every painted leaf in `coverage.json` has a measured target on **both** pages | machine |
 | 7 | `strict`   | strict deltas are **0**, or every *structural* one is documented in `deviations.json` — a **paint** delta (one that also fails `--visual`) can never be documented away | machine |
 | 8 | `behavior` | every JS-driven dynamic discovered on the LIVE page reproduces or has an honest disposition — an empty/absent discovery pass is never a free pass. Motion bookkeeping (`motion-items.json`) rides along as informational receipt lines only: motion checks are build receipts and warnings, never gate results | machine |
-| 9 | `reviewer`    | the **latest** pingfusi side-by-side round is reviewer-approved — the verdict is re-fetched from the API on every check (a cached approval is never trusted); a rejection surfaces the reviewer's flags as the fix list | machine |
+| 9 | `review`   | the **latest** pingfusi side-by-side round is reviewer-approved — the verdict is re-fetched from the API on every check (a cached approval is never trusted); a rejection surfaces the reviewer's flags as the fix list | machine |
 | 10 | `done`     | **default-FAIL final verification:** every earlier gate is **re-run** against the current artifacts (a recorded pass is not trusted — it must still hold), in order, and no phase may be forced | machine |
 
 **machine** = the gate fully proves it (exit 0 is a fact). **attested** = it can't be fully
@@ -342,7 +342,7 @@ key match between live and clone.
   so any delta is replay infidelity, not page noise (thresholds pinned in
   `packages/motion/src/replay/gate.js`).
 
-### The `reviewer` phase (harness/review-qa.js)
+### The `review` phase (harness/review-qa.js)
 One provider, one contract: every round goes to an INDEPENDENT reviewer on the pingfusi
 service, who opens the hosted draft url (pushed with `pingfusi draft <name> push`; a
 verified tunnel for adopted builds) side by side with the original, pins what looks
@@ -471,8 +471,12 @@ gate against the artifacts on disk — nothing green can be claimed that isn't r
   re-captured subset, so one final full capture is always required.
 - **Micro-polls**: `review-qa.js poll` puts one question in front of a reviewer and targets
   1 completed result (up to 1 credit)
-  mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `reviewer`
-  gate never reads polls; it requires an approving verdict on a full round.
+  mid-round (recorded under `polls` in `review-qa.json`). Advisory only — the `review`
+  gate never reads polls; it requires an approving verdict on a full round. Text-only,
+  too: the reviewer sees just the question, so a poll may only ask about things words can
+  carry — the retired-assist lesson below ("I don't understand. Send a comparison")
+  applies to any poll about how something LOOKS. Use `pingfusi assist <name> --compare`
+  or a refiled round for anything visual.
 - **Assists**: `pingfusi assist <name> --compare` is the stall escalation — it
   auto-composes the question from the failing phase's own artifacts (worst failing diff
   row, uncovered leaf, behavior row) and files a scoped diagnostic round (side-by-side
@@ -498,7 +502,7 @@ no runtime dependency on `gjc`. How the kit's workflow compares:
 
 | dimension | gajae-code (`gjc`) | pixel-perfect-kit (`pingfusi`) |
 |---|---|---|
-| Gated pipeline | `deep-interview → ralplan → ultragoal → execute` | `target → assets → measure → build → visual → coverage → strict → behavior → reviewer → done` |
+| Gated pipeline | `deep-interview → ralplan → ultragoal → execute` | `target → assets → measure → build → visual → coverage → strict → behavior → review → done` |
 | Refuses to advance | ambiguity must drop below a resolved threshold; mutation blocked pre-approval | each phase gate must exit 0; advances refused out-of-order or on a failing gate |
 | Definition of done | checkpoint with `--evidence` + `--quality-gate-json` | a gate command that exits 0 (`--visual` green, coverage closed, strict documented) |
 | Audit trail | `index.jsonl` with `run_id` / `path` / `sha256` per stage | `workflow.jsonl` with `runId` / `artifact` / content-`sha256` per advance — including **refused** advances and forced **resets** |

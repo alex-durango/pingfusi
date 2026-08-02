@@ -52,6 +52,11 @@ Here are some example prompts you can try with the pingfusi MCP.
 | video vibes | `Does my promo video look right? use pingfusi` | feedback pinned to timestamps | |
 | [?] | ask any question that you can think of | real human feedback | |
 
+The first and last rows are text-only polls — the reviewer sees just the question, so
+they only fit questions words can carry. The rows in between publish the work first so
+the reviewer can open it; when in doubt, publish: a reviewer can only judge what they
+can see.
+
 ## How it works
 
 Every job is the same loop underneath:

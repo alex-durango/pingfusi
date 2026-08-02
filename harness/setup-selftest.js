@@ -124,8 +124,15 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
   {
     const { io, logs, runs } = fakeIO({ probes: { cloudflared: true }, answers: [], paths: { pingfusi: "/usr/local/bin/pingfusi" } });
     const r = await setup(io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: true, probeMotionBrowser: motionReady });
-    ok(r.ok && runs.length === 0 && logs.some((l) => /already installed globally/.test(l)), "a persistent global bin counts as installed (no prompt)");
+    ok(r.ok && !runs.some((r2) => /^npm /.test(r2)) && logs.some((l) => /already installed globally/.test(l)), "a persistent global bin counts as installed (no prompt)");
     ok(logs.some((l) => /DITTO_API_KEY found/.test(l)), "a configured ditto API key is reported");
+    // The agent RULES text ships inside the vendored installer and moves with the
+    // package, and the installer is the only thing that rewrites it. This branch used
+    // to run nothing at all, so a logged-in machine kept the rules of whatever version
+    // first installed them — found live, months of re-runs on guidance naming tools the
+    // service no longer registers.
+    ok(runs.length === 1 && /vendor[\\/]pingfusi-review\.mjs rules$/.test(runs[0]) && r.steps.includes("rules-refreshed"),
+      "an already-logged-in re-run still refreshes the installed agent rules");
   }
 
   // ── `pingfusi setup cursor`: the client arg reaches the MCP installer ────────
@@ -143,6 +150,7 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
     const r = await setup(io, { home, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, mcpClient: "codex", probeMotionBrowser: motionReady });
     ok(r.ok && runs.some((r2) => /pingfusi-review\.mjs setup --client codex$/.test(r2)), "existing login + explicit client still runs the installer for that client");
     ok(r.steps.includes("login-client-added"), "the client-add is recorded as its own step");
+    ok(!runs.some((r2) => /pingfusi-review\.mjs rules$/.test(r2)), "an explicit client does NOT also spawn the rules refresh — that installer run already rewrote them");
     const codexSkill = path.join(home, ".codex", "skills", "pixel-perfect-clone", "SKILL.md");
     ok(fs.existsSync(codexSkill), "setup codex installs the clone-routing skill into Codex's native skill directory");
     // PRESERVE contract: a byte-different installed skill may be a user edit — a plain
@@ -194,7 +202,7 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
   {
     const { io, logs, runs } = fakeIO({ probes: { cloudflared: true }, answers: [] });
     const r = await setup(io, { home, sourceCheckout: true, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionReady });
-    ok(r.ok && runs.length === 0, "idempotent re-run: probes pass, nothing executes");
+    ok(r.ok && runs.length === 1 && /pingfusi-review\.mjs rules$/.test(runs[0]), "idempotent re-run: probes pass, nothing installs (the rules self-heal is the only thing that runs)");
     ok(logs.some((l) => /source checkout/.test(l)) && logs.some((l) => /login found/.test(l)), "re-run reports present state (checkout copy, login)");
     ok(r.steps.includes("skills-present"), "already-installed skills are kept, not overwritten");
   }

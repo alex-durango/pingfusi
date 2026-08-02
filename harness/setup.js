@@ -167,6 +167,9 @@ async function setup(io, opts) {
   // exists — the installer reuses the stored login and just patches that client's
   // config. Without this, `pingfusi setup codex` on a logged-in machine was a
   // silent no-op and there was no way to add a second client.
+  // Every branch here except "skipped" reaches the installer for the same reason: it is
+  // the only thing that refreshes the agent rules/skill it wrote (a fresh login and an
+  // explicit client go through `setup`, an existing login through `rules`).
   let token = null;
   try { token = opts.resolveToken(); } catch (e) {}
   if (token && opts.mcpClient) {
@@ -175,6 +178,14 @@ async function setup(io, opts) {
   } else if (token) {
     io.log("✓ review login found  (add another client anytime: pingfusi setup <client>)");
     steps.push("login-present");
+    // …but a login is not the only thing the installer owns: the agent RULES file ships
+    // inside it and changes with the package. This branch used to run nothing at all, so
+    // a logged-in machine kept the rule text of whatever version first installed it —
+    // found live, months of `pingfusi setup` re-runs on guidance naming dead tools. The
+    // installer's `rules` command rewrites ONLY an already-installed rule/skill (its own
+    // file, or its managed block), so on a machine it never touched this is a no-op.
+    io.run(process.execPath, [path.join(PKG, "vendor", "pingfusi-review.mjs"), "rules"]);
+    steps.push("rules-refreshed");
   } else if (saidYes(await io.ask("review login + MCP install (remote review rounds, small credits) — log in now? [Y/n] "), io.isTTY)) {
     io.run(process.execPath, [path.join(PKG, "vendor", "pingfusi-review.mjs"), "setup"].concat(opts.mcpClient ? ["--client", opts.mcpClient] : []));
     steps.push("login-run");

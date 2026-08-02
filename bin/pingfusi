@@ -8,7 +8,9 @@
 //   pingfusi wait|whoami|rules|remove|uninstall   → the MCP installer
 //   pingfusi version                              → this package's version
 //   pingfusi setup / everything else              → the kit (setup's login step runs the
-//                                                   installer's device flow itself)
+//                                                   installer itself: the device flow, or
+//                                                   `rules` when a login already exists —
+//                                                   the installer owns the agent rules text)
 "use strict";
 const path = require("path");
 

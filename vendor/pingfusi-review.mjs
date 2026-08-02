@@ -31,7 +31,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone installer.
 
-const VERSION = "0.13.2";
+const VERSION = "0.13.3";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -116,8 +116,8 @@ Do not use Pingfusi for objective questions you can verify directly with determi
 
 Choose the smallest matching job:
 
-- One subjective question with no approval gate: \`pingfusi_quick_question\` (or \`pingfusi ask\` from the shell).
-- A verdict and pinned feedback on a published website, build, or other current artifact: \`pingfusi_review_website\`.
+- One subjective question, fully expressible in text, with nothing to look at: \`pingfusi_quick_question\` (or \`pingfusi ask\` from the shell). It is text-only — the reviewer sees just the question and options, and a pasted URL does not open. Never use it to ask about a website, build, design, or anything else a reviewer would need to see.
+- A verdict and pinned feedback on a website, build, or other current artifact the reviewer must see — publish it first (\`pingfusi publish <built-dir>\` hosts it at a public URL; a remote reviewer cannot open localhost): \`pingfusi_review_website\`.
 - A clone compared with its original: use the managed clone workflow when present; otherwise \`pingfusi_compare_clone\`.
 - A rendered video judged against its brief and prompt history: \`pingfusi_review_video\`.
 
@@ -128,7 +128,7 @@ When the repository contains \`targets/<name>/workflow.json\`, the CLI owns clon
 
 const SKILL_BODY = `---
 name: pingfusi-review
-description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route quick questions, generic website or artifact reviews, clone comparisons, and video reviews to the matching Pingfusi utility. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
+description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route by what the reviewer must see: text-only judgments to the quick question; websites, builds, and artifacts to a website review against a published URL; clone comparisons and video reviews to their matching Pingfusi utilities. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
 ---
 
 # Route human judgment through Pingfusi
@@ -140,17 +140,23 @@ local browser.
 
 ## Choose the job
 
-Use the smallest job that can answer the question:
+Use the smallest job whose reviewer can actually see the subject:
 
 | Need | Use |
 |---|---|
-| One subjective answer with no approval gate | MCP \`pingfusi_quick_question\`, or shell \`pingfusi ask\` |
-| Verdict and pinned feedback on a published website, build, document, or other current artifact | MCP \`pingfusi_review_website\` |
-| Clone compared side by side with its original | Managed clone CLI when present; otherwise MCP \`pingfusi_compare_clone\` |
-| Rendered video judged against its current brief and prompt history | MCP \`pingfusi_review_video\` |
+| One subjective answer, fully expressible in text, with nothing to look at | MCP \`pingfusi_quick_question\`, or shell \`pingfusi ask\` |
+| Verdict and pinned feedback on a website, build, document, or other artifact the reviewer must see — publish it first | MCP \`pingfusi_review_website\` |
+| Clone compared side by side with its original (the reviewer opens both) | Managed clone CLI when present; otherwise MCP \`pingfusi_compare_clone\` |
+| Rendered video judged against its current brief and prompt history (the reviewer watches the MP4) | MCP \`pingfusi_review_video\` |
 
 A quick question is advisory. Never use it to declare work finished. Work that needs a
 real DONE/NOT-DONE decision requires a review round with an explicit verdict.
+
+A quick question is also blind: the reviewer receives only the question text and options —
+no URL opens, no image renders, and a pasted link is dead text on their device. The moment
+there is anything to look at (a page, build, design, or draft), publish it and file a
+review round instead, however small or subjective the question. A reviewer cannot act on a
+question about something they cannot see.
 
 Use one reviewer by default. Increase the reviewer count only when the user asks for
 broader confidence or the decision's risk clearly justifies the extra cost.
@@ -236,9 +242,13 @@ try {
     track("version");
     await refreshStaleRules().catch(() => {});
   } else {
-    // Even a bare/unknown invocation heals stale rules — `npx pingfusi`
-    // always runs the newest package, so this is the "auto-update on
-    // package update" path.
+    // Bare/unknown invocation. Only reachable when this file is run DIRECTLY (the
+    // standalone installer) — the kit's bin/pingfusi hands us just
+    // wait/whoami/rules/remove/uninstall and keeps `version` and everything else,
+    // including a bare `pingfusi`, for itself. So this is NOT the "every invocation
+    // heals" path it was once described as; the kit's own heal is `pingfusi setup`,
+    // which reaches refreshStaleRules() through `rules` (harness/setup.js) or
+    // through setup() → patchRules().
     await refreshStaleRules().catch(() => {});
     printHelp();
     process.exit(cmd ? 1 : 0);
@@ -899,13 +909,26 @@ async function removeLegacyRuleFiles(client) {
 
 // ─── Stale-rules self-healing ───────────────────────────────────────────────
 //
-// The rules text evolves with the product, but installs only rewrote it on
-// `setup`. Now ANY invocation of the CLI (npx fetches the latest package)
-// silently refreshes a previously-installed-but-outdated block. Files we
-// never touched are left alone — presence of our marker (Claude Code) or our
-// dedicated file (Cursor) is the consent signal.
+// The rules text evolves with the product, but a first `setup` is the only thing
+// that writes it — so an install goes stale the moment the package moves on.
+// This is the heal. Reached from exactly three places, all of them real (it once
+// claimed "any invocation of the CLI", which was never true through the kit's bin:
+// bin/pingfusi routes only wait/whoami/rules/remove/uninstall here, so `pingfusi
+// next`, `pingfusi review`, and a bare `pingfusi` never touch this file):
+//
+//   1. `pingfusi rules` — the explicit, verbose refresh.
+//   2. `pingfusi setup` — the login step. A fresh login and an explicit
+//      `setup <client>` rewrite the rules through setup() → patchRules(); an
+//      ALREADY-logged-in re-run spawns `rules` from harness/setup.js, which is
+//      the common path and used to run nothing at all.
+//   3. a direct/standalone invocation of this file (`node pingfusi-review.mjs`,
+//      with or without a command) — the paths below the kit's bin never sees.
+//
+// Files we never touched are left alone — presence of our dedicated file (Cursor,
+// Claude Code) or our managed marker (pre-0.1.0 Claude Code) is the consent signal.
 async function refreshStaleRules({ verbose = false } = {}) {
   const updated = [];
+  const backedUp = [];
 
   for (const client of ["claude-code", "cursor"]) {
     // Consent signal: our rule file exists (current installs) or our legacy
@@ -928,6 +951,14 @@ async function refreshStaleRules({ verbose = false } = {}) {
     const skillCurrent =
       (await readFile(skillPath(client), "utf8").catch(() => "")) === SKILL_BODY;
     if (!ruleCurrent || !skillCurrent) {
+      // Back up ONLY what this refresh is about to overwrite, before patchRules
+      // rewrites it — a byte-different file is as likely a hand edit as an old
+      // generation, and we cannot tell them apart.
+      const stale = [!ruleCurrent ? rp : null, !skillCurrent ? skillPath(client) : null];
+      backedUp.push(...(await backupReplaced(stale)));
+      // patchRules() also migrates the pre-0.1.0 managed block OUT of the user's
+      // own ~/.claude/CLAUDE.md — save that block first, for the same reason.
+      if (client === "claude-code") backedUp.push(...(await backupLegacyBlock()));
       const files = await patchRules(client);
       updated.push(...files.map((f) => f.path));
     }
@@ -936,12 +967,16 @@ async function refreshStaleRules({ verbose = false } = {}) {
   if (updated.length > 0) {
     console.log(`↻ Refreshed pingfusi agent rules (v${VERSION}):`);
     for (const p of updated) console.log(`   ${p}`);
+    if (backedUp.length > 0) {
+      console.log("   Replaced text saved — restore local edits from:");
+      for (const p of backedUp) console.log(`   ${p}`);
+    }
     track("rules_refresh");
   } else if (verbose) {
     console.log(`✓ Agent rules already current (v${VERSION}).`);
   }
 
-  // Same always-run path also catches a silently-dead token before a
+  // The same self-heal also catches a silently-dead token before a
   // downstream client (Claude Desktop) fails cryptically. Never throws.
   try {
     await validateStoredToken();
@@ -949,6 +984,52 @@ async function refreshStaleRules({ verbose = false } = {}) {
     /* validation is best-effort */
   }
   return updated.length;
+}
+
+// A refresh REWRITES files a user can hand-edit, and byte-different content on disk is
+// as likely a local edit as an old generation — nothing on disk says which. So copy
+// what we are about to replace next to it as <path>.bak (one generation, overwritten by
+// the next refresh) and print where it went: the clobber becomes visible and undoable
+// instead of silent. The appended suffix is deliberate — `pingfusi.md.bak` falls outside
+// the `*.md` / `*.mdc` globs the agents load, so a backup never becomes a second, stale
+// copy of the guidance. Best-effort: a backup we cannot write must never block the
+// refresh, because stale guidance is the worse failure.
+async function backupReplaced(paths) {
+  const saved = [];
+  for (const p of paths) {
+    if (!p) continue;
+    const current = await readFile(p, "utf8").catch(() => null);
+    if (current === null) continue; // nothing on disk yet → nothing to lose
+    const bak = `${p}.bak`;
+    try {
+      await writeFile(bak, current);
+      saved.push(bak);
+    } catch {
+      /* best-effort */
+    }
+  }
+  return saved;
+}
+
+// pre-0.1.0 (Claude Code) kept the guidance as a managed BLOCK inside ~/.claude/CLAUDE.md
+// — a file that is the user's, not ours. The refresh migrates it out, so save the block
+// before it goes: ONLY the block, marker to marker. Everything outside the markers is the
+// user's memory file; it stays in place, and it stays out of this backup.
+async function backupLegacyBlock() {
+  const src = join(homedir(), ".claude", "CLAUDE.md");
+  const text = await readFile(src, "utf8").catch(() => null);
+  if (text === null) return [];
+  const start = text.indexOf(RULES_MARKER_START);
+  const end = text.indexOf(RULES_MARKER_END, start + 1);
+  if (start < 0 || end < 0) return [];
+  const block = text.slice(start, end + RULES_MARKER_END.length);
+  const bak = `${src}.pingfusi.bak`;
+  try {
+    await writeFile(bak, `${block}\n`);
+    return [bak];
+  } catch {
+    return []; // best-effort, as above
+  }
 }
 
 async function unpatchRules(client) {
@@ -962,6 +1043,11 @@ async function unpatchRules(client) {
   if (rp) await unlink(rp).catch(() => {});
   const sp = skillPath(client);
   if (sp) await rm(dirname(sp), { recursive: true, force: true }).catch(() => {});
+  // ...and the refresh backups we wrote next to them, so an uninstall leaves nothing of
+  // ours behind (the skill's .bak went with its directory above).
+  if (rp) await unlink(`${rp}.bak`).catch(() => {});
+  if (client === "claude-code")
+    await unlink(join(homedir(), ".claude", "CLAUDE.md.pingfusi.bak")).catch(() => {});
 }
 
 async function patchClaudeCodeViaCli(token) {
