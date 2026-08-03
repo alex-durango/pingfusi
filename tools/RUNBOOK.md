@@ -166,7 +166,11 @@ stash/read fallback). `tools/behavior-capture.js` provides `pxBehaviorDiscover(o
 >
 > **It is invisible by default**: headless=new launch, probe-gated per run — no window, no
 > focus steal, safe while the user keeps working. A window appears ONLY on explicit
-> `--headful`, and the probe-refusal error tells you when that's actually needed. It never
+> `--headful`, and the probe-refusal error tells you when that's actually needed — a rate
+> refusal (rAF cadence, compositor px/s) is RE-MEASURED up to 3× before it counts, because a
+> heavy page's busiest instant is the moment right after its load event and one unlucky read
+> must not cost the run its invisibility (LEARNINGS #41); the refusal names how many probes
+> it took, so `1 probe(s)` means something structural, not flake. It never
 > attaches to a browser it didn't launch unless you pass `--attach` — popping tabs into the
 > user's own Chrome is an interruption, and concurrent runs in one window would fight over
 > the single visible tab. Ports are collision-free by construction (the debug port and the

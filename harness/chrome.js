@@ -218,19 +218,47 @@ const PROBE_JS = `(async () => {
 
 // Pure verdict over the probe sample: visible, rAF alive (≥30Hz), the known 100px/s
 // animation within ±20%. Anything else is refused by name BEFORE a capture exists.
+//
+// `transient` splits the refusals by what they measure. rAF cadence and the animation's
+// px/s are RATES, and a saturated main thread drags both — so one bad read is a claim about
+// this instant, not about the environment. A hidden tab is not a rate: the stacks that
+// report `document.hidden` permanently are the reason this probe exists, and re-measuring
+// one costs seconds to learn nothing. Only the rate refusals are re-measured (see
+// probeEnvironment); the structural ones refuse on the first read, as they always have.
 function evaluateProbe(sample) {
-  if (!sample) return { ok: false, reason: "environment probe returned nothing" };
+  if (!sample) return { ok: false, transient: false, reason: "environment probe returned nothing" };
   const hz = sample.raf && sample.raf.ms ? (sample.raf.frames / (Math.min(sample.raf.ms, 500) / 1000)) : 0;
   const measured = sample.anim ? sample.anim.measuredPxPerSec : 0;
-  if (sample.documentHidden === true) return { ok: false, reason: `document.hidden is true in this tab — the compositor is (or will be) frozen; a launched window may be minimized, or attach-mode Chrome lacks the throttling flags` };
-  if (hz < 30) return { ok: false, reason: `rAF ran at ${hz.toFixed(1)}Hz (need ≥30) — timers are throttled despite document.hidden=${sample.documentHidden}; the tab is not a measurement environment` };
-  if (!(measured > 80 && measured < 120)) return { ok: false, reason: `a known 100px/s CSS animation measured ${measured}px/s — the compositor is not advancing at wall-clock rate` };
-  return { ok: true, rafHz: +hz.toFixed(1) };
+  if (sample.documentHidden === true) return { ok: false, transient: false, reason: `document.hidden is true in this tab — the compositor is (or will be) frozen; a launched window may be minimized, or attach-mode Chrome lacks the throttling flags` };
+  if (hz < 30) return { ok: false, transient: true, reason: `rAF ran at ${hz.toFixed(1)}Hz (need ≥30) — timers are throttled despite document.hidden=${sample.documentHidden}; the tab is not a measurement environment` };
+  if (!(measured > 80 && measured < 120)) return { ok: false, transient: true, reason: `a known 100px/s CSS animation measured ${measured}px/s — the compositor is not advancing at wall-clock rate` };
+  return { ok: true, transient: false, rafHz: +hz.toFixed(1) };
 }
 
-async function probeEnvironment(session) {
-  const sample = await cdp.evaluate(session, PROBE_JS);
-  return { sample, verdict: evaluateProbe(sample) };
+// Sample the tab — and RE-sample a rate refusal before believing it.
+//
+// WHY (measured on pear.no, a WebGL/Metal page, 2026-08-03): the probe fires the instant the
+// load event lands, which is the busiest instant of a heavy page's life — shader compile and
+// asset decode own the main thread. The first post-load probe there read 32Hz against the
+// 30Hz floor, and 10.0Hz on a busier run; ~5s later the same tab read 122Hz, and four
+// consecutive headless runs of the same capture passed. A single sample at that moment costs
+// the whole run its invisibility, because the refusal's named remedy is --headful — a real
+// window on the user's screen. Transient flake must not buy a visible window.
+//
+// The refusal itself is unchanged in kind: a genuinely throttled tab still refuses, by the
+// same name, after the retries — and the receipts carry `attempts` so a refusal can never be
+// read as one unlucky read.
+async function probeEnvironment(session, { attempts = 3, gapMs = 2000, onRetry = () => {} } = {}) {
+  const total = Math.max(1, attempts);
+  let out;
+  for (let attempt = 1; attempt <= total; attempt++) {
+    const sample = await cdp.evaluate(session, PROBE_JS);
+    out = { sample, verdict: { ...evaluateProbe(sample), attempts: attempt } };
+    if (out.verdict.ok || !out.verdict.transient || attempt >= total) break;
+    onRetry(attempt, out.verdict.reason);
+    await new Promise((r) => setTimeout(r, gapMs));
+  }
+  return out;
 }
 
 module.exports = { DARWIN_APPS, candidatePaths, resolveChrome, flagsFor, parseDevToolsActivePort, launchChrome, acquire, PROBE_JS, evaluateProbe, probeEnvironment, resolveViewport, normalizeViewport, VIEWPORT_READ, viewportMismatch, viewportScrollbarNote };

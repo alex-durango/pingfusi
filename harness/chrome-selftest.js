@@ -88,7 +88,53 @@ check("zero/negative → null", parseDevToolsActivePort("0\n/x") === null && par
   check("boundary: 81px/s admits, 120px/s refuses", evaluateProbe({ ...good, anim: { expectedPxPerSec: 100, measuredPxPerSec: 81 } }).ok && !evaluateProbe({ ...good, anim: { expectedPxPerSec: 100, measuredPxPerSec: 120 } }).ok);
   check("clamped hidden-tab setTimeout (1s window, few frames) refused", !evaluateProbe({ documentHidden: false, raf: { frames: 1, ms: 1004 }, anim: { expectedPxPerSec: 100, measuredPxPerSec: 0 } }).ok);
   check("empty sample refused", !evaluateProbe(null).ok);
+  // The rate refusals are re-measurable claims about an instant; the structural ones are not.
+  check("rate refusals are marked transient (rAF, compositor)", evaluateProbe({ ...good, raf: { frames: 2, ms: 1000 } }).transient === true && evaluateProbe({ ...good, anim: { expectedPxPerSec: 100, measuredPxPerSec: 0 } }).transient === true);
+  check("structural refusals are NOT transient (hidden tab, empty sample)", evaluateProbe({ ...good, documentHidden: true }).transient === false && evaluateProbe(null).transient === false);
 }
 
-console.log(failed ? `\n❌ chrome-selftest: ${failed} check(s) failed.` : "\n✓ chrome-selftest: all checks pass.");
-process.exit(failed ? 1 : 0);
+// ── probeEnvironment: a transient rate dip must not cost the run its invisibility ──
+// Regression (pear.no, 2026-08-03): the loaded-page probe fires the instant the load event
+// lands — a heavy WebGL page's busiest moment. It read 10.0Hz against the 30Hz floor, the
+// runner refused, and the refusal's named remedy is --headful: a real Chrome window on the
+// user's screen, mid-work. The same tab measured 122Hz ~5s later and four consecutive
+// headless runs of that capture then passed. So: re-measure a rate refusal; never re-measure
+// a hidden tab (those stacks report hidden permanently — that is what the probe is FOR).
+(async () => {
+  const { probeEnvironment } = require("./chrome.js");
+  const cdp = require("./cdp.js");
+  const realEvaluate = cdp.evaluate;
+  const healthy = { documentHidden: false, raf: { frames: 61, ms: 702 }, anim: { expectedPxPerSec: 100, measuredPxPerSec: 98.9 } };
+  const dip = { documentHidden: false, raf: { frames: 5, ms: 700 }, anim: { expectedPxPerSec: 100, measuredPxPerSec: 99 } }; // 10.0Hz — the measured pear.no read
+  const hidden = { ...healthy, documentHidden: true };
+  // chrome.js holds the SAME module object we patch here (require cache), so this fixtures
+  // the probe with zero Chrome and zero wall clock (gapMs 0).
+  let reads = 0;
+  const scripted = (samples) => { reads = 0; cdp.evaluate = async () => samples[Math.min(reads++, samples.length - 1)]; };
+
+  scripted([dip, healthy]);
+  let r = await probeEnvironment({}, { attempts: 3, gapMs: 0 });
+  check("a load-time rate dip is re-measured, not believed (the pear.no refusal)", r.verdict.ok && r.verdict.attempts === 2 && reads === 2);
+
+  scripted([hidden, healthy]);
+  r = await probeEnvironment({}, { attempts: 3, gapMs: 0 });
+  check("a hidden tab still refuses on the FIRST read (no retry buys a permanently-hidden stack anything)", !r.verdict.ok && /document\.hidden/.test(r.verdict.reason) && r.verdict.attempts === 1 && reads === 1);
+
+  scripted([dip]);
+  r = await probeEnvironment({}, { attempts: 3, gapMs: 0 });
+  check("a persistently throttled tab still refuses, by the same name, after the retries", !r.verdict.ok && /rAF ran at 10\.0Hz/.test(r.verdict.reason) && r.verdict.attempts === 3 && reads === 3);
+
+  const announced = [];
+  scripted([dip, dip, healthy]);
+  r = await probeEnvironment({}, { attempts: 3, gapMs: 0, onRetry: (n) => announced.push(n) });
+  check("every retry is announced (a re-measure is never a silent pause)", r.verdict.ok && r.verdict.attempts === 3 && announced.join(",") === "1,2");
+
+  scripted([healthy]);
+  r = await probeEnvironment({}, { gapMs: 0 });
+  check("the happy path is still ONE probe, and the receipt says so", r.verdict.ok && r.verdict.attempts === 1 && reads === 1);
+
+  cdp.evaluate = realEvaluate;
+})().then(() => {
+  console.log(failed ? `\n❌ chrome-selftest: ${failed} check(s) failed.` : "\n✓ chrome-selftest: all checks pass.");
+  process.exit(failed ? 1 : 0);
+});

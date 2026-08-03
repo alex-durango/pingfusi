@@ -194,8 +194,11 @@ function loadOpts(name, optsFile) {
 async function captureSide(side, url, ctx) {
   const { session, targetId } = await cdp.openPage(ctx.acq.port, { host: ctx.acq.host });
   try {
-    let probe = await chrome.probeEnvironment(session);
-    if (!probe.verdict.ok) throw new Error(`environment refused before any capture (${side}, about:blank): ${probe.verdict.reason}`);
+    // A rate refusal is re-measured before it is believed (chrome.js probeEnvironment) —
+    // announced, so a retry is never a silent pause.
+    const onRetry = (n, reason) => console.log(`  · ${side}: environment probe ${n} refused (${String(reason).split(" — ")[0]}) — re-measuring`);
+    let probe = await chrome.probeEnvironment(session, { onRetry });
+    if (!probe.verdict.ok) throw new Error(`environment refused before any capture (${side}, about:blank, ${probe.verdict.attempts} probe(s)): ${probe.verdict.reason}`);
 
     // Normalize the viewport UNCONDITIONALLY, before navigation — headless renders at dpr 1
     // with a short innerHeight otherwise, which is a genuinely DIFFERENT page (wrong srcset
@@ -210,8 +213,8 @@ async function captureSide(side, url, ctx) {
     await cdp.navigate(session, url, { timeoutMs: ctx.args.navTimeout, warn: (m) => console.log(`  ⚠ ${m}`) });
     await sleep(ctx.opts.settleMs != null ? ctx.opts.settleMs : 1500); // let load-time choreography arm before probing/sweeping
 
-    probe = await chrome.probeEnvironment(session);
-    if (!probe.verdict.ok) throw new Error(`environment refused on the loaded page (${side}): ${probe.verdict.reason}`);
+    probe = await chrome.probeEnvironment(session, { onRetry });
+    if (!probe.verdict.ok) throw new Error(`environment refused on the loaded page (${side}, ${probe.verdict.attempts} probe(s)): ${probe.verdict.reason}`);
 
     // Verified, not trusted: read back what the page actually renders at.
     const got = await cdp.evaluate(session, chrome.VIEWPORT_READ, { awaitPromise: false });
@@ -249,7 +252,7 @@ async function captureSide(side, url, ctx) {
       kitVersion: KIT_VERSION,
       mode: ctx.acq.mode, chromeVersion: ctx.acq.chromeVersion, headless: ctx.acq.headless, profile: ctx.acq.profile,
       viewport: { width: ctx.viewport.width, height: ctx.viewport.height, dpr: ctx.viewport.dpr, sources: ctx.viewport.sources },
-      rafProbe: { ...probe.sample.raf, hz: probe.verdict.rafHz },
+      rafProbe: { ...probe.sample.raf, hz: probe.verdict.rafHz, attempts: probe.verdict.attempts },
       animProbe: probe.sample.anim,
     };
 
@@ -357,7 +360,7 @@ async function main() {
     // fails the probe, the one legitimate reason for a visible window exists, and the
     // error is where the user learns it (never a surprise window).
     const headfulHint = acq.mode === "cdp-launched" && acq.headless && /environment refused/.test(e.message)
-      ? `\n  headless Chrome failed the measurement probe on this machine — re-run with --headful (one visible Chrome window for the duration of the capture; that is the only time this tool interrupts)` : "";
+      ? `\n  headless Chrome failed the measurement probe on this machine — a rate refusal is re-measured before it counts (the refusal above names how many probes), so this is not one unlucky read at load time. Re-run with --headful (one visible Chrome window for the duration of the capture; that is the only time this tool interrupts)` : "";
     console.error(`✗ ${e.message}${headfulHint}`);
     process.exitCode = 1;
   } finally {

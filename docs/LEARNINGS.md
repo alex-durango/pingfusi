@@ -1211,3 +1211,39 @@ there is not a smaller answer, it is a **wrong** one that reads as complete.
 > a launch film actually lands — the whole reason this run existed. Fourteen rounds on one cut,
 > a big share of them spent because a fix the machine reported as done was not; the human
 > watching was the only thing that knew.
+
+## 41. THE PROBE SAMPLED THE BUSIEST INSTANT OF THE PAGE'S LIFE — a refusal that costs the user their screen must be re-measured first
+Found on pear.no (2026-08-03), reported by the operator as "it was opening tabs in the foreground
+interrupting my work — I thought we had fixed this". Nothing about the invisible default had
+regressed: the agent ran `capture-run` headless first, exactly as designed. It was refused —
+`rAF ran at 10.0Hz (need ≥30) — timers are throttled despite document.hidden=false` — and the
+refusal's own named remedy is `--headful`, so the agent did what the tool told it and put a real
+Chrome window on the operator's screen mid-work.
+
+The refusal was flake. The loaded-page probe fires the instant `Page.loadEventFired` lands, which
+on a heavy WebGL/Metal page is the single busiest moment it will ever have: shader compile and
+asset decode own the main thread. Measured on that same page: the first post-load probe read
+**32Hz against a 30Hz floor**, and 122Hz on every read from ~5s onward; four consecutive headless
+`capture-run`s of the same page then passed clean, 497 leaves each. One 1.7s sample, taken at the
+worst possible moment, with no retry, was deciding whether the run stayed invisible.
+
+**Lesson: a refusal is only as good as the number of times it was measured — and the bar rises
+with what the refusal costs.** Split refusals by what they measure. rAF cadence and the test
+animation's px/s are **rates**, and a saturated main thread drags both, so one bad read is a claim
+about an instant, not about the environment; re-measure before believing it. `document.hidden` is
+not a rate — the stacks that report it are permanently hidden (#32), which is the entire reason
+this probe exists, so re-measuring one buys seconds and learns nothing. The retry does not soften
+the gate: a genuinely throttled tab still refuses, by the same name, and the receipts now carry
+`attempts` so a refusal can never again be read as one unlucky read.
+> 🔒 **Enforced now:** `chrome.js probeEnvironment` retries a `transient` verdict (3 attempts,
+> 2s apart) and both runners announce each re-measure; `evaluateProbe` marks rate refusals
+> transient and structural ones not. Locked by `chrome-selftest` with the measured numbers as
+> fixtures (the 10.0Hz dip is rescued on read 2; a hidden tab still refuses on read 1 and costs
+> exactly one probe; a persistently throttled tab still refuses after all three) — five checks
+> that fail against the pre-fix single-shot probe. `capture-runner-selftest` and
+> `behavior-runner-selftest` cover the real-Chrome half.
+> 👁 **Still yours:** the ladder's shape, not its trigger. Synthetic main-thread contention on
+> this machine only pulled rAF from 122Hz to 38Hz — the real 10.0Hz needed pear.no's own GPU and
+> decode pressure, so the exact conditions that refuse are not reproducible on demand. If a page
+> ever refuses three honest probes in a row, `--headful` is still the rung above, and it still
+> puts a window on someone's screen; whether that trade is worth it on a given run is judgment.

@@ -100,8 +100,11 @@ function parseArgs(argv) {
 async function captureSide(side, url, ctx) {
   const { session, targetId } = await cdp.openPage(ctx.acq.port, { host: ctx.acq.host });
   try {
-    let probe = await chrome.probeEnvironment(session);
-    if (!probe.verdict.ok) throw new Error(`environment refused before any capture (${side}, about:blank): ${probe.verdict.reason}`);
+    // A rate refusal is re-measured before it is believed (chrome.js probeEnvironment) —
+    // announced, so a retry is never a silent pause.
+    const onRetry = (n, reason) => console.log(`  · ${side}: environment probe ${n} refused (${String(reason).split(" — ")[0]}) — re-measuring`);
+    let probe = await chrome.probeEnvironment(session, { onRetry });
+    if (!probe.verdict.ok) throw new Error(`environment refused before any capture (${side}, about:blank, ${probe.verdict.attempts} probe(s)): ${probe.verdict.reason}`);
     await chrome.normalizeViewport(session, ctx.viewport);
 
     // Motion setup must precede navigation so the asset rip sees every response the page
@@ -118,8 +121,8 @@ async function captureSide(side, url, ctx) {
     const t0 = Date.now();
     await cdp.navigate(session, url, { timeoutMs: ctx.args.navTimeout, warn: (m) => console.log(`  ⚠ ${m}`) });
 
-    probe = await chrome.probeEnvironment(session);
-    if (!probe.verdict.ok) throw new Error(`environment refused on the loaded page (${side}): ${probe.verdict.reason}`);
+    probe = await chrome.probeEnvironment(session, { onRetry });
+    if (!probe.verdict.ok) throw new Error(`environment refused on the loaded page (${side}, ${probe.verdict.attempts} probe(s)): ${probe.verdict.reason}`);
     const got = await cdp.evaluate(session, chrome.VIEWPORT_READ, { awaitPromise: false });
     const vpMiss = chrome.viewportMismatch(ctx.viewport, got);
     if (vpMiss) throw new Error(`viewport did not normalize on the ${side} page — ${vpMiss}. Measuring at the wrong size is the bug this override exists to prevent (an --attach Chrome's real window can fight emulation — prefer the launched mode).`);
@@ -220,7 +223,7 @@ async function captureSide(side, url, ctx) {
     return {
       side, url, leaves: report.leaves, byKind: report.byKind, settle,
       files: written, tookMs: Date.now() - t0, viewportRead: got,
-      probe: { rafHz: probe.verdict.rafHz, anim: probe.sample.anim },
+      probe: { rafHz: probe.verdict.rafHz, anim: probe.sample.anim, attempts: probe.verdict.attempts },
       paint,
       ...(canvas ? { canvas } : {}),
       ...(report.freeze ? { freeze: freezeReceipt(report.freeze) } : {}),
@@ -876,7 +879,7 @@ async function main() {
     console.log(`\n✓ capture done — next: ${side === "live" ? `${CMD} capture-build ${args.name}, then capture-run again for the clone side` : `${CMD} gate ${args.name} visual`}`);
   } catch (e) {
     const headfulHint = acq.mode === "cdp-launched" && acq.headless && /environment refused/.test(e.message)
-      ? `\n  headless Chrome failed the measurement probe on this machine — re-run with --headful (one visible Chrome window for the duration; the only time this tool interrupts)` : "";
+      ? `\n  headless Chrome failed the measurement probe on this machine — a rate refusal is re-measured before it counts (the refusal above names how many probes), so this is not one unlucky read at load time. Re-run with --headful (one visible Chrome window for the duration; the only time this tool interrupts)` : "";
     // A wall or environment refusal must never dead-end: the interactive path is always there.
     const fallbackHint = /environment refused|did not finish loading|viewport did not normalize/.test(e.message) ? `\n  ${FALLBACK}` : "";
     console.error(`✗ ${e.message}${headfulHint}${fallbackHint}`);
