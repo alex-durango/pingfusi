@@ -45,17 +45,15 @@ Here are some example prompts you can try with the pingfusi MCP.
 
 | feedback about | example prompt | what you get | demo |
 |---|---|---|---|
-| a naming choice | `Which name is better for my coffee app: Brewly or Cuppa? use pingfusi` | poll result | |
+| playtest | `get 3 playtesters on mygame.itch.io/demo. use pingfusi` | a playtest report from real players | [https://pingfusi.com/playtest](https://pingfusi.com/playtest) |
 | a confusing page | `Is my pricing page confusing anywhere? use pingfusi` | comments pinned to what's off | |
 | a website clone | `Clone www.example.com pixel-perfect. use pingfusi` | a perfectly cloned website | [copy-anything.com](https://copy-anything.com/) |
 | design taste | `Make my website not look like AI slop. use pingfusi` | design feedback | [video](https://youtu.be/AicGxc2aOSg) |
 | video vibes | `Does my promo video look right? use pingfusi` | feedback pinned to timestamps | |
-| [?] | ask any question that you can think of | real human feedback | |
 
-The first and last rows are text-only polls — the reviewer sees just the question, so
-they only fit questions words can carry. The rows in between publish the work first so
-the reviewer can open it; when in doubt, publish: a reviewer can only judge what they
-can see.
+Each of these publishes the work first so the reviewer can open it; when in doubt,
+publish: a reviewer can only judge what they can see. Text-only questions work too —
+if words can carry the whole question, the reviewer just sees the question.
 
 ## How it works
 
