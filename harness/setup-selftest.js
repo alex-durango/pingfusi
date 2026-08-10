@@ -27,6 +27,24 @@ ok(!saidYes("", false) && !saidYes("n", true), "non-TTY silence and 'n' are NOT 
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+// Windows first-run (found live 2026-08-10, LEARNINGS #42): npm is npm.cmd — a batch
+// file Node only spawns through the shell — and `command -v` needs an sh Windows doesn't
+// have, so setup told the user the install they had JUST run had failed. Pin both
+// platform-split invocation shapes, and the one-place quoting shell:true demands.
+{
+  const { npmInvocation, whichInvocation } = require("./proc.js");
+  const posix = npmInvocation(["i", "-g", "pingfusi"], "darwin");
+  ok(posix.command === "npm" && posix.shell === false && posix.args.join(" ") === "i -g pingfusi", "posix npm spawns directly — no shell, args untouched");
+  const win = npmInvocation(["i", "-g", "pingfusi"], "win32");
+  ok(win.shell === true && win.command === "npm i -g pingfusi", "win32 npm routes through the shell (npm.cmd is a batch file — bare spawn is EINVAL)");
+  const spaced = npmInvocation(["ci", "--prefix", "C:\\Users\\Jo Smith\\npm-cache\\_npx\\m"], "win32");
+  ok(spaced.command === 'npm ci --prefix "C:\\Users\\Jo Smith\\npm-cache\\_npx\\m"', "shell:true does not escape args — a spaced path is quoted in proc.js, nowhere else");
+  const winWhich = whichInvocation("pingfusi", "win32");
+  ok(winWhich.command === "where" && winWhich.args[0] === "pingfusi", "win32 PATH probe is `where` — there is no sh to run `command -v`");
+  const posixWhich = whichInvocation("pingfusi", "linux");
+  ok(posixWhich.command === "sh" && posixWhich.args[1] === "command -v pingfusi", "posix PATH probe stays sh -c command -v");
+}
+
 function fakeIO({ probes, answers, tty, paths }) {
   const logs = [], runs = [];
   let i = 0;

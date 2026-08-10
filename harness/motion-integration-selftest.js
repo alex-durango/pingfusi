@@ -40,8 +40,8 @@ try {
     // `pingfusi motion install` replaced the postinstall. Mirror its exact npm flags out
     // of the source so the smoke run below exercises what the CLI actually spawns.
     const source = fs.readFileSync(path.join(KIT, "harness", "workflow.js"), "utf8");
-    const invocation = source.match(/spawnSync\("npm", \["ci", "--prefix", packageDir, ([^\]]+)\]/);
-    assert.ok(invocation, "workflow.js runs the lazy motion install through a nested npm ci");
+    const invocation = source.match(/spawnNpmSync\(\["ci", "--prefix", packageDir, ([^\]]+)\]/);
+    assert.ok(invocation, "workflow.js runs the lazy motion install through a nested npm ci (via proc.js — npm.cmd needs the shell on Windows)");
     const flags = invocation[1].match(/"[^"]+"/g).map((flag) => flag.slice(1, -1));
     assert.ok(flags.includes("--global=false"), flags.join(" "));
     const r = spawnSync("npm", ["ci", "--prefix", motionRoot, ...flags], {

@@ -1054,7 +1054,7 @@ function cmdMotionInstall() {
   const packageDir = path.join(PKG, "packages", "motion");
   // --global=false: under a global install npm sets npm_config_global=true, which makes a
   // nested `npm ci` refuse (ECIGLOBAL); the flag forces the nested install back to local.
-  const r = require("child_process").spawnSync("npm", ["ci", "--prefix", packageDir, "--ignore-scripts", "--global=false"], { stdio: "inherit" });
+  const r = require("./proc.js").spawnNpmSync(["ci", "--prefix", packageDir, "--ignore-scripts", "--global=false"], { stdio: "inherit" });
   if (r.error || r.status !== 0) {
     console.error(`motion engine dependency install failed${r.error ? `: ${r.error.message}` : ` (npm ci exited ${r.status})`} — retry: pingfusi motion install`);
     process.exit(1);

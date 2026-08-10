@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { spawnNpmSync } = require("./proc.js");
 
 const DEFAULT_PACKAGE_DIR = path.join(__dirname, "..", "packages", "motion");
 
@@ -50,7 +51,9 @@ function installAndProbeMotionBrowser(packageDir = DEFAULT_PACKAGE_DIR, options 
   return { ok: true, stage: "ready", result: installed, probe: ready };
 }
 
-function globalMotionPackageDir(run = spawnSync) {
+// Default runner routes npm through proc.js (npm.cmd needs the shell on Windows);
+// selftests inject plain runners and are unaffected.
+function globalMotionPackageDir(run = (cmd, args, opts) => (cmd === "npm" ? spawnNpmSync(args, opts) : spawnSync(cmd, args, opts))) {
   try {
     const result = run("npm", ["root", "-g"], { encoding: "utf8", stdio: "pipe", timeout: 10_000 });
     if (!result || result.error || result.status !== 0) return null;

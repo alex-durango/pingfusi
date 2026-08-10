@@ -21,6 +21,7 @@ const os = require("os");
 const path = require("path");
 const readline = require("readline");
 const { spawnSync } = require("child_process");
+const { spawnNpmSync, whichSync } = require("./proc.js");
 const { DEFAULT_PACKAGE_DIR, globalMotionPackageDir, installAndProbeMotionBrowser } = require("./motion-browser.js");
 const { DISPLAY_RANGE, supportsNode } = require("./node-runtime.js");
 
@@ -33,7 +34,11 @@ function defaultIO() {
   return {
     isTTY: !!process.stdin.isTTY,
     log: (...a) => console.log(...a),
-    run: (cmd, args) => spawnSync(cmd, args, { stdio: "inherit" }),
+    // npm is a batch file on Windows (npm.cmd) — spawnable only through the shell;
+    // proc.js owns that split (and the arg quoting that comes with shell:true).
+    run: (cmd, args) => (cmd === "npm"
+      ? spawnNpmSync(args, { stdio: "inherit" })
+      : spawnSync(cmd, args, { stdio: "inherit" })),
     probe: (cmd, args) => {
       try {
         const r = spawnSync(cmd, args, { stdio: "pipe", timeout: 10_000 });
@@ -44,13 +49,7 @@ function defaultIO() {
     // the fresh-machine test: npx injects the ephemeral package's own bin into PATH, so a
     // bare probe says "pingfusi already installed" during the one run where the global install
     // matters most (the npx cache evicts and pingfusi vanishes).
-    which: (cmd) => {
-      try {
-        const r = spawnSync("sh", ["-c", `command -v ${cmd}`], { stdio: "pipe", timeout: 10_000 });
-        const p = String(r.stdout || "").trim();
-        return r.status === 0 && p ? p : null;
-      } catch (e) { return null; }
-    },
+    which: (cmd) => whichSync(cmd),
     ask: (q) =>
       new Promise((res) => {
         if (!process.stdin.isTTY) return res("");

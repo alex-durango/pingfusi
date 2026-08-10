@@ -1247,3 +1247,37 @@ the gate: a genuinely throttled tab still refuses, by the same name, and the rec
 > decode pressure, so the exact conditions that refuse are not reproducible on demand. If a page
 > ever refuses three honest probes in a row, `--headful` is still the rung above, and it still
 > puts a window on someone's screen; whether that trade is worth it on a given run is judgment.
+
+## 42. SETUP TOLD THE WINDOWS USER THE INSTALL THEY HAD JUST RUN HAD FAILED — a probe whose mechanism is absent answers "no", and that "no" became confident wrong advice
+Reported from a user's PowerShell transcript (2026-08-10). The user ran
+`npm i -g pingfusi@latest` — success, 68 packages. Then `npx pingfusi setup`: "pingfusi
+isn't installed globally yet", consent, "❌ global pingfusi install failed — retry:
+npm i -g pingfusi@latest" — retry advice naming the exact command that had just succeeded.
+The motion step failed identically, and its named remedy (`pingfusi motion install`)
+shared the same broken spawn, so the recovery path was as dead as the path it recovered.
+
+Two Unix assumptions, both invisible on the machines the kit is developed on. The PATH
+probe ran `sh -c command -v` — Windows has no `sh`, so the probe errored and returned
+null, indistinguishable from "not installed". And every install step spawned bare `npm` —
+which on Windows is `npm.cmd`, a batch file Node refuses to spawn without a shell (EINVAL
+since the CVE-2024-27980 hardening), so each npm call died before npm started. The only
+step that worked spawned `process.execPath` — a real executable. Meanwhile the code
+carried Windows *intent*: the npx-cache regex already matched backslash paths; it guarded
+a branch the `sh` probe made unreachable on the one platform the backslashes were for.
+
+**Lesson: a probe can only answer the question its mechanism can ask.** When the probing
+tool itself fails to run, the result is not "no" — but the code collapsed both into null,
+and downstream every message reported the wrong layer: "install failed" (spawn failed;
+nothing was tried), "isn't installed" (it was; the probe couldn't look). Platform-split
+spawn shapes live in ONE module (`harness/proc.js`: `npm` through the shell with arg
+quoting on win32, `where` in place of `sh -c command -v`), and injectable-io selftests —
+which is why this shipped — get platform-shape pins alongside their behavior fixtures.
+> 🔒 **Enforced now:** `proc.js` owns npm + which invocation for setup, doctor,
+> `motion install`, and the global-root resolver; its pure builders take an explicit
+> platform, and `setup-selftest` pins the win32 shapes (shell-routed npm, quoted spaced
+> path, `where`) and the untouched posix shapes — five checks that fail against any
+> revert to bare `spawnSync("npm", …)` or the `sh` probe.
+> 👁 **Still yours:** no Windows machine runs these selftests for real — the pins freeze
+> the invocation shape, not npm's behavior behind it. The next Windows-only failure will
+> again look like success locally; when a Windows transcript contradicts a green local
+> run, believe the transcript.

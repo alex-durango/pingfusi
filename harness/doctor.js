@@ -11,6 +11,7 @@
 "use strict";
 
 const { spawnSync } = require("child_process");
+const { spawnNpmSync } = require("./proc.js");
 const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -161,7 +162,7 @@ function checkKitVersion(installed, latest) {
 
 function npmLatestVersion() {
   try {
-    const r = spawnSync("npm", ["view", "pingfusi", "version"], { stdio: "pipe", timeout: 5_000 });
+    const r = spawnNpmSync(["view", "pingfusi", "version"], { stdio: "pipe", timeout: 5_000 });
     const v = String(r.stdout || "").trim();
     return /^\d+\.\d+\.\d+/.test(v) ? v : null;
   } catch (e) { return null; }
