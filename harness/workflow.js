@@ -1295,6 +1295,12 @@ THE EVERYDAY JOBS
                                                      upload a self-contained website or video to Pingfusi
                                                      hosting; MP4 output includes a seekable video_url
   pingfusi wait    <ping_id>                         continue a pending ping through client-safe wait legs
+  pingfusi studio  [ping_id ...] [--port N] [--open] [--fetch-only] [--no-media] [--json]
+                                                     LOCAL RESULTS VIEWER: fetch a round's results and
+                                                     media into <cwd>/.pingfusi/studio/, then browse
+                                                     sessions, transcripts, questionnaire answers, and
+                                                     agent findings at http://localhost:7788 — read-only;
+                                                     playtests are the headline use (docs/COMMANDS.md)
   (REVIEW ANYTHING is the same loop against your own state file — core.review.file /
    verify over any published artifact; contracts in docs/CORE.md. The jobs below
    package that loop with their own reviewer surfaces.)
@@ -1462,6 +1468,8 @@ function main() {
     // ~/.pingfusi/asks/. Proof that the core's service verbs need zero cloning code.
     case "ask": { if (!name) { console.error('usage: pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]   |   pingfusi ask result <ping_id>'); process.exit(2); } return delegate("harness/ask.js", [name, ...rest]); }
     case "publish": { if (!name) { console.error("usage: pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish.js", [name, ...rest]); }
+    // The local results viewer — also workspace-free: cache under <cwd>/.pingfusi/studio/.
+    case "studio": return delegate("harness/studio.js", [name, ...rest].filter((a) => a != null));
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
     case "draft": { if (!name || !rest[0]) { console.error("usage: pingfusi draft <name> push|status|delete"); process.exit(2); } return delegate("harness/draft.js", [rest[0], name]); }
     case "tunnel": { if (!name) { console.error("usage: pingfusi tunnel <name> [port] [--check]"); process.exit(2); } return delegate("harness/tunnel.js", [name, ...rest]); }

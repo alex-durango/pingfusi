@@ -90,6 +90,8 @@ for (const required of [
   "harness/capability-router.js",
   "harness/motion-sampler.js",
   "harness/publish.js",
+  "harness/studio.js",
+  "harness/studio-ui/index.html",
   "packages/motion/bin/motion-kit.js",
   "packages/motion/src/linked/builder.js",
   "packages/motion/player/linked.html",

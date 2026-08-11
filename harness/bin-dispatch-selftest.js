@@ -27,7 +27,7 @@ for (const cmd of ["remove", "uninstall", "wait", "whoami", "rules"]) {
 
 // the kit is the default — setup DELIBERATELY: the merged onboarding runs the MCP
 // device-flow install as its login step, so no installer surface is lost
-for (const cmd of ["setup", "new", "adopt", "review", "motion", "next", "behavior-worksheet", "publish", "tunnel", "doctor", "agent-setup", "status", "advance", "help", "ask"]) {
+for (const cmd of ["setup", "new", "adopt", "review", "motion", "next", "behavior-worksheet", "publish", "tunnel", "doctor", "agent-setup", "status", "advance", "help", "ask", "studio"]) {
   ok(route(cmd) === "kit", `'pingfusi ${cmd}' → kit workflow`);
 }
 ok(route(undefined) === "kit" && route("no-such-cmd") === "kit", "bare/unknown → kit (workflow.js owns help + unknown-command handling)");

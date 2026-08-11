@@ -81,6 +81,8 @@ The full command lives in [docs/COMMANDS.md](docs/COMMANDS.md).
 pingfusi setup                          install + onboarding
 pingfusi doctor                         check the install; prints a fix per problem
 pingfusi ask "<question>"               ask a human reviewer, from any directory
+pingfusi studio [ping_id]               local viewer for playtest & review results —
+                                        sessions, recordings, transcripts, agent findings
 ```
 
 

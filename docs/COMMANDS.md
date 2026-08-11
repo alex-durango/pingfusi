@@ -18,6 +18,21 @@ pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]
 pingfusi ask result <ping_id>           passive answer snapshot (free; does not renew)
 pingfusi publish <built-dir|video.mp4>  host a self-contained site or seekable MP4
                                         (`--target`, `--record`, and `--json` available)
+pingfusi studio  [ping_id ...]          LOCAL RESULTS VIEWER (playtests first): fetches a
+                                        round's results over the wire and caches them —
+                                        JSON + media bytes — under <cwd>/.pingfusi/studio/
+                                        (signed media urls die in ~1h and objects are
+                                        retention-swept; the cache outlives both), then
+                                        serves a read-only page at http://localhost:7788:
+                                        per-session recording playback, think-aloud
+                                        transcript (click-to-seek), questionnaire matrix
+                                        with per-item means, reviewer comments, and the
+                                        agent-written findings in annotations.json.
+                                        `--port N`, `--open` (browser stays opt-in),
+                                        `--fetch-only`, `--no-media`, `--json`. No ids =
+                                        refresh cached in-flight rounds + serve. Never a
+                                        review surface: verdicts come from the independent
+                                        reviewer; the studio only shows them
 
 pingfusi new     <name> <url> [width]   scaffold a clone target
 pingfusi adopt   <name> <url> [width]   register an external draft for review-only
