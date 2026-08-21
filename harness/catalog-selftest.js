@@ -35,6 +35,7 @@ const CATALOG_FILES = [
   "use-cases/copy-anything/README.md",
   "use-cases/beautify/README.md",
   "use-cases/video-review/README.md",
+  "use-cases/playtest/README.md",
   "use-cases/your-own/TEMPLATE.md",
 ];
 for (const f of CATALOG_FILES) ok(exists(f), `${f} exists`);
@@ -156,6 +157,18 @@ const anything = read("use-cases/review-anything/README.md");
 ok(anything.includes("core.review.file") && /[Pp]ublish before review/.test(anything)
   && /[Vv]erdict-required/.test(anything),
   "review-anything states the generic loop's contract (publish-first, verdict-required)");
+const playtest = read("use-cases/playtest/README.md");
+ok(playtest.includes("core.review.file") && playtest.includes("est_minutes")
+  && /THIS IS THE PRICE/.test(playtest),
+  "playtest files through the generic core review verb and says est_minutes is the price");
+ok(playtest.includes("publish-build") && playtest.includes("/b/<slug>"),
+  "playtest teaches the uploaded-build path for games with no store page");
+ok(/transcript_status:'unavailable'/.test(playtest) && /[Nn]o inline transcript/.test(playtest),
+  "playtest states the Windows no-transcript caveat out loud");
+ok(/gamepad/.test(playtest) && playtest.includes("`instructions`") && playtest.includes("steps_result"),
+  "playtest carries the hardware convention (declare in instructions, verify via an authored step)");
+ok(/penalty-free/.test(playtest) && /never steer/.test(playtest),
+  "playtest preserves the uploaded-build disclosure stance (the player's call, never steered)");
 
 // ── availability is earned by a sanitized real-run receipt + visual ──────────
 // Raw reviewer transcripts stay under internal targets/. The shipped proof is the
@@ -192,6 +205,14 @@ const AVAILABILITY = [
     rootRe: /\| \[Video review\]\(use-cases\/video-review\/README\.md\)[^\n]*\| \*\*available\*\* \|/,
     catalogRe: /\| \[video-review\/\]\(video-review\/README\.md\) \| \*\*available\*\* \|/,
     proofName: "an approved receipt + reviewed-render visual",
+  },
+  {
+    entry: "playtest",
+    proofReady: sanitizedProofReady("playtest", "Completed the session",
+      ["review_state_sha256", "recording_sha256"]),
+    rootRe: /\| \[Playtest\]\(use-cases\/playtest\/README\.md\)[^\n]*\| \*\*available\*\* \|/,
+    catalogRe: /\| \[playtest\/\]\(playtest\/README\.md\) \| \*\*available\*\* \|/,
+    proofName: "a completed real round's receipt + a shipped visual",
   },
 ];
 for (const a of AVAILABILITY) {

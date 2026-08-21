@@ -54,7 +54,8 @@ all as plain text. Anything a reviewer must see goes through `draft.push` +
   approval is never trusted), persists the result envelope + receipts into `stateFile`,
   and returns a structured outcome (`{ ok, status, verdict, round, comments }`) — the
   caller owns presentation and exit codes. It is a passive snapshot and does not renew
-  a pending round's lease.
+  a pending round's lease (a lapse only pulls the round from the feed for new claims;
+  a reviewer mid-review can still finish).
 
 ### `draft` — push / status / delete a hosted public draft
 

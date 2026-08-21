@@ -1,15 +1,19 @@
 // studio-ui/app.js — the studio page: a READ-ONLY viewer over the local cache API
-// (/api/rounds, /api/round/<id>, /media/...). No route here writes anything: verdicts
-// come from the independent reviewer on the service, findings from the agent-written
-// annotations.json — this page only renders both. All feedback text is untrusted input
-// and reaches the DOM via textContent only.
+// (/api/rounds, /api/round/<id>, /api/runs, /api/run/<id>, /media/...). No route here
+// writes anything: verdicts come from the independent reviewer on the service, findings
+// from the agent-written annotations.json — this page only renders both. Machine (rig)
+// runs are a separate axis — written locally by the rig harness, listed grouped by gym,
+// and always labeled "machine run" so they never read as a human session. All feedback
+// text is untrusted input and reaches the DOM via textContent only.
 (() => {
   "use strict";
 
   const rail = document.getElementById("rail");
   const view = document.getElementById("view");
   const roundCache = new Map();
+  const runCache = new Map();
   let rounds = [];
+  let runs = []; // machine-run summaries in time order; gym groups derive from gym_id
   // A findings evidence chip can jump into a session AND seek — the seek survives the
   // hash-driven re-render here until the target video's metadata arrives.
   let pendingSeek = null;
@@ -23,15 +27,31 @@
   const frag = (...kids) => { const f = document.createDocumentFragment(); for (const k of kids) if (k) f.appendChild(k); return f; };
   const link = (href, cls, text) => { const a = el("a", cls, text); a.href = href; return a; };
   const extLink = (href, text) => { const a = link(href, null, text); a.target = "_blank"; a.rel = "noopener"; return a; };
+  // Everything clickable is a real button or link; rows that must stay divs (transcript
+  // segments carry their own layout) get the same keyboard affordance explicitly.
+  const btn = (cls, text) => { const b = el("button", cls, text); b.type = "button"; return b; };
+  const keyable = (node) => {
+    node.tabIndex = 0;
+    node.setAttribute("role", "button");
+    node.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); node.click(); } });
+    return node;
+  };
   const fmtMs = (ms) => {
     const s = Math.max(0, Math.round(Number(ms) / 1000));
     return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   };
+  // A clip anchor (time_ms + end_ms) labels as a span; an instant as one stamp.
+  const fmtSpan = (t, end) => (end != null && Number(end) > Number(t) ? `${fmtMs(t)}–${fmtMs(end)}` : fmtMs(t));
   const parseScore = (answer) => {
     const m = /^\s*([+-]?\d+)/.exec(String(answer == null ? "" : answer));
     return m ? Number(m[1]) : null;
   };
-  const fmtWhen = (iso) => { try { return new Date(iso).toLocaleString(); } catch (e) { return iso || ""; } };
+  const fmtWhen = (iso) => {
+    try {
+      const when = new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return when === "Invalid Date" ? iso || "" : when;
+    } catch (e) { return iso || ""; }
+  };
 
   async function getJson(url) {
     const res = await fetch(url);
@@ -44,18 +64,40 @@
     return roundCache.get(id);
   }
 
-  // ── router: #/round/<id>[/findings|/sessions|/session/<i>] ─────────────────
+  async function loadRun(id) {
+    if (!runCache.has(id)) runCache.set(id, await getJson(`/api/run/${id}`));
+    return runCache.get(id);
+  }
+
+  // ── router: #/round/<id>[/findings|/sessions|/session/<i>], #/run/<id>, #/gym/<id>
   function parseHash() {
-    const m = /^#\/round\/([0-9a-f-]{36})(?:\/(findings|sessions|session\/(\d+)))?$/i.exec(location.hash);
-    if (!m) return { page: "home" };
-    if (m[3] != null) return { page: "round", id: m[1].toLowerCase(), tab: "session", session: Number(m[3]) };
-    return { page: "round", id: m[1].toLowerCase(), tab: m[2] || "overview" };
+    let m = /^#\/round\/([0-9a-f-]{36})(?:\/(findings|sessions|session\/(\d+)))?$/i.exec(location.hash);
+    if (m) {
+      if (m[3] != null) return { page: "round", id: m[1].toLowerCase(), tab: "session", session: Number(m[3]) };
+      return { page: "round", id: m[1].toLowerCase(), tab: m[2] || "overview" };
+    }
+    m = /^#\/run\/([a-z0-9][a-z0-9-]{7,63})$/.exec(location.hash);
+    if (m) return { page: "run", id: m[1] };
+    m = /^#\/gym\/([^/]+)$/.exec(location.hash);
+    if (m) { try { return { page: "gym", gym: decodeURIComponent(m[1]) }; } catch (e) {} }
+    return { page: "home" };
   }
 
   async function route() {
     const r = parseHash();
-    renderRail(r.page === "round" ? r.id : null);
+    renderRail(r.page === "round" ? { round: r.id } : r.page === "run" ? { run: r.id } : r.page === "gym" ? { gym: r.gym } : null);
     if (r.page === "home") return renderHome();
+    if (r.page === "gym") return renderGym(r.gym);
+    if (r.page === "run") {
+      try {
+        renderRun(r.id, await loadRun(r.id));
+      } catch (e) {
+        view.replaceChildren(el("h1", null, "run not available"), el("p", "dim", e.status === 404
+          ? "This machine run is not in the cache — the rig writes runs under .pingfusi/studio/runs/<run_id>/."
+          : `Could not load the run (${e.message}).`));
+      }
+      return;
+    }
     try {
       const data = await loadRound(r.id);
       renderRound(r.id, data, r.tab, r.session);
@@ -67,9 +109,13 @@
   }
 
   // ── rail ───────────────────────────────────────────────────────────────────
-  function renderRail(activeId) {
-    const brand = el("div", "brand", "pingfusi studio");
-    brand.appendChild(el("small", null, "results viewer — sessions, transcripts, findings"));
+  function renderRail(active) {
+    const brand = el("div", "brand");
+    brand.appendChild(el("span", "mark"));
+    const brandText = el("div");
+    brandText.appendChild(el("div", "brand-name", "pingfusi studio"));
+    brandText.appendChild(el("small", null, "results viewer"));
+    brand.appendChild(brandText);
     const groups = new Map();
     for (const r of rounds) {
       if (!groups.has(r.kind)) groups.set(r.kind, []);
@@ -78,21 +124,49 @@
     const parts = [brand];
     for (const [kind, list] of groups) {
       const g = el("div", "group");
-      g.appendChild(el("div", "group-title", `${kind} (${list.length})`));
+      g.appendChild(el("div", "group-title", `${kind} · ${list.length}`));
       for (const r of list) {
-        const a = link(`#/round/${r.ping_id}`, "round" + (r.ping_id === activeId ? " active" : ""));
+        const a = link(`#/round/${r.ping_id}`, "round" + (active && active.round === r.ping_id ? " active" : ""));
         a.appendChild(el("span", "label", r.label || r.ping_id));
         const meta = el("span", "meta");
-        meta.appendChild(el("span", `chip status-${r.status}`, r.status));
-        meta.appendChild(el("span", "dim small", `${r.n_received}/${r.n_target == null ? "?" : r.n_target}`));
-        if (r.has_media) meta.appendChild(el("span", "dim small", "media"));
-        if (r.has_transcript) meta.appendChild(el("span", "dim small", "transcript"));
+        meta.appendChild(el("span", `dot s-${r.status}`));
+        meta.appendChild(el("span", "count", `${r.n_received}/${r.n_target == null ? "?" : r.n_target}`));
+        if (r.has_media) meta.appendChild(el("span", null, "media"));
+        if (r.has_transcript) meta.appendChild(el("span", null, "transcript"));
         a.appendChild(meta);
         g.appendChild(a);
       }
       parts.push(g);
     }
-    if (!rounds.length) {
+    // Gym runs: the machine (rig) axis, grouped by gym — never mixed into the human
+    // review groups above, and every row says "machine".
+    const byGym = new Map();
+    for (const r of runs) {
+      const key = r.gym_id || "";
+      if (!byGym.has(key)) byGym.set(key, []);
+      byGym.get(key).push(r);
+    }
+    for (const [gymId, list] of byGym) {
+      const g = el("div", "group");
+      if (gymId) {
+        g.appendChild(link(`#/gym/${encodeURIComponent(gymId)}`, "group-title gym" + (active && active.gym === gymId ? " active" : ""), `gym · ${gymId} · ${list.length}`));
+      } else {
+        g.appendChild(el("div", "group-title", `ad-hoc runs · ${list.length}`));
+      }
+      for (const r of [...list].reverse()) { // rail reads newest first; the gym view keeps time order
+        const a = link(`#/run/${r.run_id}`, "round" + (active && active.run === r.run_id ? " active" : ""));
+        a.appendChild(el("span", "label", r.build_label || r.run_id));
+        const meta = el("span", "meta");
+        meta.appendChild(el("span", `dot s-${r.result || "unknown"}`));
+        if (r.mode) meta.appendChild(el("span", null, r.mode));
+        meta.appendChild(el("span", "machine-tag", "machine"));
+        if (r.has_media) meta.appendChild(el("span", null, "media"));
+        a.appendChild(meta);
+        g.appendChild(a);
+      }
+      parts.push(g);
+    }
+    if (!rounds.length && !runs.length) {
       const empty = el("div", "empty");
       empty.appendChild(document.createTextNode("Nothing cached yet. Fetch a round: "));
       empty.appendChild(el("code", null, "pingfusi studio <ping_id>"));
@@ -103,31 +177,47 @@
 
   // ── home ───────────────────────────────────────────────────────────────────
   function renderHome() {
-    const intro = el("div", "card");
-    intro.appendChild(el("p", null, "Pick a round from the rail to see its sessions: what each human playtester said, their recording and think-aloud transcript when the round produced one, the questionnaire answers, and the findings your agent pinned to the footage."));
-    const p2 = el("p", "dim small");
-    p2.appendChild(document.createTextNode("This page is a read-only viewer. Fetch or refresh a round from the terminal: "));
-    p2.appendChild(el("code", null, "pingfusi studio <ping_id>"));
-    intro.appendChild(p2);
-    view.replaceChildren(el("h1", null, "pingfusi studio"), intro);
+    const lede = el("p", "lede", "Watch what each human reviewer did with your build — the recording, the think-aloud transcript, the questionnaire answers, and the findings your agent pinned to the footage, side by side.");
+    const how = el("div", "card");
+    how.appendChild(el("h2", null, "How it works"));
+    const steps = el("ol", "steps");
+    const step = (...kids) => { const li = el("li"); li.appendChild(frag(...kids)); steps.appendChild(li); };
+    step(document.createTextNode("Fetch a round's results into the local cache: "), el("code", null, "pingfusi studio <ping_id>"), document.createTextNode(" — media bytes are downloaded next to the JSON, so old rounds replay after the signed links lapse."));
+    step(document.createTextNode("Pick the round in the rail to browse its sessions, transcripts, and answers."));
+    step(document.createTextNode("Ask your agent to analyze the sessions — its findings land in the Findings tab, each anchored to the exact moment in the footage."));
+    how.appendChild(steps);
+    const note = el("p", "dim small");
+    note.appendChild(document.createTextNode("This page is a read-only viewer: verdicts come from the independent human reviewer on the service, findings from your agent. Refresh a round from the terminal with the same command."));
+    how.appendChild(note);
+    const parts = [el("h1", null, "pingfusi studio"), lede, how];
+    if (runs.length) {
+      const mr = el("div", "card");
+      mr.appendChild(el("h2", null, "Machine runs"));
+      const p = el("p", "dim small");
+      p.appendChild(document.createTextNode("The rig's gamepad playtest runs live in the rail under their gyms — per-gym pass/fail with causes and performance across builds, plus each run's recording and events. A machine run is written locally into "));
+      p.appendChild(el("code", null, ".pingfusi/studio/runs/"));
+      p.appendChild(document.createTextNode(" and is a separate artifact family from human review rounds — always labeled as such."));
+      mr.appendChild(p);
+      parts.push(mr);
+    }
+    view.replaceChildren(...parts);
   }
 
   // ── round page ─────────────────────────────────────────────────────────────
   function renderRound(id, data, tab, sessionIdx) {
     if (data.receipt) return renderReceipt(id, data);
     const rec = data.result || {};
-    const header = el("div");
-    const h1 = el("h1", null, `${rec.kind || "review"} round`);
-    header.appendChild(h1);
-    const meta = el("p", "dim small");
+    const header = el("header", "page-head");
+    header.appendChild(el("h1", null, `${rec.kind || "review"} round`));
+    const meta = el("div", "meta");
     meta.appendChild(el("span", "chip kind", rec.kind || "review"));
-    meta.appendChild(document.createTextNode(" "));
     meta.appendChild(el("span", `chip status-${rec.status}`, rec.status));
-    meta.appendChild(document.createTextNode(` ${rec.n_received}/${rec.n_target == null ? "?" : rec.n_target} result(s) · fetched ${fmtWhen(rec.fetched_at)} · `));
+    meta.appendChild(el("span", null, `${rec.n_received}/${rec.n_target == null ? "?" : rec.n_target} result(s)`));
+    meta.appendChild(el("span", null, `fetched ${fmtWhen(rec.fetched_at)}`));
     meta.appendChild(el("code", null, id));
     header.appendChild(meta);
-    const links = el("p", "small");
-    if (rec.report_url) { links.appendChild(extLink(rec.report_url, "hosted report ↗")); links.appendChild(document.createTextNode("  ")); }
+    const links = el("div", "links");
+    if (rec.report_url) links.appendChild(extLink(rec.report_url, "hosted report ↗"));
     if (rec.poll_url) links.appendChild(extLink(rec.poll_url, "round page ↗"));
     if (links.childNodes.length) header.appendChild(links);
 
@@ -152,11 +242,11 @@
   }
 
   function renderReceipt(id, data) {
-    const header = el("div");
+    const header = el("header", "page-head");
     header.appendChild(el("h1", null, data.label || id));
-    const meta = el("p", "dim small");
+    const meta = el("div", "meta");
     meta.appendChild(el("span", "chip kind", data.source));
-    meta.appendChild(document.createTextNode(" local receipt — recorded by a kit workflow; shown as-is"));
+    meta.appendChild(el("span", null, "local receipt — recorded by a kit workflow; shown as-is"));
     header.appendChild(meta);
     const pre = el("pre", "card small");
     pre.style.overflowX = "auto";
@@ -179,15 +269,20 @@
     }
     if (!responses.length) { root.appendChild(el("p", "dim", "No results yet.")); return; }
 
-    // verdict tally
+    // verdict tally, largest first, with a proportion meter per verdict
     const tally = new Map();
     for (const r of responses) tally.set(r.choice || "(no verdict)", (tally.get(r.choice || "(no verdict)") || 0) + 1);
     const verdicts = el("div", "card");
     verdicts.appendChild(el("h2", null, "Verdicts"));
-    for (const [v, n] of tally) {
-      const row = el("div");
+    for (const [v, n] of [...tally.entries()].sort((a, b) => b[1] - a[1])) {
+      const row = el("div", "verdict-row");
       row.appendChild(el("span", "chip verdict", v));
-      row.appendChild(el("span", "dim small", `  ×${n}`));
+      const meter = el("span", "meter");
+      const fill = el("span");
+      fill.style.width = `${Math.round((n / responses.length) * 100)}%`;
+      meter.appendChild(fill);
+      row.appendChild(meter);
+      row.appendChild(el("span", "count", String(n)));
       verdicts.appendChild(row);
     }
     root.appendChild(verdicts);
@@ -231,7 +326,8 @@
         });
         tr.appendChild(cell);
         const mean = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-        tr.appendChild(el("td", "num mean", mean == null ? "—" : (mean > 0 ? "+" : "") + mean.toFixed(1)));
+        const sign = mean == null || mean === 0 ? "zero" : mean > 0 ? "pos" : "neg";
+        tr.appendChild(el("td", `num mean ${sign}`, mean == null ? "—" : (mean > 0 ? "+" : "") + mean.toFixed(1)));
         table.appendChild(tr);
       }
       card.appendChild(table);
@@ -255,21 +351,11 @@
     }
   }
 
-  // ── findings tab (agent-written annotations.json, rendered read-only) ──────
-  function renderFindings(id, data, root) {
-    const ann = data.annotations;
-    const nSessions = (data.result.responses || []).length;
-    if (!ann || !Array.isArray(ann.findings) || !ann.findings.length) {
-      const card = el("div", "card");
-      card.appendChild(el("p", null, "No agent findings yet for this round."));
-      const p = el("p", "dim small");
-      p.appendChild(document.createTextNode("Ask your agent to analyze the sessions — it writes its observations to "));
-      p.appendChild(el("code", null, `.pingfusi/studio/${id}/annotations.json`));
-      p.appendChild(document.createTextNode(" and the studio renders them here. The studio itself never generates findings."));
-      card.appendChild(p);
-      root.appendChild(card);
-      return;
-    }
+  // ── findings (agent-written annotations.json, rendered read-only) ──────────
+  // One renderer for rounds AND machine runs — the card shape is shared; only the
+  // evidence chips differ (a round jumps into a session, a run seeks its own video).
+  function renderFindingCards(ann, root, opts) {
+    if (!ann || !Array.isArray(ann.findings) || !ann.findings.length) { root.appendChild(opts.empty()); return; }
     if (ann.summary) {
       const s = el("div", "card");
       s.appendChild(el("h2", null, "Summary"));
@@ -277,28 +363,23 @@
       root.appendChild(s);
     }
     for (const f of ann.findings) {
-      const card = el("div", "card finding");
+      const sentiment = f.sentiment === "positive" ? "pos" : f.sentiment === "negative" ? "neg" : "neu";
+      const card = el("div", `card finding s-${sentiment}`);
       const head = el("div", "head");
       head.appendChild(el("span", "title", f.title || "(untitled finding)"));
-      const sentiment = f.sentiment === "positive" ? "pos" : f.sentiment === "negative" ? "neg" : "neu";
       if (f.sentiment) head.appendChild(el("span", `chip ${sentiment}`, f.sentiment));
       for (const t of f.tags || []) head.appendChild(el("span", "tag", `#${t}`));
       card.appendChild(head);
       if (f.body) card.appendChild(el("div", "body", f.body));
       const evidence = Array.isArray(f.evidence) ? f.evidence : [];
-      const distinct = new Set(evidence.map((e) => e.response_index).filter((n) => n != null));
-      if (distinct.size && nSessions) card.appendChild(el("div", "dim small", `Reported by ${distinct.size}/${nSessions} session(s)`));
+      const coverage = opts.coverage ? opts.coverage(evidence) : null;
+      if (coverage) card.appendChild(el("div", "dim small coverage", coverage));
       if (evidence.length) {
         const chips = el("div", "evidence");
         for (const e of evidence) {
-          const n = Number(e.response_index) || 0;
-          const label = e.time_ms != null ? `S${n + 1} · ${fmtMs(e.time_ms)}` : e.step_index != null ? `S${n + 1} · Q${e.step_index}` : `S${n + 1}`;
-          const chip = el("span", "chip time", label);
+          const chip = btn("chip time", opts.chipLabel(e));
           if (e.quote) chip.title = `“${e.quote}”`;
-          chip.addEventListener("click", () => {
-            pendingSeek = e.time_ms != null ? { time_ms: Number(e.time_ms) } : null;
-            location.hash = `#/round/${id}/session/${n}`;
-          });
+          chip.addEventListener("click", () => opts.onChip(e));
           chips.appendChild(chip);
         }
         card.appendChild(chips);
@@ -307,25 +388,53 @@
     }
   }
 
+  function renderFindings(id, data, root) {
+    const nSessions = (data.result.responses || []).length;
+    renderFindingCards(data.annotations, root, {
+      empty: () => {
+        const card = el("div", "card");
+        card.appendChild(el("p", null, "No agent findings yet for this round."));
+        const p = el("p", "dim small");
+        p.appendChild(document.createTextNode("Ask your agent to analyze the sessions — it writes its observations to "));
+        p.appendChild(el("code", null, `.pingfusi/studio/${id}/annotations.json`));
+        p.appendChild(document.createTextNode(" (contract and guidance: "));
+        p.appendChild(el("code", null, "docs/STUDIO.md"));
+        p.appendChild(document.createTextNode(" in the kit install) and the studio renders them here. The studio itself never generates findings."));
+        card.appendChild(p);
+        return card;
+      },
+      coverage: (evidence) => {
+        const distinct = new Set(evidence.map((e) => e.response_index).filter((n) => n != null));
+        return distinct.size && nSessions ? `Reported by ${distinct.size}/${nSessions} session(s)` : null;
+      },
+      chipLabel: (e) => {
+        const n = Number(e.response_index) || 0;
+        return e.time_ms != null ? `S${n + 1} · ${fmtSpan(e.time_ms, e.end_ms)}` : e.step_index != null ? `S${n + 1} · Q${e.step_index}` : `S${n + 1}`;
+      },
+      onChip: (e) => {
+        pendingSeek = e.time_ms != null ? { time_ms: Number(e.time_ms) } : null;
+        location.hash = `#/round/${id}/session/${Number(e.response_index) || 0}`;
+      },
+    });
+  }
+
   // ── sessions tab ───────────────────────────────────────────────────────────
   function renderSessions(id, rec, root) {
     const responses = rec.responses || [];
     if (!responses.length) { root.appendChild(el("p", "dim", "No sessions yet.")); return; }
     responses.forEach((r, i) => {
-      const card = el("div", "card");
-      card.style.cursor = "pointer";
-      const head = el("div");
-      head.appendChild(el("strong", null, `Session ${i + 1}  `));
+      const card = link(`#/round/${id}/session/${i}`, "card session");
+      const head = el("div", "session-head");
+      head.appendChild(el("strong", null, `Session ${i + 1}`));
       if (r.choice) head.appendChild(el("span", "chip verdict", r.choice));
-      head.appendChild(el("span", "dim small", `  ${fmtWhen(r.answered_at)}`));
+      head.appendChild(el("span", "when", fmtWhen(r.answered_at)));
       card.appendChild(head);
-      if (r.free_text) card.appendChild(el("p", "dim", r.free_text.length > 160 ? `${r.free_text.slice(0, 160)}…` : r.free_text));
-      const badges = el("div", "dim small");
+      if (r.free_text) card.appendChild(el("p", "session-note", r.free_text.length > 160 ? `${r.free_text.slice(0, 160)}…` : r.free_text));
+      const badges = el("div", "session-badges");
       if (r.media && r.media.file) badges.appendChild(el("span", "chip", "recording"));
       if (r.media && r.media.unavailable) badges.appendChild(el("span", "chip", `media: ${r.media.unavailable}`));
       if (r.transcript) badges.appendChild(el("span", "chip", "transcript"));
       if (badges.childNodes.length) card.appendChild(badges);
-      card.addEventListener("click", () => { location.hash = `#/round/${id}/session/${i}`; });
       root.appendChild(card);
     });
   }
@@ -337,20 +446,20 @@
     if (!r) { root.appendChild(el("p", "dim", "No such session.")); return; }
 
     const head = el("div", "card");
-    const line = el("div");
-    line.appendChild(el("strong", null, `Session ${i + 1}  `));
+    const line = el("div", "session-head");
+    line.appendChild(el("strong", null, `Session ${i + 1}`));
     if (r.choice) line.appendChild(el("span", "chip verdict", r.choice));
-    line.appendChild(el("span", "dim small", `  ${fmtWhen(r.answered_at)}`));
+    line.appendChild(el("span", "when", fmtWhen(r.answered_at)));
     head.appendChild(line);
     if (r.free_text) {
-      head.appendChild(el("div", "dim small", "Reviewer note"));
-      head.appendChild(el("p", null, r.free_text));
+      head.appendChild(el("h2", null, "Reviewer note"));
+      head.appendChild(el("p", "session-note", r.free_text));
     }
     root.appendChild(head);
 
     const grid = el("div", "session-grid");
     const left = el("div");
-    const right = el("div");
+    const right = el("div", "side");
     grid.appendChild(left);
     grid.appendChild(right);
     root.appendChild(grid);
@@ -367,20 +476,33 @@
       left.appendChild(timeline);
       const pins = [];
       for (const c of rec.comments || []) {
-        if (c && c.video_anchor && c.video_anchor.time_ms != null) pins.push({ t: Number(c.video_anchor.time_ms), cls: "pin comment", label: c.text || "comment" });
+        if (c && c.video_anchor && c.video_anchor.time_ms != null) pins.push({ t: Number(c.video_anchor.time_ms), end: null, cls: "pin comment", label: c.text || "comment" });
       }
       const ann = data.annotations;
       for (const f of (ann && ann.findings) || []) {
         for (const e of f.evidence || []) {
-          if (Number(e.response_index) === i && e.time_ms != null) pins.push({ t: Number(e.time_ms), cls: "pin", label: f.title || "finding" });
+          if (Number(e.response_index) === i && e.time_ms != null) pins.push({ t: Number(e.time_ms), end: e.end_ms != null ? Number(e.end_ms) : null, cls: "pin", label: f.title || "finding" });
         }
       }
       video.addEventListener("loadedmetadata", () => {
         const total = video.duration * 1000;
+        const pct = (ms) => `${Math.min(100, Math.max(0, (ms / total) * 100))}%`;
+        // Clip spans render first so the dots sit on top of them.
         if (total > 0) for (const p of pins) {
-          const dot = el("span", p.cls);
-          dot.style.left = `${Math.min(100, Math.max(0, (p.t / total) * 100))}%`;
-          dot.title = `${fmtMs(p.t)} — ${p.label}`;
+          if (!(p.end > p.t)) continue;
+          const span = btn("pin-range");
+          span.style.left = pct(p.t);
+          span.style.width = pct(Math.min(p.end, total) - p.t);
+          span.title = `${fmtSpan(p.t, p.end)} — ${p.label}`;
+          span.setAttribute("aria-label", `${fmtSpan(p.t, p.end)} — ${p.label}`);
+          span.addEventListener("click", () => { video.currentTime = p.t / 1000; video.play(); });
+          timeline.appendChild(span);
+        }
+        if (total > 0) for (const p of pins) {
+          const dot = btn(p.cls);
+          dot.style.left = pct(p.t);
+          dot.title = `${fmtSpan(p.t, p.end)} — ${p.label}`;
+          dot.setAttribute("aria-label", `${fmtSpan(p.t, p.end)} — ${p.label}`);
           dot.addEventListener("click", () => { video.currentTime = p.t / 1000; video.play(); });
           timeline.appendChild(dot);
         }
@@ -414,8 +536,9 @@
         const li = el("li");
         li.appendChild(document.createTextNode(s.text || ""));
         if (s.answer != null && s.answer !== "") {
+          const score = parseScore(s.answer);
           li.appendChild(document.createTextNode("  "));
-          li.appendChild(el("span", "chip", s.answer));
+          li.appendChild(el("span", `chip${score == null ? "" : score > 0 ? " pos" : score < 0 ? " neg" : ""}`, s.answer));
         }
         ul.appendChild(li);
       }
@@ -432,7 +555,7 @@
       for (const c of comments) {
         const li = el("li");
         if (c.video_anchor && c.video_anchor.time_ms != null) {
-          const chip = el("span", "chip time", fmtMs(c.video_anchor.time_ms));
+          const chip = btn("chip time", fmtMs(c.video_anchor.time_ms));
           chip.addEventListener("click", () => { if (video) { video.currentTime = c.video_anchor.time_ms / 1000; video.play(); } });
           li.appendChild(chip);
           li.appendChild(document.createTextNode("  "));
@@ -443,6 +566,41 @@
       }
       card.appendChild(ul);
       left.appendChild(card);
+    }
+
+    // Key moments: this session's insight rail — the agent's evidence anchors and the
+    // reviewer's anchored comments merged in timeline order, each row a seek. Transcript
+    // markers stay inline in the transcript below; this rail is analysis, not raw signal.
+    const moments = [];
+    const anns = data.annotations;
+    for (const f of (anns && anns.findings) || []) {
+      const cls = f.sentiment === "positive" ? "s-pos" : f.sentiment === "negative" ? "s-neg" : "s-neu";
+      for (const e of f.evidence || []) {
+        if (Number(e.response_index) !== i || e.time_ms == null) continue;
+        moments.push({ t: Number(e.time_ms), end: e.end_ms != null ? Number(e.end_ms) : null, cls, tag: (f.tags || [])[0] || null, text: e.quote ? `“${e.quote}”` : (f.title || "finding"), title: f.title || "finding" });
+      }
+    }
+    for (const c of rec.comments || []) {
+      if (c && c.video_anchor && c.video_anchor.time_ms != null) moments.push({ t: Number(c.video_anchor.time_ms), end: null, cls: "comment", tag: "reviewer", text: c.text || "comment", title: "reviewer comment" });
+    }
+    moments.sort((a, b) => a.t - b.t);
+    if (moments.length) {
+      const card = el("div", "card");
+      card.appendChild(el("h2", null, "Key moments"));
+      const rail_ = el("div", "moments");
+      for (const m of moments) {
+        const row = btn(`moment ${m.cls}`);
+        const line = el("span", "head-row");
+        line.appendChild(el("span", "time", fmtSpan(m.t, m.end)));
+        if (m.tag) line.appendChild(el("span", "tag", `#${m.tag}`));
+        row.appendChild(line);
+        row.appendChild(el("span", "text", m.text));
+        row.title = m.title;
+        row.addEventListener("click", () => { if (video) { video.currentTime = m.t / 1000; video.play(); } });
+        rail_.appendChild(row);
+      }
+      card.appendChild(rail_);
+      right.appendChild(card);
     }
 
     // transcript rail
@@ -463,7 +621,7 @@
       const segEls = [];
       for (const entry of entries) {
         if (!entry.seg) { box.appendChild(el("div", "marker", `⚑ ${fmtMs(entry.t)} ${entry.text || ""}`)); continue; }
-        const row = el("div", "seg");
+        const row = keyable(el("div", "seg"));
         row.appendChild(el("span", "t", fmtMs(entry.t)));
         row.appendChild(el("span", null, entry.text || ""));
         row.addEventListener("click", () => { if (video) { video.currentTime = entry.t / 1000; video.play(); } });
@@ -489,6 +647,289 @@
     }
   }
 
+  // ── machine runs: shared SVG helpers (zero-dep, CSS-variable themed) ────────
+  const svgNode = (tag, attrs, text) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  // The gym chart: avg fps across runs in time order (x labeled by build), with the
+  // 1%-low series as a faint dashed polyline when any run recorded one.
+  function fpsChart(entries) {
+    const W = 640, H = 220, padL = 44, padR = 30, padT = 12, padB = 34; // padR fits the last x label
+    const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, class: "fps-chart", role: "img", "aria-label": "average fps across builds" });
+    const values = [];
+    for (const e of entries) { values.push(e.avg_fps); if (e.one_percent_low_fps != null) values.push(e.one_percent_low_fps); }
+    const top = Math.max(20, Math.ceil(Math.max(...values) / 20) * 20);
+    const x = (i) => (entries.length === 1 ? padL + (W - padL - padR) / 2 : padL + (i * (W - padL - padR)) / (entries.length - 1));
+    const y = (v) => padT + (1 - v / top) * (H - padT - padB);
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      svg.appendChild(svgNode("line", { x1: padL, x2: W - padR, y1: y(top * f), y2: y(top * f), class: "grid" }));
+      svg.appendChild(svgNode("text", { x: padL - 6, y: y(top * f) + 3, "text-anchor": "end", class: "axis" }, String(Math.round(top * f))));
+    }
+    const points = (get) => entries.map((e, i) => (get(e) == null ? null : `${x(i)},${y(get(e))}`)).filter(Boolean).join(" ");
+    if (entries.some((e) => e.one_percent_low_fps != null)) svg.appendChild(svgNode("polyline", { points: points((e) => e.one_percent_low_fps), class: "line low" }));
+    svg.appendChild(svgNode("polyline", { points: points((e) => e.avg_fps), class: "line avg" }));
+    entries.forEach((e, i) => {
+      const c = svgNode("circle", { cx: x(i), cy: y(e.avg_fps), r: 3.5, class: `pt ${e.result === "fail" ? "fail" : e.result === "error" ? "error" : "pass"}` });
+      c.appendChild(svgNode("title", {}, `${e.build_label || e.run_id} — ${e.avg_fps} fps${e.one_percent_low_fps != null ? ` (1% low ${e.one_percent_low_fps})` : ""}${e.result ? ` — ${e.result}` : ""}`));
+      svg.appendChild(c);
+    });
+    const every = Math.ceil(entries.length / 8);
+    entries.forEach((e, i) => {
+      if (i % every) return;
+      const label = String(e.build_label || e.run_id);
+      svg.appendChild(svgNode("text", { x: x(i), y: H - padB + 16, "text-anchor": "middle", class: "axis" }, label.length > 12 ? `${label.slice(0, 11)}…` : label));
+    });
+    return svg;
+  }
+
+  // The run sparkline: performance.summary.series_1s, one fps sample per second.
+  function fpsSparkline(series) {
+    const vals = series.map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0));
+    const W = 600, H = 64, pad = 4;
+    const top = Math.max(1, ...vals);
+    const x = (i) => (vals.length === 1 ? W / 2 : pad + (i * (W - 2 * pad)) / (vals.length - 1));
+    const y = (v) => pad + (1 - v / top) * (H - 2 * pad);
+    const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, class: "fps-spark", preserveAspectRatio: "none", role: "img", "aria-label": "fps per second over the run" });
+    svg.appendChild(svgNode("line", { x1: pad, x2: W - pad, y1: H - pad, y2: H - pad, class: "base" }));
+    svg.appendChild(svgNode("polyline", { points: vals.map((v, i) => `${x(i)},${y(v)}`).join(" ") }));
+    return svg;
+  }
+
+  const resultChipClass = (result) => (result === "pass" ? "pos" : result === "fail" ? "neg" : "neu");
+  const fmtFps = (v) => (v == null ? "—" : Number(v).toFixed(1));
+
+  // ── gym view: pass/fail with causes + performance over time across builds ──
+  function renderGym(gymId) {
+    const list = runs.filter((r) => r.gym_id === gymId);
+    if (!list.length) {
+      view.replaceChildren(el("h1", null, "gym not found"), el("p", "dim", "No machine runs recorded for this gym yet — the rig writes them under .pingfusi/studio/runs/<run_id>/."));
+      return;
+    }
+    const latest = list[list.length - 1];
+    const header = el("header", "page-head");
+    header.appendChild(el("h1", null, `gym · ${gymId}`));
+    const meta = el("div", "meta");
+    meta.appendChild(el("span", "chip machine", "machine runs"));
+    if (latest.gym_version) meta.appendChild(el("span", "chip", `v${latest.gym_version}`));
+    const passes = list.filter((r) => r.result === "pass").length;
+    const fails = list.filter((r) => r.result === "fail").length;
+    const errors = list.filter((r) => r.result === "error").length;
+    meta.appendChild(el("span", null, `${list.length} run(s)`));
+    if (passes) meta.appendChild(el("span", "chip pos", `${passes} pass`));
+    if (fails) meta.appendChild(el("span", "chip neg", `${fails} fail`));
+    if (errors) meta.appendChild(el("span", "chip neu", `${errors} error`));
+    header.appendChild(meta);
+
+    const body = el("div");
+    const perf = list.filter((r) => r.avg_fps != null);
+    const chart = el("div", "card");
+    chart.appendChild(el("h2", null, "Performance across builds"));
+    if (perf.length) {
+      chart.appendChild(fpsChart(perf));
+      const legend = el("div", "chart-legend");
+      legend.appendChild(el("span", "key", "avg fps"));
+      if (perf.some((r) => r.one_percent_low_fps != null)) legend.appendChild(el("span", "key low", "1% low"));
+      chart.appendChild(legend);
+    } else {
+      chart.appendChild(el("p", "dim small", "No performance summaries recorded for this gym yet."));
+    }
+    body.appendChild(chart);
+
+    const card = el("div", "card");
+    card.appendChild(el("h2", null, "Runs in time order"));
+    const table = el("table", "qmatrix");
+    const thead = el("tr");
+    for (const h of ["build", "mode", "result", "avg fps", "1% low", "when"]) thead.appendChild(el("th", null, h));
+    table.appendChild(thead);
+    for (const r of list) {
+      const tr = el("tr");
+      const tdBuild = el("td");
+      tdBuild.appendChild(link(`#/run/${r.run_id}`, null, r.build_label || r.run_id));
+      tr.appendChild(tdBuild);
+      const tdMode = el("td");
+      if (r.mode) tdMode.appendChild(el("span", "chip", r.mode));
+      tr.appendChild(tdMode);
+      const tdResult = el("td");
+      tdResult.appendChild(el("span", `chip ${resultChipClass(r.result)}`, r.result || "?"));
+      if (r.failure_message) tdResult.appendChild(el("span", "dim small fail-note", ` ${r.failure_kind ? `${r.failure_kind}: ` : ""}${r.failure_message}`));
+      tr.appendChild(tdResult);
+      tr.appendChild(el("td", "num", fmtFps(r.avg_fps)));
+      tr.appendChild(el("td", "num", fmtFps(r.one_percent_low_fps)));
+      tr.appendChild(el("td", "num dim small", fmtWhen(r.at)));
+      table.appendChild(tr);
+    }
+    card.appendChild(table);
+    body.appendChild(card);
+    view.replaceChildren(header, body);
+  }
+
+  // ── run view: one machine run — verdict, perf, events, recording, findings ─
+  function renderRun(id, data) {
+    const rec = data.receipt || {};
+    const summary = runs.find((r) => r.run_id === id) || null;
+    const build = rec.build && typeof rec.build === "object" ? rec.build : {};
+    const perf = (rec.performance && rec.performance.summary) || {};
+    const failure = rec.failure_cause && typeof rec.failure_cause === "object" ? rec.failure_cause : null;
+    const result = rec.result || (rec.ok === true ? "pass" : rec.ok === false ? "fail" : null);
+
+    let video = null;
+    const seek = (ms) => { if (video && ms != null) { video.currentTime = Number(ms) / 1000; video.play(); } };
+
+    const header = el("header", "page-head");
+    header.appendChild(el("h1", null, "machine run"));
+    const meta = el("div", "meta");
+    meta.appendChild(el("span", "chip machine", "machine run"));
+    if (result) meta.appendChild(el("span", `chip ${resultChipClass(result)}`, result));
+    if (rec.mode) meta.appendChild(el("span", "chip", rec.mode));
+    const buildLabel = build.label || build.filename || (summary && summary.build_label) || null;
+    if (buildLabel) meta.appendChild(el("span", "chip verdict", buildLabel));
+    if (rec.duration_ms != null) meta.appendChild(el("span", null, `ran ${fmtMs(rec.duration_ms)}`));
+    if (rec.at) meta.appendChild(el("span", null, fmtWhen(rec.at)));
+    meta.appendChild(el("code", null, id));
+    header.appendChild(meta);
+    if (rec.gym && rec.gym.id) {
+      const links = el("div", "links");
+      links.appendChild(link(`#/gym/${encodeURIComponent(String(rec.gym.id))}`, null, `gym · ${rec.gym.id} ›`));
+      header.appendChild(links);
+    }
+
+    const body = el("div");
+    if (failure) {
+      const b = el("div", "card banner neg");
+      const line = el("div", "session-head");
+      line.appendChild(el("span", "chip neg", failure.kind || "failure"));
+      if (failure.at_ms != null) {
+        const chip = btn("chip time", fmtMs(failure.at_ms));
+        chip.addEventListener("click", () => seek(failure.at_ms));
+        line.appendChild(chip);
+      }
+      b.appendChild(line);
+      if (failure.message) b.appendChild(el("p", "session-note", failure.message));
+      body.appendChild(b);
+    }
+
+    const grid = el("div", "session-grid");
+    const left = el("div");
+    const right = el("div", "side");
+    grid.appendChild(left);
+    grid.appendChild(right);
+    body.appendChild(grid);
+
+    // recording — served from the run's own media dir; event rows and screenshot
+    // chips seek it (the transcript-seek pattern).
+    const rel = rec.media && typeof rec.media.recording === "string" ? /^(media|shots)\/([A-Za-z0-9._-]+)$/.exec(rec.media.recording) : null;
+    if (rel && (!summary || summary.has_media)) {
+      video = document.createElement("video");
+      video.controls = true;
+      video.preload = "metadata";
+      video.src = `/media/run/${id}/${rel[1]}/${encodeURIComponent(rel[2])}`;
+      left.appendChild(video);
+    } else {
+      left.appendChild(el("p", "dim small", "No recording captured for this run."));
+    }
+
+    // screenshots strip — each chip seeks the recording to its moment
+    const shots = rec.media && Array.isArray(rec.media.screenshots) ? rec.media.screenshots : [];
+    const shotEls = [];
+    for (const s of shots) {
+      const m = s && typeof s.file === "string" ? /^(media|shots)\/([A-Za-z0-9._-]+)$/.exec(s.file) : null;
+      if (!m) continue;
+      const chip = btn("shot");
+      const img = document.createElement("img");
+      img.src = `/media/run/${id}/${m[1]}/${encodeURIComponent(m[2])}`;
+      img.alt = s.why || "screenshot";
+      img.loading = "lazy";
+      chip.appendChild(img);
+      chip.appendChild(el("span", "cap", `${s.t_ms != null ? fmtMs(s.t_ms) : ""}${s.why ? ` · ${s.why}` : ""}`));
+      chip.addEventListener("click", () => seek(s.t_ms));
+      shotEls.push(chip);
+    }
+    if (shotEls.length) {
+      const card = el("div", "card");
+      card.appendChild(el("h2", null, "Screenshots"));
+      const strip = el("div", "shots");
+      for (const c of shotEls) strip.appendChild(c);
+      card.appendChild(strip);
+      left.appendChild(card);
+    }
+
+    // findings — same renderer as rounds; evidence chips seek the run's own video
+    renderFindingCards(data.annotations, left, {
+      empty: () => {
+        const card = el("div", "card");
+        card.appendChild(el("p", null, "No findings for this machine run yet."));
+        const p = el("p", "dim small");
+        p.appendChild(document.createTextNode("The rig's report step (or your agent) writes them to "));
+        p.appendChild(el("code", null, `.pingfusi/studio/runs/${id}/annotations.json`));
+        p.appendChild(document.createTextNode(" — same contract as review rounds: "));
+        p.appendChild(el("code", null, "docs/STUDIO.md"));
+        p.appendChild(document.createTextNode("."));
+        card.appendChild(p);
+        return card;
+      },
+      coverage: null,
+      chipLabel: (e) => (e.time_ms != null ? fmtSpan(e.time_ms, e.end_ms) : "evidence"),
+      onChip: (e) => seek(e.time_ms),
+    });
+
+    // performance: headline numbers + the per-second fps sparkline
+    const series = Array.isArray(perf.series_1s) ? perf.series_1s : [];
+    if (series.length || perf.avg_fps != null) {
+      const card = el("div", "card");
+      card.appendChild(el("h2", null, "Performance"));
+      const stats = el("div", "perf-stats");
+      const stat = (label, value) => { const s = el("span"); s.appendChild(el("b", null, value)); s.appendChild(document.createTextNode(` ${label}`)); stats.appendChild(s); };
+      if (perf.avg_fps != null) stat("avg fps", fmtFps(perf.avg_fps));
+      if (perf.one_percent_low_fps != null) stat("1% low", fmtFps(perf.one_percent_low_fps));
+      if (perf.p95_ms != null) stat("p95 ms", String(perf.p95_ms));
+      if (perf.p99_ms != null) stat("p99 ms", String(perf.p99_ms));
+      if (Array.isArray(perf.stutters) && perf.stutters.length) stat("stutter(s)", String(perf.stutters.length));
+      if (Array.isArray(perf.load_stalls) && perf.load_stalls.length) stat("load stall(s)", String(perf.load_stalls.length));
+      card.appendChild(stats);
+      if (series.length) card.appendChild(fpsSparkline(series));
+      right.appendChild(card);
+    }
+
+    // events timeline — every row seeks the recording
+    const events = Array.isArray(rec.events) ? rec.events : [];
+    if (events.length) {
+      const card = el("div", "card");
+      card.appendChild(el("h2", null, "Events"));
+      const rail_ = el("div", "moments");
+      for (const ev of [...events].sort((a, b) => (Number(a && a.t_ms) || 0) - (Number(b && b.t_ms) || 0))) {
+        if (!ev) continue;
+        const bad = ev.kind === "crash" || ev.kind === "hang" || ev.kind === "stuck";
+        const row = btn(`moment ${bad ? "s-neg" : "s-neu"}`);
+        const line = el("span", "head-row");
+        line.appendChild(el("span", "time", fmtMs(ev.t_ms)));
+        if (ev.kind) line.appendChild(el("span", "tag", `#${ev.kind}`));
+        row.appendChild(line);
+        row.appendChild(el("span", "text", ev.detail || ev.kind || "event"));
+        row.addEventListener("click", () => seek(ev.t_ms));
+        rail_.appendChild(row);
+      }
+      card.appendChild(rail_);
+      right.appendChild(card);
+    }
+
+    // warnings — the rig's receipts-and-warnings doctrine, shown as-is
+    const warnings = Array.isArray(rec.warnings) ? rec.warnings : [];
+    if (warnings.length) {
+      const card = el("div", "card");
+      card.appendChild(el("h2", null, "Warnings"));
+      const ul = el("ul", "plain");
+      for (const w of warnings) ul.appendChild(el("li", "warn-item", String(w)));
+      card.appendChild(ul);
+      right.appendChild(card);
+    }
+
+    view.replaceChildren(header, body);
+  }
+
   // ── boot ───────────────────────────────────────────────────────────────────
   window.addEventListener("hashchange", route);
   (async () => {
@@ -496,6 +937,11 @@
       rounds = (await getJson("/api/rounds")).rounds || [];
     } catch (e) {
       rounds = [];
+    }
+    try {
+      runs = (await getJson("/api/runs")).runs || [];
+    } catch (e) {
+      runs = [];
     }
     route();
   })();

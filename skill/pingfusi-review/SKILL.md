@@ -61,6 +61,8 @@ one review, not a new request.
 Never report `pending` as a timeout, ask the user to retry, or resend the original ping.
 Passive result tools (`pingfusi_quick_question_results` and
 `pingfusi_review_results`) are snapshots and do not keep an idle review alive.
+A lapsed lease only pulls the round from the feed for new claims — a reviewer
+already mid-review can still finish, and their result is still charged.
 
 ## Handle feedback honestly
 

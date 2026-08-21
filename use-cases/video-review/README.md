@@ -70,7 +70,9 @@ brief. Video rounds file through `core.review.file` against a caller-owned state
    at 250 KB. `url` and `draft_url` must be absent — video mode refuses them.
 4. **Wait.** Filing automatically chains client-safe wait legs until feedback. If a raw
    MCP leg returns pending, immediately call `pingfusi_wait` again and never return
-   pending to the user. Passive result/verify reads do not renew the lease. Then fetch fresh with `core.review.verify`, act
+   pending to the user. Passive result/verify reads do not renew the lease (a lapse
+   only pulls the round from the feed for new claims; a reviewer mid-review can still
+   finish). Then fetch fresh with `core.review.verify`, act
    on every timestamped comment in the video's SOURCE —
    composition code, prompts, assets, never the frames — re-render, publish the new
    render at a new URL, refile. Done is `outcome.ok === true` on

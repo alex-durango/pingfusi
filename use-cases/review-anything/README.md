@@ -35,7 +35,9 @@ back. Everything below is the machinery it uses.
    declared list — prose that merely sounds approving never passes.
 4. **Wait, fix, refile.** Filing automatically chains client-safe wait legs until
    feedback. If a raw MCP leg returns pending, immediately call `pingfusi_wait` again;
-   never return pending to the user. Passive result/verify reads do not renew the lease. Act on every comment in the artifact's
+   never return pending to the user. Passive result/verify reads do not renew the lease
+   (a lapse only pulls the round from the feed for new claims; a reviewer mid-review
+   can still finish). Act on every comment in the artifact's
    own source, refile, repeat. Done is a recorded verdict, never a feeling.
 
 **How to run it.** `core.review.file(stateFile, spec)` (send + wait) →

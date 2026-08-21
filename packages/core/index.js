@@ -13,6 +13,7 @@ const path = require("path");
 const wire = require("./wire.js");
 const rounds = require("./rounds.js");
 const drafts = require("./drafts.js");
+const builds = require("./builds.js");
 // Local transport, not a service wire: a public url for a LOCAL server, best provider
 // first. Only builds that truly need a live server should reach for it — static output
 // is `draft.push`, which needs no local process at all.
@@ -199,4 +200,5 @@ module.exports = {
   ping, pingResult,
   review: { file: reviewFile, wait: reviewWait, verify: reviewVerify },
   draft: { push: draftPush, status: draftStatus, delete: draftDelete },
+  build: { push: builds.buildPush, status: builds.buildStatus, delete: builds.buildDelete },
 };

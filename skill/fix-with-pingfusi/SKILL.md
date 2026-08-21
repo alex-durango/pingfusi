@@ -37,7 +37,9 @@ own source, repeat until an approving verdict.
    wrong + picks a verdict — the user does not review). The filing command automatically
    chains client-safe wait legs until feedback. If a raw MCP leg returns pending,
    immediately call `pingfusi_wait` again; never return pending to the user or file a
-   duplicate. Passive result/verify reads do not renew the lease. On each verdict:
+   duplicate. Passive result/verify reads do not renew the lease (a lapse only pulls
+   the round from the feed for new claims; a reviewer mid-review can still finish).
+   On each verdict:
    - Approved → done; report with the round history.
    - Pins → fix each in the DRAFT'S OWN source (its components/styles — match its
      idioms; derive fixes from the original site's real markup/CSS, never invent),

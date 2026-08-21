@@ -127,6 +127,13 @@ const DEFAULT_REVIEW_RESULTS = 1;
 /** The upper end of the same range. */
 const MAX_REVIEW_RESULTS = 20;
 
+// Hosted game builds (pingfusi publish-build): the size the service refuses a
+// build past, mirrored so an oversize zip is a NAMED local failure before any
+// bytes move. Deliberately a standalone const, not a SERVICE_CAPS key — that
+// object is the kit's filing-shape checker input and has held exactly three
+// caps since the core extraction.
+const MAX_BUILD_BYTES = 1073741824;
+
 /** The service's default renewable idle lease for agent-filed work. */
 const DEFAULT_AGENT_LEASE_SECONDS = 120;
 
@@ -206,6 +213,7 @@ module.exports = {
   SERVICE_CAPS,
   DEFAULT_REVIEW_RESULTS,
   MAX_REVIEW_RESULTS,
+  MAX_BUILD_BYTES,
   DEFAULT_AGENT_LEASE_SECONDS,
   DEFAULT_WAIT_LEG_SECONDS,
   CREDS_DIRS,

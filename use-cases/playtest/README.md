@@ -1,0 +1,82 @@
+# Playtest — use case #4
+
+**What it does.** Puts a playable build in front of real players. Each player plays
+for a set number of minutes on their own machine while their screen and voice are
+recorded, then answers a standardized player-experience questionnaire plus any
+questions you author. What comes back is what no gate can produce: where a real
+person got lost, bored, or stuck — with the recording to prove it.
+
+**Just prompt your agent:**
+
+```txt
+Get 2 people to playtest my Steam demo for 15 minutes each. use pingfusi
+```
+
+The agent files the round, keeps working, and the players' verdicts, questionnaire
+scores, think-aloud transcripts, and recording links land back in its context.
+Everything below is the machinery the agent uses.
+
+**Its routing skill:** the universal
+[`pingfusi-review`](../../skill/pingfusi-review/SKILL.md) skill routes playtests —
+there is no separate playtest skill. A playtest is the review tool with
+`est_minutes` set.
+
+## How a playtest files
+
+A playtest is `core.review.file` (wire: the same review tool as every round) with:
+
+- **`est_minutes` — THIS IS THE PRICE.** 5–30; a playtest bills
+  `est_minutes × 2` credits per completed result (a credit buys 30 seconds of a
+  player's attention). 10 is the standard session. On native platforms this is
+  PLAY time — download and install happen before the clock starts.
+- **`platform`** — omit it for anything playable in a browser (an itch.io or
+  WebGL demo files as an ordinary web playtest against `url`). Send
+  `platform:'macos' | 'ios' | 'windows'` for a native build:
+  - **macos** — a player on their own Mac; `url` is a Steam store page (Playtest
+    on OPEN signup) or a notarized `.dmg`/`.zip` download page. Results include
+    the full think-aloud transcript inline.
+  - **ios** — a player on their own iPhone/iPad; `url` is a TestFlight PUBLIC
+    link or a live App Store page. The link must be live at filing time.
+    Transcript included.
+  - **windows** — a player on their own PC, working from their desktop browser:
+    they claim on the reviewer site, install with their own Steam client, record
+    with Xbox Game Bar, upload the MP4. `url` is the game's Steam store page.
+    **No inline transcript yet** (`transcript_status:'unavailable'`) — plan to
+    have the recording watched.
+- **No store page yet? Upload the build.** `pingfusi publish-build <game.zip>
+  --platform windows|macos` hosts a single zip (≤1 GiB, temporary — filing a
+  playtest extends it through the round) and prints a `/b/<slug>` URL; file with
+  that as `url` and the matching `platform`. Players are told up front it is an
+  unreviewed developer build and that stopping at an OS security warning is their
+  own penalty-free call — your instructions must never steer that decision (on
+  macOS, notarize before zipping or expect aborts at the Gatekeeper wall).
+- **`questionnaire`** — `"standard"` (default) asks the 11-statement
+  player-experience instrument (one per Player Experience Inventory construct,
+  −3..+3, score-comparable across rounds); your authored `steps` are appended
+  after it. `"none"` drops it so your steps are the only questions.
+- **Hardware convention.** If the game needs anything beyond keyboard+mouse — a
+  gamepad/controller, a mic, VR — say so up front in `instructions` (players read
+  them before claiming and self-select), and add an authored step asking what
+  they actually used (options like `XInput gamepad` / `Keyboard+mouse`) so the
+  answer comes back verified in `steps_result`.
+- `n_target` caps at 3 players per round; file more rounds for more players.
+
+## What comes back
+
+Per player: a verdict, the questionnaire answers, `steps_result` (your authored
+questions, answered), the think-aloud transcript inline with `[mm:ss]` stamps
+(macOS/iOS; not Windows yet), and a link to the screen+voice recording — the link
+re-signs on every results call, and the FILE is deleted after 7 days: it is for a
+human to watch, most agents cannot use a video file. The round also returns a
+hosted report URL (private by default; the owner can flip it shareable).
+
+View everything locally with `pingfusi studio <ping_id>` — recordings, a
+click-to-seek transcript, the questionnaire matrix with per-item means, and an
+agent-written findings layer (`annotations.json`).
+
+## Proof status
+
+The use case remains **coming** until one real playtest round completes with an
+approving verdict (`Completed the session`) and a sanitized receipt with a shipped
+visual. Raw round state and player recordings stay internal; the catalog selftest
+refuses an "available" label without the proof.

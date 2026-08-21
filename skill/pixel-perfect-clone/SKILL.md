@@ -117,7 +117,9 @@ not by the user, and never by you.
 5. **Iterate until done.** The filing command automatically chains client-safe wait
    legs until feedback. If a raw MCP leg returns pending, immediately call
    `pingfusi_wait` again; never return pending to the user or file a duplicate. Each leg
-   renews the short idle lease; passive result/verify reads do not. Act on every verdict
+   renews the short idle lease; passive result/verify reads do not (a lapse only pulls
+   the round from the feed for new claims; a reviewer mid-review can still finish).
+   Act on every verdict
    immediately: fix from the site's own captured artifacts (authored mechanisms, never
    invented values), re-green the gates, and refile with a changelog; that filing owns
    the next wait too.

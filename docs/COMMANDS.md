@@ -18,6 +18,27 @@ pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]
 pingfusi ask result <ping_id>           passive answer snapshot (free; does not renew)
 pingfusi publish <built-dir|video.mp4>  host a self-contained site or seekable MP4
                                         (`--target`, `--record`, and `--json` available)
+pingfusi publish-build <game.zip> --platform windows|macos
+                                        host a GAME BUILD for a native playtest with no
+                                        store page: one zip (≤1 GiB, magic-checked and
+                                        sha256'd locally before any bytes move), streamed
+                                        to hosting, served at the returned /b/<slug> URL —
+                                        file `request_review` with that URL and the same
+                                        platform:. Hosted builds are TEMPORARY: 72h unless
+                                        a filed round extends them, and a handful per
+                                        account (delete with the API or let them expire).
+                                        Reviewers see an unreviewed-developer-build
+                                        disclosure and may stop, penalty-free. On macOS the
+                                        reviewer app downloads and launches the build itself
+                                        (no Gatekeeper wall). Pre-flighted at upload: the
+                                        .app's main executable must be a Mach-O binary
+                                        (script-main bundles are refused — unsupported on
+                                        macOS), arm64 slices must be at least ad-hoc signed
+                                        (linkers do this automatically; x86_64-only runs
+                                        unsigned under Rosetta), and a zip that is really a
+                                        WEB build is pointed at `pingfusi publish` + a web
+                                        playtest instead.
+                                        (`--name`, `--record`, and `--json` available)
 pingfusi studio  [ping_id ...]          LOCAL RESULTS VIEWER (playtests first): fetches a
                                         round's results over the wire and caches them —
                                         JSON + media bytes — under <cwd>/.pingfusi/studio/
@@ -27,12 +48,31 @@ pingfusi studio  [ping_id ...]          LOCAL RESULTS VIEWER (playtests first): 
                                         per-session recording playback, think-aloud
                                         transcript (click-to-seek), questionnaire matrix
                                         with per-item means, reviewer comments, and the
-                                        agent-written findings in annotations.json.
-                                        `--port N`, `--open` (browser stays opt-in),
-                                        `--fetch-only`, `--no-media`, `--json`. No ids =
+                                        agent-written findings in annotations.json —
+                                        rendered as a findings tab plus a per-session
+                                        "key moments" rail (evidence anchors seek the
+                                        recording; time_ms+end_ms anchors mark clips).
+                                        The ANALYSIS IS THE AGENT'S JOB: the command
+                                        prints which cached rounds have transcripts but
+                                        no annotations yet, and docs/STUDIO.md is the
+                                        authoring contract. `--port N`, `--open` (browser
+                                        stays opt-in), `--fetch-only`, `--no-media`,
+                                        `--json` (carries analysis_needed paths). No ids =
                                         refresh cached in-flight rounds + serve. Never a
                                         review surface: verdicts come from the independent
-                                        reviewer; the studio only shows them
+                                        reviewer; the studio only shows them.
+                                        A second, purely local axis: MACHINE RUNS — the
+                                        rig harness plays builds by virtual gamepad and
+                                        writes .pingfusi/studio/runs/<run_id>/ (a
+                                        pingfusi-rig-run/v1 receipt plus optional
+                                        recording, screenshots, annotations), which the
+                                        studio serves read-only. Runs appear grouped by
+                                        gym: per-gym pass/fail with failure causes and an
+                                        fps-across-builds chart, plus a per-run view
+                                        (events, warnings, fps sparkline, recording with
+                                        event seek). Machine runs are labeled as such and
+                                        are never review rounds — no reviewer, no filing,
+                                        no charge
 
 pingfusi new     <name> <url> [width]   scaffold a clone target
 pingfusi adopt   <name> <url> [width]   register an external draft for review-only

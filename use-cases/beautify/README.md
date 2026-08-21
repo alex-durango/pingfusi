@@ -52,7 +52,9 @@ custom steps through `core.review.file` against a caller-owned state file.
    `Needs another pass`; declare only the first as approving.
 4. **Wait.** Filing automatically chains client-safe wait legs until feedback. If a raw
    MCP leg returns pending, immediately call `pingfusi_wait` again and never return
-   pending to the user. Passive result/verify reads do not renew the lease. Then fetch fresh with `core.review.verify`, act
+   pending to the user. Passive result/verify reads do not renew the lease (a lapse
+   only pulls the round from the feed for new claims; a reviewer mid-review can still
+   finish). Then fetch fresh with `core.review.verify`, act
    on every sticky comment and drawing in the draft's own source, publish a
    new immutable current draft, and refile with a visible changelog. Repeat until
    `outcome.ok === true`.

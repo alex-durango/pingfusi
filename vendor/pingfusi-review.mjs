@@ -31,7 +31,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone installer.
 
-const VERSION = "0.14.0";
+const VERSION = "0.15.0";
 const execFileP = promisify(execFile);
 const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
 // Hoisted with the other top-of-module consts — the entry try-block runs
@@ -189,6 +189,8 @@ one review, not a new request.
 Never report \`pending\` as a timeout, ask the user to retry, or resend the original ping.
 Passive result tools (\`pingfusi_quick_question_results\` and
 \`pingfusi_review_results\`) are snapshots and do not keep an idle review alive.
+A lapsed lease only pulls the round from the feed for new claims — a reviewer
+already mid-review can still finish, and their result is still charged.
 
 ## Handle feedback honestly
 
@@ -1294,7 +1296,9 @@ async function waitForResultsCli(rest) {
     if (remainingSeconds <= 0) {
       console.log(
         `Timed out after ${timeoutSec}s — still pending. ` +
-          `Run \`pingfusi wait ${pingId}\` again to keep the task active.`
+          `Run \`pingfusi wait ${pingId}\` again to keep the task active ` +
+          `(without it an unclaimed round leaves the feed; a reviewer already ` +
+          `working can still finish).`
       );
       process.exit(2);
     }
@@ -1339,7 +1343,9 @@ async function waitForResultsCli(rest) {
     if (Date.now() >= deadline) {
       console.log(
         `Timed out after ${timeoutSec}s — still pending (${received}/${sc.n_target ?? "?"} results). ` +
-          `Run \`pingfusi wait ${pingId}\` again to keep the task active.`
+          `Run \`pingfusi wait ${pingId}\` again to keep the task active ` +
+          `(without it an unclaimed round leaves the feed; a reviewer already ` +
+          `working can still finish).`
       );
       process.exit(2);
     }

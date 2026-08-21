@@ -1294,6 +1294,13 @@ THE EVERYDAY JOBS
   pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]
                                                      upload a self-contained website or video to Pingfusi
                                                      hosting; MP4 output includes a seekable video_url
+  pingfusi publish-build <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]
+                                                     upload a GAME BUILD (one zip, ≤1 GiB) for a native
+                                                     playtest with no store page: returns the /b/<slug>
+                                                     URL to file request_review with (same platform:).
+                                                     Hosted builds are temporary — 72h unless a filed
+                                                     round extends them; reviewers see an unreviewed-dev-
+                                                     build disclosure and may stop at an OS warning
   pingfusi wait    <ping_id>                         continue a pending ping through client-safe wait legs
   pingfusi studio  [ping_id ...] [--port N] [--open] [--fetch-only] [--no-media] [--json]
                                                      LOCAL RESULTS VIEWER: fetch a round's results and
@@ -1468,6 +1475,7 @@ function main() {
     // ~/.pingfusi/asks/. Proof that the core's service verbs need zero cloning code.
     case "ask": { if (!name) { console.error('usage: pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]   |   pingfusi ask result <ping_id>'); process.exit(2); } return delegate("harness/ask.js", [name, ...rest]); }
     case "publish": { if (!name) { console.error("usage: pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish.js", [name, ...rest]); }
+    case "publish-build": { if (!name) { console.error("usage: pingfusi publish-build <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish-build.js", [name, ...rest]); }
     // The local results viewer — also workspace-free: cache under <cwd>/.pingfusi/studio/.
     case "studio": return delegate("harness/studio.js", [name, ...rest].filter((a) => a != null));
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }

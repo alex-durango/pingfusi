@@ -19,6 +19,15 @@
 // independent reviewer on the service, never here. `annotations.json` (agent-written
 // observations, rendered read-only) carries notes and evidence anchors, no verdicts.
 //
+// MACHINE RUNS (a second, purely local axis): an internal rig harness plays game
+// builds through a virtual gamepad and writes run directories into this same cache —
+// .pingfusi/studio/runs/<run_id>/ with a `pingfusi-rig-run/v1` receipt.json plus
+// optional media/recording.mp4, shots/*.png, and an annotations.json in the same
+// findings schema review rounds use. The studio discovers and serves those read-only
+// (no wire call — the rig writes the cache, the studio only serves). A machine run is
+// a SEPARATE artifact family from a human review round — labeled so in the UI, never
+// entering a ping or a response.
+//
 // USAGE
 //   pingfusi studio [ping_id ...] [--port N] [--open] [--json] [--fetch-only] [--no-media]
 //     with ids: fetch + cache those rounds (media included unless --no-media), then serve.
@@ -42,6 +51,10 @@ const CMD = process.env.PPK_ENTRY === "1" ? "pingfusi studio" : "node harness/st
 const USAGE = `usage: ${CMD} [ping_id ...] [--port N] [--open] [--json] [--fetch-only] [--no-media]`;
 const DEFAULT_PORT = 7788; // memorable, clear of serve's 8080 and sink's 7799
 const CACHE_SCHEMA = "pingfusi-studio-cache/v1";
+const RUN_RECEIPT_SCHEMA = "pingfusi-rig-run/v1";
+// A run id doubles as a cache directory name — anything else is refused rather than
+// spliced into a path (the PING_ID_RE doctrine, rig-run shaped).
+const RUN_ID_RE = /^[a-z0-9][a-z0-9-]{7,63}$/;
 const LARGE_MEDIA_NOTE_BYTES = 256 * 1024 * 1024;
 
 const MIME = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".ico": "image/x-icon" };
@@ -79,6 +92,9 @@ function parseArgs(argv) {
 
 // ── cache: .pingfusi/studio/<ping_id>/{result.json, annotations.json, media/} ─
 const studioDir = (workDir) => path.join(workDir, ".pingfusi", "studio");
+// Machine runs live one level down, so a run dir can never shadow a round dir (and
+// discoverRounds already skips the non-uuid "runs" name).
+const runsDir = (workDir) => path.join(studioDir(workDir), "runs");
 
 function atomicWriteJson(file, value) {
   const resolved = path.resolve(file);
@@ -257,6 +273,78 @@ function discoverRounds(deps = {}) {
   return rounds;
 }
 
+// ── discovery: machine runs the rig wrote under .pingfusi/studio/runs/ ────────
+// A rig run is a SEPARATE artifact family from a review round: the machine harness
+// writes it locally, nothing is filed and nothing is charged — the studio only lists
+// and serves it. A malformed receipt is skipped (readJsonSafe tolerance), never a crash.
+
+// A receipt's media references are exactly two components (media/<file> or
+// shots/<file>); anything else is ignored rather than joined — same refusal shape as
+// the router below.
+function runFilePath(runDir, rel) {
+  const m = /^(media|shots)\/([A-Za-z0-9._-]+)$/.exec(String(rel || ""));
+  if (!m || m[2].startsWith(".")) return null;
+  return path.join(runDir, m[1], m[2]);
+}
+
+// The rail/gym summary over one receipt — tolerant of every optional field; null on a
+// receipt that isn't a JSON object at all.
+function toRunSummary(rec, runDir, dirName) {
+  if (!rec || typeof rec !== "object" || Array.isArray(rec)) return null;
+  const build = rec.build && typeof rec.build === "object" ? rec.build : {};
+  const perf = rec.performance && rec.performance.summary && typeof rec.performance.summary === "object" ? rec.performance.summary : {};
+  const failure = rec.failure_cause && typeof rec.failure_cause === "object" ? rec.failure_cause : null;
+  const recording = rec.media ? runFilePath(runDir, rec.media.recording) : null;
+  return {
+    run_id: dirName,
+    gym_id: rec.gym && rec.gym.id != null ? String(rec.gym.id) : null,
+    gym_version: rec.gym && rec.gym.version != null ? String(rec.gym.version) : null,
+    build_label: build.label || build.filename || (typeof build.sha256 === "string" ? build.sha256.slice(0, 12) : null),
+    build_sha256: typeof build.sha256 === "string" ? build.sha256 : null,
+    platform: build.platform || null,
+    mode: rec.mode || null,
+    result: rec.result || (rec.ok === true ? "pass" : rec.ok === false ? "fail" : null),
+    ok: typeof rec.ok === "boolean" ? rec.ok : null,
+    failure_kind: failure ? failure.kind || null : null,
+    failure_message: failure ? failure.message || null : null,
+    at: rec.at || null,
+    duration_ms: typeof rec.duration_ms === "number" ? rec.duration_ms : null,
+    avg_fps: typeof perf.avg_fps === "number" ? perf.avg_fps : null,
+    one_percent_low_fps: typeof perf.one_percent_low_fps === "number" ? perf.one_percent_low_fps : null,
+    has_media: !!(recording && fs.existsSync(recording)),
+    has_annotations: fs.existsSync(path.join(runDir, "annotations.json")),
+    warnings_count: Array.isArray(rec.warnings) ? rec.warnings.length : 0,
+  };
+}
+
+function discoverRuns(deps = {}) {
+  const workDir = path.resolve(deps.workDir || process.cwd());
+  const root = runsDir(workDir);
+  const runs = [];
+  for (const name of listDirs(root)) {
+    if (!RUN_ID_RE.test(name)) continue;
+    const dir = path.join(root, name);
+    const summary = toRunSummary(readJsonSafe(path.join(dir, "receipt.json")), dir, name);
+    if (summary) runs.push(summary);
+  }
+  // Time order, oldest first — the gym view charts fps ACROSS builds left to right.
+  runs.sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
+  return runs;
+}
+
+// The gym axis over already-sorted summaries: per-gym run order plus the per-build
+// series the fps-across-builds chart draws. Runs with no gym never form a group.
+function groupRunsByGym(runs) {
+  const gyms = {};
+  for (const r of runs) {
+    if (!r.gym_id) continue;
+    const g = gyms[r.gym_id] || (gyms[r.gym_id] = { runs_in_order: [], builds: [] });
+    g.runs_in_order.push(r.run_id);
+    g.builds.push({ build_label: r.build_label, build_sha256: r.build_sha256, result: r.result, avg_fps: r.avg_fps, one_percent_low_fps: r.one_percent_low_fps, at: r.at, run_id: r.run_id });
+  }
+  return gyms;
+}
+
 // ── server: GET/HEAD only, static UI + cache JSON + Range-streamed media ──────
 // Pure router + traversal guard (serve.js precedent — unit-tested without a socket).
 // Every path component is validated BEFORE any join: ping ids must be the uuid shape,
@@ -267,8 +355,22 @@ function resolveStudioPath(urlPath, { uiDir, cacheDir }) {
   try { u = decodeURIComponent(String(urlPath).split("?")[0]); } catch (e) { return null; } // malformed % — unresolvable, not a crash
   if (u === "/") u = "/index.html";
   if (u === "/api/rounds") return { kind: "rounds" };
+  if (u === "/api/runs") return { kind: "runs" };
   let m = /^\/api\/round\/([^/]+)$/.exec(u);
   if (m) return PING_ID_RE.test(m[1]) ? { kind: "round", pingId: m[1].toLowerCase() } : null;
+  m = /^\/api\/run\/([^/]+)$/.exec(u);
+  if (m) return RUN_ID_RE.test(m[1]) ? { kind: "run", runId: m[1] } : null;
+  // Machine-run media: exactly two components after the id (media/<file> or
+  // shots/<file>), each validated before any join. "run" can never collide with the
+  // round route below — a ping id is 36 chars of uuid.
+  m = /^\/media\/run\/([^/]+)\/(media|shots)\/([^/]+)$/.exec(u);
+  if (m) {
+    if (!RUN_ID_RE.test(m[1]) || !/^[A-Za-z0-9._-]+$/.test(m[3]) || m[3].startsWith(".")) return null;
+    const fp = path.resolve(cacheDir, "runs", m[1], m[2], m[3]);
+    const within = path.relative(cacheDir, fp);
+    if (within.startsWith("..") || path.isAbsolute(within)) return null;
+    return { kind: "file", path: fp, mime: MIME[path.extname(fp).toLowerCase()] || "application/octet-stream" };
+  }
   m = /^\/media\/([^/]+)\/([^/]+)$/.exec(u);
   if (m) {
     if (!PING_ID_RE.test(m[1]) || !/^[A-Za-z0-9._-]+$/.test(m[2]) || m[2].startsWith(".")) return null;
@@ -325,6 +427,16 @@ function createStudioServer(deps = {}) {
     const route = resolveStudioPath(req.url, { uiDir, cacheDir });
     if (!route) { res.writeHead(403); res.end("403 forbidden"); return; }
     if (route.kind === "rounds") return sendJson(req, res, 200, { rounds: discoverRounds({ workDir, home }) });
+    if (route.kind === "runs") {
+      const runs = discoverRuns({ workDir });
+      return sendJson(req, res, 200, { runs, gyms: groupRunsByGym(runs) });
+    }
+    if (route.kind === "run") {
+      const dir = path.join(runsDir(workDir), route.runId);
+      const receipt = readJsonSafe(path.join(dir, "receipt.json"));
+      if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return sendJson(req, res, 404, { error: "run not found — the rig writes machine runs under .pingfusi/studio/runs/<run_id>/" });
+      return sendJson(req, res, 200, { receipt, annotations: readJsonSafe(path.join(dir, "annotations.json")) });
+    }
     if (route.kind === "round") {
       const rec = readJsonSafe(path.join(cacheDir, route.pingId, "result.json"));
       if (rec) return sendJson(req, res, 200, { result: rec, annotations: readJsonSafe(path.join(cacheDir, route.pingId, "annotations.json")) });
@@ -386,8 +498,22 @@ async function main(argv = process.argv.slice(2)) {
       console.error(`✗ ${id}: ${error.message}${stale ? " — serving the cached copy" : ""}`);
     }
   }
+  // The analysis hook: a cached transcript with no annotations.json is work an agent
+  // can do (the contract is docs/STUDIO.md). Printed here — on the command an agent
+  // already runs — so the ask lands in its context at exactly the right moment.
+  const analysisGaps = discoverRounds({ workDir }).filter((r) => r.source === "cache" && r.has_transcript && !r.has_annotations);
+  if (analysisGaps.length && !options.json) {
+    console.log(`${analysisGaps.length} round(s) have think-aloud transcripts but no findings yet — an agent can write the analysis:`);
+    for (const r of analysisGaps) console.log(`  read ${path.join(cacheDir, r.ping_id, "result.json")} → write ${path.join(cacheDir, r.ping_id, "annotations.json")}`);
+    console.log("  contract + guidance: docs/STUDIO.md in the kit install (`pingfusi where`)");
+  }
   if (options.fetchOnly) {
-    if (options.json) console.log(JSON.stringify({ cache_dir: cacheDir, rounds: fetched }, null, 2));
+    if (options.json) console.log(JSON.stringify({
+      cache_dir: cacheDir,
+      rounds: fetched,
+      analysis_contract: "docs/STUDIO.md",
+      analysis_needed: analysisGaps.map((r) => ({ ping_id: r.ping_id, annotations_path: path.join(cacheDir, r.ping_id, "annotations.json") })),
+    }, null, 2));
     process.exitCode = fetchFailures ? 1 : 0;
     return;
   }
@@ -400,12 +526,13 @@ async function main(argv = process.argv.slice(2)) {
   server.listen(options.port, () => {
     const url = `http://localhost:${server.address().port}`;
     const known = discoverRounds({ workDir });
-    console.log(`pingfusi studio → ${url}   (${known.length} round(s) — read-only results viewer)`);
-    if (!known.length) console.log(`  nothing cached yet — fetch a round: ${CMD} <ping_id>`);
+    const knownRuns = discoverRuns({ workDir });
+    console.log(`pingfusi studio → ${url}   (${known.length} round(s)${knownRuns.length ? ` + ${knownRuns.length} machine run(s)` : ""} — read-only results viewer)`);
+    if (!known.length && !knownRuns.length) console.log(`  nothing cached yet — fetch a round: ${CMD} <ping_id>`);
     if (options.open) openBrowser(url);
   });
   return server;
 }
 
-module.exports = { USAGE, DEFAULT_PORT, CACHE_SCHEMA, MIME, parseArgs, studioDir, atomicWriteJson, mediaNames, toCacheRecord, downloadMedia, fetchRound, discoverRounds, resolveStudioPath, serveFileWithRange, createStudioServer, openerInvocation, main };
+module.exports = { USAGE, DEFAULT_PORT, CACHE_SCHEMA, RUN_RECEIPT_SCHEMA, RUN_ID_RE, MIME, parseArgs, studioDir, runsDir, atomicWriteJson, mediaNames, toCacheRecord, downloadMedia, fetchRound, discoverRounds, toRunSummary, discoverRuns, groupRunsByGym, resolveStudioPath, serveFileWithRange, createStudioServer, openerInvocation, main };
 if (require.main === module) void main();

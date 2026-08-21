@@ -130,7 +130,9 @@ always tells you what's next):**
    (scope-pinned template auto-generated from your coverage list; the draft url
    defaults to the hosted draft). The filing command automatically chains client-safe
    wait legs and renews the round's short idle lease until feedback; never return a
-   pending leg to the user. Passive verify/result reads do not renew it. On flags: run the
+   pending leg to the user. Passive verify/result reads do not renew it (a lapse only
+   pulls the round from the feed for new claims; a reviewer mid-review can still
+   finish). On flags: run the
    PLAYBOOK Phase 6 `--inspect` drill-down on the element that PAINTS the
    flagged mark, fix the whole mark in one shot, re-run the gates, then
    `pingfusi review {{NAME}} file` again — the refile loop is the product working,

@@ -12,6 +12,7 @@ its own rules, its own reviewer surface.
 | [copy-anything/](copy-anything/README.md) | **available** | approval only when the clone truly matches — animations included |
 | [beautify/](beautify/README.md) | coming | element-pinned taste feedback until the page looks professionally designed |
 | [video-review/](video-review/README.md) | coming | timestamped judgment of a rendered video against its brief |
+| [playtest/](playtest/README.md) | coming | real players play your build — recording, think-aloud transcript, and a standardized questionnaire per session |
 | [your-own/](your-own/TEMPLATE.md) | template | package a repeated review-anything pattern into a named job |
 
 Two of these are the everyday utilities every other job leans on:

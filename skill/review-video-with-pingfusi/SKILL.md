@@ -110,7 +110,8 @@ and ask your own questions when there is no prompt behind it to match.
 5. The filing command automatically chains client-safe wait legs until feedback. If a
    raw MCP leg returns pending, immediately call `pingfusi_wait` again; never return
    pending to the user or file a duplicate. Each leg renews the short idle lease;
-   passive result/verify reads do not. When results land, read the
+   passive result/verify reads do not (a lapse only pulls the round from the feed
+   for new claims; a reviewer mid-review can still finish). When results land, read the
    envelope: comments arrive sorted by `video_anchor.time_ms`, drawn annotations
    in normalized frame coordinates (0 = left/top, 1 = right/bottom), questionnaire
    answers attached to their questions. Fix every noted moment in the source,

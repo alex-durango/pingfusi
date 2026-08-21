@@ -1,14 +1,16 @@
 // harness/studio-selftest.js — guards `pingfusi studio`, the local results viewer.
 //
-// Four sections: pure units (args, router/traversal guard, cache mapping), the fetch
-// path end-to-end over the file:// mock transport (media downloaded from an in-test
-// fixture server — the child is spawned ASYNC because a spawnSync child fetching from
-// an in-process server would deadlock the blocked event loop), the HTTP server against
-// a seeded cache (Range slices included), and the doctrine pins: the studio is a
-// READ-ONLY viewer — its one wire verb is the passive results snapshot, its server
-// answers GET/HEAD only, and no shipped studio surface says a banned vocabulary word.
-// All fixtures are generated in tmpdirs at runtime — nothing committed, so the packed
-// tarball's machine-path scan has nothing to find here.
+// Four sections: pure units (args, router/traversal guard, cache mapping, the machine-
+// run summary), the fetch path end-to-end over the file:// mock transport (media
+// downloaded from an in-test fixture server — the child is spawned ASYNC because a
+// spawnSync child fetching from an in-process server would deadlock the blocked event
+// loop), the HTTP server against a seeded cache (Range slices included, plus the runs
+// axis: rig-written receipts under .pingfusi/studio/runs/, gym grouping, run media),
+// and the doctrine pins: the studio is a READ-ONLY viewer — its one wire verb is the
+// passive results snapshot, its server answers GET/HEAD only (the rig writes the runs
+// cache; the studio only serves it), and no shipped studio surface says a banned
+// vocabulary word. All fixtures are generated in tmpdirs at runtime — nothing
+// committed, so the packed tarball's machine-path scan has nothing to find here.
 "use strict";
 
 const fs = require("fs");
@@ -110,6 +112,51 @@ ok(/--port needs/.test(throwsMsg(() => studio.parseArgs(["--port", "banana"]))),
     `/media/${ID}/../result.json`, `/media/${ID}/%2e%2e%2fresult.json`, `/media/${ID}/.hidden`,
     "/media/not-a-uuid/f.mp4", "/..%2fstudio.js", "/%zz", "/nested/path.js", "/.git",
   ]) ok(studio.resolveStudioPath(bad, ctx) === null, `${JSON.stringify(bad)} is unresolvable (traversal/shape guard)`);
+
+  // machine-run routes: same refusal doctrine, run-shaped ids, exactly-two-component media
+  const RUN = "run-20260819-1432-ab12c";
+  ok(studio.RUN_ID_RE.test(RUN) && !studio.RUN_ID_RE.test("Run-X") && !studio.RUN_ID_RE.test("short")
+    && !studio.RUN_ID_RE.test("-leads") && !studio.RUN_ID_RE.test("a".repeat(65)),
+    "RUN_ID_RE: lowercase run-shaped ids only (8-64 chars, no leading dash, no uppercase)");
+  ok(studio.resolveStudioPath("/api/runs", ctx).kind === "runs", "/api/runs routes");
+  ok(studio.resolveStudioPath(`/api/run/${RUN}`, ctx).runId === RUN, "/api/run/<run_id> validates the id");
+  ok(studio.resolveStudioPath("/api/run/NOT-a-run", ctx) === null, "a malformed run id is unresolvable");
+  const runMedia = studio.resolveStudioPath(`/media/run/${RUN}/media/recording.mp4`, ctx);
+  ok(runMedia.path === path.join(cacheDir, "runs", RUN, "media", "recording.mp4") && runMedia.mime === "video/mp4",
+    "run media resolves inside the run's own media dir");
+  ok(studio.resolveStudioPath(`/media/run/${RUN}/shots/000061.png`, ctx).mime === "image/png", "run screenshots resolve under shots/");
+  for (const bad of [
+    `/media/run/${RUN}/media/../receipt.json`, `/media/run/${RUN}/media/%2e%2e%2freceipt.json`,
+    `/media/run/${RUN}/media/a/b.mp4`, `/media/run/${RUN}/logs/x.txt`, `/media/run/${RUN}/media/.hidden`,
+    `/media/run/${RUN}/media/%2Fabs.mp4`, "/media/run/NOT-a-run/media/f.mp4", `/media/run/${RUN}`,
+  ]) ok(studio.resolveStudioPath(bad, ctx) === null, `${JSON.stringify(bad)} is unresolvable (run traversal/shape guard)`);
+}
+
+// ── toRunSummary: tolerant derivation over one rig receipt ────────────────────
+{
+  const nowhere = path.join(os.tmpdir(), "studio-run-fixture-none"); // never created — pure derivation
+  const s = studio.toRunSummary({
+    schema: studio.RUN_RECEIPT_SCHEMA, ok: false, result: "fail", at: "2026-08-19T14:32:00Z", duration_ms: 1830000,
+    failure_cause: { kind: "crash", message: "boom", at_ms: 61234 },
+    gym: { id: "collision_alley", version: "0.1.0" },
+    build: { sha256: "deadbeef".repeat(8), platform: "windows" }, mode: "replay",
+    performance: { source: "presentmon", summary: { avg_fps: 96.4, one_percent_low_fps: 41.5 } },
+    warnings: ["replay diverged after 61s"],
+  }, nowhere, "run-20260819-1432-ab12c");
+  ok(s.run_id === "run-20260819-1432-ab12c" && s.gym_id === "collision_alley" && s.gym_version === "0.1.0",
+    "a run summary carries the gym identity");
+  ok(s.build_label === "deadbeefdead" && s.build_sha256 === "deadbeef".repeat(8),
+    "no label/filename ⇒ the build label falls back to the sha256 prefix");
+  ok(s.result === "fail" && s.ok === false && s.failure_kind === "crash" && s.failure_message === "boom",
+    "result + failure cause derive from the receipt");
+  ok(s.avg_fps === 96.4 && s.one_percent_low_fps === 41.5 && s.warnings_count === 1
+    && s.has_media === false && s.has_annotations === false,
+    "perf numbers and counts derive; media/annotations flags stay honest without files");
+  const bare = studio.toRunSummary({ ok: true }, nowhere, "run-20260819-0000-bare0");
+  ok(bare && bare.result === "pass" && bare.gym_id === null && bare.build_label === null && bare.avg_fps === null,
+    "a minimal receipt still summarizes: ok:true ⇒ pass, every optional field null");
+  ok(studio.toRunSummary(null, nowhere, "x") === null && studio.toRunSummary([1], nowhere, "x") === null,
+    "a receipt that isn't a JSON object summarizes to null (skipped, never a crash)");
 }
 
 // ── async sections ────────────────────────────────────────────────────────────
@@ -179,9 +226,15 @@ ok(/--port needs/.test(throwsMsg(() => studio.parseArgs(["--port", "banana"]))),
     let parsed = null;
     try { parsed = JSON.parse(jsonOut); } catch (e) {}
     ok(parsed && parsed.rounds && parsed.rounds[0] && parsed.rounds[0].ping_id === ID, "--json prints the machine-readable summary");
+    ok(parsed && parsed.analysis_contract === "docs/STUDIO.md" && Array.isArray(parsed.analysis_needed)
+      && parsed.analysis_needed.some((x) => x.ping_id === ID && /annotations\.json$/.test(x.annotations_path)),
+      "--json names the analysis gap: transcripts cached, annotations.json not yet written");
 
     r = await runNode([STUDIO, ID2, "--fetch-only"], { cwd: work, env });
     ok(r.status === 0 && fs.existsSync(path.join(work, ".pingfusi", "studio", ID2, "result.json")), "a pending round caches its snapshot (exit 0 — pending is not a failure)");
+    ok(/transcripts but no findings yet/.test(r.stdout) && /docs\/STUDIO\.md/.test(r.stdout)
+      && r.stdout.includes(path.join("studio", ID, "annotations.json")),
+      "the analysis hook prints on the command an agent already runs (read result.json → write annotations.json)");
 
     // logged out, no ids: the studio serves the cache as-is instead of failing
     const loggedOut = { ...process.env, HOME: home, USERPROFILE: home, PINGFUSI_TOKEN: "" };
@@ -206,6 +259,50 @@ ok(/--port needs/.test(throwsMsg(() => studio.parseArgs(["--port", "banana"]))),
       ping_id: ID3, question: "Which tagline reads better?", options: ["A", "B"], n_target: 1,
       asked_at: "2026-08-09T00:00:00Z", last: { status: "complete", n_received: 1, responses: [{ choice: "A", text: "cleaner" }] },
     }));
+
+    // machine runs: rig-written receipts under .pingfusi/studio/runs/ — two builds of
+    // one gym (one a failure with a cause), one ad-hoc recorded run with media +
+    // annotations, one malformed receipt that must be skipped, one bad dir name.
+    const RUN_A = "run-20260818-1200-aaa01";
+    const RUN_B = "run-20260819-1432-bbb02";
+    const RUN_C = "run-20260819-1600-ccc03";
+    const RUN_BAD = "run-20260819-1700-bad04";
+    const runsRoot = path.join(work, ".pingfusi", "studio", "runs");
+    const writeRun = (id, receipt) => {
+      fs.mkdirSync(path.join(runsRoot, id), { recursive: true });
+      fs.writeFileSync(path.join(runsRoot, id, "receipt.json"), typeof receipt === "string" ? receipt : JSON.stringify(receipt));
+    };
+    writeRun(RUN_A, {
+      schema: studio.RUN_RECEIPT_SCHEMA, run_id: RUN_A, at: "2026-08-18T12:00:00Z", duration_ms: 900000,
+      ok: true, result: "pass", gym: { id: "collision_alley", version: "0.1.0" },
+      build: { label: "build-41", sha256: "a1".repeat(32), platform: "windows" }, mode: "replay",
+      performance: { source: "presentmon", summary: { avg_fps: 141.2, one_percent_low_fps: 88.1, series_1s: [141, 139, 140] } },
+    });
+    writeRun(RUN_B, {
+      schema: studio.RUN_RECEIPT_SCHEMA, run_id: RUN_B, at: "2026-08-19T14:32:00Z", duration_ms: 1830000,
+      ok: false, result: "fail", failure_cause: { kind: "expectation", message: "rung 7 unreachable", at_ms: 61234 },
+      gym: { id: "collision_alley", version: "0.1.0" },
+      build: { label: "build-42", sha256: "b2".repeat(32), platform: "windows" }, mode: "replay",
+      performance: { source: "presentmon", summary: { avg_fps: 96.4, one_percent_low_fps: 41.5, series_1s: [141, 90, 60] } },
+      warnings: ["replay diverged after 61s"],
+    });
+    writeRun(RUN_C, {
+      schema: studio.RUN_RECEIPT_SCHEMA, run_id: RUN_C, at: "2026-08-19T16:00:00Z", duration_ms: 300000,
+      ok: true, result: "pass", build: { filename: "Game.zip", platform: "windows" }, mode: "record",
+      media: { recording: "media/recording.mp4", screenshots: [{ t_ms: 61234, file: "shots/000061.png", why: "stutter" }] },
+      events: [{ t_ms: 300, kind: "load_stall", detail: "7.4s gap" }],
+    });
+    fs.mkdirSync(path.join(runsRoot, RUN_C, "media"), { recursive: true });
+    fs.writeFileSync(path.join(runsRoot, RUN_C, "media", "recording.mp4"), MEDIA_BYTES);
+    fs.mkdirSync(path.join(runsRoot, RUN_C, "shots"), { recursive: true });
+    fs.writeFileSync(path.join(runsRoot, RUN_C, "shots", "000061.png"), Buffer.from("PNGBYTES"));
+    fs.writeFileSync(path.join(runsRoot, RUN_C, "annotations.json"), JSON.stringify({
+      schema: "pingfusi-studio-annotations/v1", summary: "One stall dominates.",
+      findings: [{ id: "f1", title: "Long load stall", sentiment: "negative", evidence: [{ time_ms: 300, quote: "loading hangs" }] }],
+    }));
+    writeRun(RUN_BAD, "{ not json");
+    fs.mkdirSync(path.join(runsRoot, "NOT-a-valid-RUN"), { recursive: true });
+    fs.writeFileSync(path.join(runsRoot, "NOT-a-valid-RUN", "receipt.json"), JSON.stringify({ ok: true }));
 
     studioServer = studio.createStudioServer({ workDir: work, home });
     await new Promise((resolve) => studioServer.listen(0, "127.0.0.1", resolve));
@@ -250,6 +347,62 @@ ok(/--port needs/.test(throwsMsg(() => studio.parseArgs(["--port", "banana"]))),
     ok(res.status === 403, "traversal is forbidden at the router");
     res = await fetch(`${base}/api/rounds`, { method: "POST" });
     ok(res.status === 405 && res.headers.get("allow") === "GET, HEAD", "the studio server is read-only: non-GET/HEAD is a 405");
+
+    // ── the runs axis: rig-written machine runs, served read-only ─────────────
+    res = await fetch(`${base}/api/runs`);
+    const machine = await res.json();
+    ok(res.status === 200 && Array.isArray(machine.runs) && machine.runs.length === 3,
+      "/api/runs lists the three well-formed machine runs (malformed receipt + bad dir name skipped silently)");
+    ok(machine.runs.map((r) => r.run_id).join(",") === [RUN_A, RUN_B, RUN_C].join(","),
+      "runs come back in time order, oldest first — the chart's x axis");
+    const runB = machine.runs.find((r) => r.run_id === RUN_B);
+    ok(runB && runB.gym_id === "collision_alley" && runB.result === "fail" && runB.failure_kind === "expectation"
+      && runB.failure_message === "rung 7 unreachable" && runB.avg_fps === 96.4 && runB.one_percent_low_fps === 41.5
+      && runB.build_label === "build-42" && runB.warnings_count === 1,
+      "a run summary derives result, failure cause, build label, and the perf numbers");
+    const runC = machine.runs.find((r) => r.run_id === RUN_C);
+    ok(runC && runC.gym_id === null && runC.build_label === "Game.zip" && runC.mode === "record"
+      && runC.has_media === true && runC.has_annotations === true,
+      "an ad-hoc run (no gym) labels by filename and flags its media + annotations");
+    const gym = machine.gyms && machine.gyms.collision_alley;
+    ok(gym && gym.runs_in_order.join(",") === `${RUN_A},${RUN_B}` && gym.builds.length === 2
+      && gym.builds[0].build_label === "build-41" && gym.builds[0].result === "pass"
+      && gym.builds[1].result === "fail" && gym.builds[1].avg_fps === 96.4,
+      "the gym groups its runs in time order with the per-build pass/fail + fps series");
+    ok(Object.keys(machine.gyms).length === 1, "ad-hoc runs never form a gym group");
+
+    res = await fetch(`${base}/api/run/${RUN_C}`);
+    const runFull = await res.json();
+    ok(res.status === 200 && runFull.receipt && runFull.receipt.mode === "record"
+      && runFull.receipt.media.recording === "media/recording.mp4"
+      && runFull.annotations && runFull.annotations.findings.length === 1,
+      "/api/run/<id> carries the full receipt and the run's annotations");
+    res = await fetch(`${base}/api/run/${RUN_A}`);
+    ok(res.status === 200 && (await res.json()).annotations === null, "a run without annotations serves them as null");
+    res = await fetch(`${base}/api/run/${RUN_BAD}`);
+    ok(res.status === 404, "a malformed receipt is a 404, never a crash");
+    res = await fetch(`${base}/api/run/run-20260819-9999-zzz99`);
+    ok(res.status === 404 && /\.pingfusi\/studio\/runs/.test((await res.json()).error || ""),
+      "an unknown run is a 404 naming where the rig writes");
+
+    // run media: full, Range slice, screenshots, refusals, and read-only doctrine
+    res = await fetch(`${base}/media/run/${RUN_C}/media/recording.mp4`);
+    ok(res.status === 200 && Buffer.from(await res.arrayBuffer()).equals(MEDIA_BYTES),
+      "a run recording streams from the run's own media dir");
+    res = await fetch(`${base}/media/run/${RUN_C}/media/recording.mp4`, { headers: { range: "bytes=2-5" } });
+    ok(res.status === 206 && res.headers.get("content-range") === `bytes 2-5/${MEDIA_BYTES.length}`
+      && Buffer.from(await res.arrayBuffer()).toString() === "VDAT", "run media honors Range/206 (video seeking)");
+    res = await fetch(`${base}/media/run/${RUN_C}/shots/000061.png`);
+    ok(res.status === 200 && /image\/png/.test(res.headers.get("content-type")), "run screenshots serve from shots/");
+    for (const bad of [
+      `/media/run/${RUN_C}/media/%2e%2e%2freceipt.json`, `/media/run/${RUN_C}/logs/receipt.json`,
+      `/media/run/${RUN_C}/media/a/b.mp4`, `/media/run/NOT-VALID/media/f.mp4`, `/media/run/${RUN_C}/media/%2Fabs.mp4`,
+    ]) {
+      res = await fetch(`${base}${bad}`);
+      ok(res.status === 403, `${JSON.stringify(bad)} is forbidden at the router (run traversal/shape guard)`);
+    }
+    res = await fetch(`${base}/api/runs`, { method: "POST" });
+    ok(res.status === 405, "the runs axis is read-only too: the rig writes the cache, the studio only serves it");
   } finally {
     if (studioServer) await new Promise((resolve) => studioServer.close(resolve));
     await new Promise((resolve) => mediaServer.close(resolve));
@@ -264,8 +417,13 @@ ok(/--port needs/.test(throwsMsg(() => studio.parseArgs(["--port", "banana"]))),
   const uiDir = path.join(__dirname, "studio-ui");
   const appSrc = fs.readFileSync(path.join(uiDir, "app.js"), "utf8");
   ok(!/XMLHttpRequest|method\s*:/.test(appSrc), "the page never issues a write — plain GET fetches only");
+  ok(appSrc.includes('"machine run"') && appSrc.includes("machine-tag"),
+    "a rig run is labeled a machine run everywhere — never confusable with a human session");
+  const contractDoc = fs.readFileSync(path.join(__dirname, "..", "docs", "STUDIO.md"), "utf8");
+  ok(contractDoc.includes("pingfusi-studio-annotations/v1") && contractDoc.includes("end_ms"),
+    "docs/STUDIO.md carries the annotations contract (schema id + clip anchors)");
   const banned = ["wor" + "ker", "market" + "place", "cpy" + "any", "ping" + "humans"];
-  for (const file of ["../harness/studio.js", "studio-ui/index.html", "studio-ui/app.js", "studio-ui/style.css"]) {
+  for (const file of ["../harness/studio.js", "studio-ui/index.html", "studio-ui/app.js", "studio-ui/style.css", "../docs/STUDIO.md"]) {
     const lower = fs.readFileSync(path.join(__dirname, file), "utf8").toLowerCase();
     ok(banned.every((w) => !lower.includes(w)), `${path.basename(file)} ships no banned vocabulary`);
   }

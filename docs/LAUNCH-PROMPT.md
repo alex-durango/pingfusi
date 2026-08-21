@@ -50,7 +50,8 @@ Environment notes (operational, not workflow):
 - The filing command automatically chains client-safe wait legs until feedback. If a raw
   MCP leg returns pending, immediately call `pingfusi_wait` again; never return pending
   to the user or file a duplicate. Each leg renews the short idle lease. Passive
-  result/verify reads do not renew idle work.
+  result/verify reads do not renew idle work. A lapsed lease only pulls the round
+  from the feed for new claims; a reviewer mid-review can still finish.
 - Review drafts: whatever the reviewer opens is HOSTED. For the clone target,
   `pingfusi draft {{NAME}} push` is the DEFAULT (hosted, byte-verified, stable url — no
   tunnel). For ANY other static build or file — a page or route in your OWN app, an
