@@ -12,16 +12,23 @@
 //     what a released kit can check is that the file it actually ships is internally
 //     coherent with the code that reads it.
 //
-// Four things are checked:
+// Five things are checked:
 //   1. the generated wire names are exactly the six canonical service tool names
 //   2. the caps + timing in the generated file are the ones wire.js actually exports
 //      (i.e. wire.js really derives them, and did not quietly go back to literals)
-//   3. DOCS DRIFT: every tool name mentioned in shipped prose is a real registered name.
-//      A doc that names a tool the service does not register sends an agent to a
-//      "Tool not found" it cannot diagnose — the docs are part of the wire surface.
-//      Shipped prose includes the vendored installer's RULE_BODY: it is the always-loaded
-//      rules text every agent reads, and unlike SKILL_BODY it has no byte-pinned .md twin.
-//   4. DEAD NAMES: tool names from retired pre-pingfusi generations must never reappear
+//   3. PROFILES: the generated brand-profile mounts (renamed subsets of the same tools at
+//      their own mount paths — wrapper packages riding the kit register them) stay
+//      internally coherent: every profile key is a real internal verb, every profile name
+//      is a distinct <product>_* name, and the set is frozen like everything else.
+//   4. DOCS DRIFT: every tool name mentioned in shipped prose is a real registered name —
+//      canonical, job alias, or profile. A doc that names a tool the service does not
+//      register sends an agent to a "Tool not found" it cannot diagnose — the docs are
+//      part of the wire surface. Shipped prose includes the vendored installer's
+//      RULE_BODY: it is the always-loaded rules text every agent reads, and unlike
+//      SKILL_BODY it has no byte-pinned .md twin. (A wrapper package's own prose lives
+//      outside apps/kit and is linted by packages/wire-contract/contract-sync-selftest.js
+//      — this file may only read files inside this package.)
+//   5. DEAD NAMES: tool names from retired pre-pingfusi generations must never reappear
 //      anywhere in that prose — an installed rules file naming them shipped once already.
 "use strict";
 
@@ -88,6 +95,31 @@ const expectedRemap = Object.fromEntries(
 );
 ok(eq(gen.LIVE_TOOL_NAME, expectedRemap), "LIVE_TOOL_NAME is exactly the kitRemap subset of TOOLS");
 
+// ── 3. brand-profile mounts: renamed subsets of the same tools ──────────────
+// The kit's own surface never registers or calls a profile name — PROFILES exists so
+// prose that names one (here or in a wrapper package) can be checked against the
+// contract instead of trusted. Profile names freeze once shipped, like wireNames.
+const profileEntries = Object.entries(gen.PROFILES ?? {});
+ok(profileEntries.length > 0, `the generated file carries ${profileEntries.length} brand-profile mount(s)`);
+const PROFILE_NAMES = new Set();
+for (const [product, profile] of profileEntries) {
+  const names = Object.values(profile.tools);
+  ok(
+    profile.frozen === true && /^\/api\/mcp\/[a-z][a-z-]*$/.test(profile.mountPath),
+    `${product}: frozen, mounted under /api/mcp/ (${profile.mountPath})`
+  );
+  ok(
+    Object.keys(profile.tools).every((verb) => verb in gen.TOOLS),
+    `${product}: every profile key is a real internal verb`
+  );
+  ok(
+    names.every((n) => new RegExp(`^${product}_[a-z_]+$`).test(n)) &&
+      new Set(names).size === names.length,
+    `${product}: every profile name is a distinct ${product}_* name (${names.length})`
+  );
+  for (const n of names) PROFILE_NAMES.add(n);
+}
+
 // ── 2. wire.js really reads the generated file ───────────────────────────────
 ok(eq(wire.SERVICE_CAPS, gen.SERVICE_CAPS), "wire.SERVICE_CAPS is the generated caps object");
 ok(
@@ -141,9 +173,16 @@ ok(
   "each search order covers exactly the current name plus the lineage it sweeps"
 );
 
-// ── 3. docs drift: shipped prose may only name registered tools ─────────────
-const KNOWN = new Set([...gen.WIRE_TOOL_NAMES, ...gen.ALIAS_TOOL_NAMES]);
-const TOOL_TOKEN = /\b(?:cpyany|pingfusi)_[a-z_]+\b/g;
+// ── 4. docs drift: shipped prose may only name registered tools ─────────────
+// KNOWN spans every name the service registers on ANY mount — canonical, job alias, and
+// brand-profile — and the token regex derives its prefixes from the same generated data,
+// so a new profile is linted the day it lands in the contract, not the day someone
+// remembers to widen a literal here.
+const KNOWN = new Set([...gen.WIRE_TOOL_NAMES, ...gen.ALIAS_TOOL_NAMES, ...PROFILE_NAMES]);
+const TOOL_TOKEN = new RegExp(
+  `\\b(?:${["cpyany", "pingfusi", ...profileEntries.map(([product]) => product)].join("|")})_[a-z_]+\\b`,
+  "g"
+);
 
 const docFiles = [];
 const walkMd = (rel) => {
@@ -206,7 +245,7 @@ ok(
   ruleUnknown.join(", ")
 );
 
-// ── 4. dead names: retired generations may never return to shipped prose ────
+// ── 5. dead names: retired generations may never return to shipped prose ────
 const DEAD_NAMES = ["ping_review", "request_review_test", "get_test_results", "wait_for_results"];
 const deadHits = [];
 for (const rel of docFiles) {

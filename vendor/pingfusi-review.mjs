@@ -31,9 +31,39 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone installer.
 
-const VERSION = "0.15.0";
+const VERSION = "0.16.0";
 const execFileP = promisify(execFile);
-const APP_URL = process.env.PINGHUMANS_APP_URL ?? process.env.PINGFUSI_APP_URL ?? "https://pingfusi.com";
+const APP_URL =
+  cliFlagValue("--app-url") ??
+  process.env.PINGHUMANS_APP_URL ??
+  process.env.PINGFUSI_APP_URL ??
+  "https://pingfusi.com";
+
+// ─── Brand-wrapper parameterization ───────────────────────────────────────
+//
+// A thin wrapper package riding this installer can point it at a different
+// MCP mount and MCP server key, and keep this file's rule/skill surfaces out
+// of the way while it installs its own. Flags win over the matching env vars;
+// the defaults reproduce stock pingfusi behavior exactly. A wrapper brand
+// passes --server-key AND --skip-instruction-surfaces together, on setup and
+// remove alike — the instruction surfaces baked into this file belong to the
+// pingfusi brand, and a foreign-brand invocation must neither install nor
+// delete them. (cliFlagValue is a hoisted function declaration so APP_URL
+// above can reach it — the 0.0.4 TDZ lesson.)
+const MCP_PATH = cliFlagValue("--mcp-path") ?? process.env.PINGFUSI_MCP_PATH ?? "/api/mcp";
+const SERVER_KEY = cliFlagValue("--server-key") ?? process.env.PINGFUSI_MCP_SERVER_KEY ?? "pingfusi";
+// The wait tool name `pingfusi wait` calls on the wire. A wrapper brand's mount
+// registers its own job-named wait (e.g. qaping_wait on /api/mcp/qaping), and
+// its bin passes the name explicitly — never guessed from the server key.
+const WAIT_TOOL = cliFlagValue("--wait-tool") ?? process.env.PINGFUSI_WAIT_TOOL ?? "cpyany_wait";
+const SKIP_INSTRUCTION_SURFACES =
+  process.argv.includes("--skip-instruction-surfaces") ||
+  process.env.PINGFUSI_SKIP_INSTRUCTION_SURFACES === "1";
+
+function cliFlagValue(name) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : undefined;
+}
 // Hoisted with the other top-of-module consts — the entry try-block runs
 // setup()/refreshStaleRules() via top-level await BEFORE lower const
 // declarations initialize (the 0.0.4 TDZ lesson). validateStoredToken
@@ -223,6 +253,13 @@ const LEGACY = {
   credsDirs: ["pinghumans", "cpyany"],
 };
 
+// Server-key entries one setup/remove may touch: the active key, plus — only
+// for the stock pingfusi brand — the older generations in LEGACY. An install
+// under one brand's key must never sweep another brand's entry.
+function sweptServerKeys() {
+  return SERVER_KEY === "pingfusi" ? [SERVER_KEY, ...LEGACY.serverNames] : [SERVER_KEY];
+}
+
 // ─── Entry ────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -316,8 +353,11 @@ async function setup(client) {
       const who = await fetchWhoami(token);
       if (who?.success === false) throw new Error("token revoked");
       const name = who?.email || who?.name;
+      // The sign-out hint is stock-only: a wrapper brand's `remove` deliberately
+      // does NOT sign the machine out (the login is shared), so naming its bin
+      // there would be a lie and naming pingfusi's would be a brand leak.
       console.log(
-        `${pc0.green("✔")} Already signed in${name ? ` as ${pc0.bold(name)}` : ""} — reusing this machine's login (\`pingfusi remove\` signs out)`
+        `${pc0.green("✔")} Already signed in${name ? ` as ${pc0.bold(name)}` : ""} — reusing this machine's login${SERVER_KEY === "pingfusi" ? " (`pingfusi remove` signs out)" : ""}`
       );
     } catch {
       token = null; // dead or unverifiable → fresh sign-in
@@ -359,7 +399,9 @@ async function setup(client) {
     track("setup_complete", { client_label: t });
   }
 
-  console.log(`\n${pc.green("✔")} pingfusi setup complete\n`);
+  // Brand-derived like the remove line: SERVER_KEY defaults to "pingfusi", so
+  // stock runs print the exact same bytes as ever.
+  console.log(`\n${pc.green("✔")} ${SERVER_KEY} setup complete\n`);
   for (const { client: c, entries } of summary) {
     console.log(`  ${pc.bold(prettyClient(c))}`);
     for (const e of entries) {
@@ -380,7 +422,11 @@ async function setup(client) {
   if (restartList) {
     console.log(`\nRestart ${restartList} to load the MCP server.`);
   }
-  console.log(`Try it: ask your agent to "use pingfusi to copy the hero section from a reference site."`);
+  // The clone-pitch Try-it line is pingfusi's product pitch, so it never prints
+  // for a wrapper brand — the wrapper's own flow owns its handoff prose.
+  if (SERVER_KEY === "pingfusi") {
+    console.log(`Try it: ask your agent to "use pingfusi to copy the hero section from a reference site."`);
+  }
 }
 
 async function remove(client) {
@@ -398,13 +444,19 @@ async function remove(client) {
   }
   for (const t of targets) {
     await unpatchConfig(t);
-    console.log(`✓ Removed pingfusi from ${prettyClient(t)} config.`);
+    // Named by the server key being swept: a wrapper-brand invocation
+    // (--server-key qaping) removed ITS entry, not pingfusi's — saying
+    // "pingfusi" there would be both a lie and a brand leak. Stock runs
+    // print the exact same bytes as ever (SERVER_KEY defaults to "pingfusi").
+    console.log(`✓ Removed ${SERVER_KEY} from ${prettyClient(t)} config.`);
     await unpatchRules(t);
     track("remove", { client_label: t });
   }
   // Full removal (no --client) also signs this machine out — including any
-  // stash an older brand generation wrote (see LEGACY.credsDirs).
-  if (!client) {
+  // stash an older brand generation wrote (see LEGACY.credsDirs). The stash is
+  // the MACHINE's login, shared across brand wrappers, so only the stock brand
+  // deletes it — a wrapper's remove takes its MCP entries and nothing more.
+  if (!client && SERVER_KEY === "pingfusi") {
     const { unlink } = await import("node:fs/promises");
     await unlink(credsPath()).catch(() => {});
     for (const p of legacyCredsPaths()) await unlink(p).catch(() => {});
@@ -694,26 +746,28 @@ async function patchConfig(client, token) {
     config.mcpServers = {};
   }
 
+  // Only OTHER swept keys are deleted — deleting our own key before the
+  // assignment would move it to the end of an existing config's key order.
   if (client === "claude-desktop") {
     // Claude Desktop doesn't natively support Streamable HTTP MCP servers
     // (only stdio). Bridge via the community mcp-remote package, which spawns
     // a stdio server that proxies to our hosted HTTP MCP.
-    for (const name of LEGACY.serverNames) delete config.mcpServers[name];
-    config.mcpServers.pingfusi = {
+    for (const name of sweptServerKeys()) if (name !== SERVER_KEY) delete config.mcpServers[name];
+    config.mcpServers[SERVER_KEY] = {
       command: "npx",
       args: [
         "-y",
         "mcp-remote",
-        `${APP_URL}/api/mcp`,
+        `${APP_URL}${MCP_PATH}`,
         "--header",
         `Authorization: Bearer ${token}`,
       ],
     };
   } else {
     // Cursor + others: native streamable-HTTP works.
-    for (const name of LEGACY.serverNames) delete config.mcpServers[name];
-    config.mcpServers.pingfusi = {
-      url: `${APP_URL}/api/mcp`,
+    for (const name of sweptServerKeys()) if (name !== SERVER_KEY) delete config.mcpServers[name];
+    config.mcpServers[SERVER_KEY] = {
+      url: `${APP_URL}${MCP_PATH}`,
       headers: { Authorization: `Bearer ${token}` },
     };
   }
@@ -722,7 +776,7 @@ async function patchConfig(client, token) {
 }
 
 async function unpatchConfig(client) {
-  const serverNames = ["pingfusi", ...LEGACY.serverNames];
+  const serverNames = sweptServerKeys();
   if (client === "claude-code") {
     for (const name of serverNames) {
       await execFileP("claude", ["mcp", "remove", name, "--scope", "user"]).catch(() => {});
@@ -773,12 +827,11 @@ async function patchCodexConfig(token) {
   // Collapse the strip's leftover trailing blank lines so re-runs are
   // byte-stable instead of growing one blank line per invocation. Older
   // generations' tables are swept too (see LEGACY.serverNames).
-  text = stripTomlTable(text, "mcp_servers.pingfusi");
-  for (const name of LEGACY.serverNames) text = stripTomlTable(text, `mcp_servers.${name}`);
+  for (const name of sweptServerKeys()) text = stripTomlTable(text, `mcp_servers.${name}`);
   text = text.replace(/\n{2,}$/, "\n");
   const block =
-    `[mcp_servers.pingfusi]\n` +
-    `url = "${APP_URL}/api/mcp"\n` +
+    `[mcp_servers.${SERVER_KEY}]\n` +
+    `url = "${APP_URL}${MCP_PATH}"\n` +
     `http_headers = { "Authorization" = "Bearer ${token}" }\n`;
   const sep = text.trim().length === 0 ? "" : text.endsWith("\n") ? "\n" : "\n\n";
   await writeFile(path, (text.trim().length === 0 ? "" : text) + sep + block);
@@ -861,6 +914,9 @@ function ruleContent(client) {
 // — the agent guidance lives in its own files now, not the user's memory.
 async function patchRules(client) {
   const installed = [];
+  // A wrapper brand owns its own rule/skill surfaces; this file's must then
+  // stay untouched — including the legacy sweeps, which are pingfusi lineage.
+  if (SKIP_INSTRUCTION_SURFACES) return installed;
   const rp = rulePath(client);
   if (!rp) return installed;
 
@@ -932,7 +988,9 @@ async function refreshStaleRules({ verbose = false } = {}) {
   const updated = [];
   const backedUp = [];
 
-  for (const client of ["claude-code", "cursor"]) {
+  // Skipping the instruction surfaces skips their staleness refresh too; the
+  // token-health check below still runs (it is brand-independent).
+  for (const client of SKIP_INSTRUCTION_SURFACES ? [] : ["claude-code", "cursor"]) {
     // Consent signal: our rule file exists (current installs) or our legacy
     // managed block sits in ~/.claude/CLAUDE.md (pre-0.1.0 installs, which
     // migrate to the rules-dir + skill layout on this refresh).
@@ -974,7 +1032,7 @@ async function refreshStaleRules({ verbose = false } = {}) {
       for (const p of backedUp) console.log(`   ${p}`);
     }
     track("rules_refresh");
-  } else if (verbose) {
+  } else if (verbose && !SKIP_INSTRUCTION_SURFACES) {
     console.log(`✓ Agent rules already current (v${VERSION}).`);
   }
 
@@ -1035,6 +1093,9 @@ async function backupLegacyBlock() {
 }
 
 async function unpatchRules(client) {
+  // A foreign-brand invocation (--skip-instruction-surfaces) never installed
+  // these files, so its remove must not delete pingfusi's.
+  if (SKIP_INSTRUCTION_SURFACES) return;
   // Legacy installs: clear our managed block out of ~/.claude/CLAUDE.md, and
   // remove any rule/skill files older brand generations installed too.
   if (client === "claude-code") await stripLegacyClaudeMdBlock();
@@ -1058,7 +1119,7 @@ async function patchClaudeCodeViaCli(token) {
   try {
     // Remove any existing config first (ours or an older generation's),
     // otherwise `mcp add` errors on dupes.
-    for (const name of ["pingfusi", ...LEGACY.serverNames]) {
+    for (const name of sweptServerKeys()) {
       await execFileP("claude", [
         "mcp",
         "remove",
@@ -1077,8 +1138,8 @@ async function patchClaudeCodeViaCli(token) {
       "user",
       "--transport",
       "http",
-      "pingfusi",
-      `${APP_URL}/api/mcp`,
+      SERVER_KEY,
+      `${APP_URL}${MCP_PATH}`,
       "--header",
       `Authorization: Bearer ${token}`,
     ]);
@@ -1238,12 +1299,14 @@ async function validateStoredToken() {
   if (dead) {
     const pc = await import("picocolors").then((m) => m.default).catch(() => null);
     const warn = (s) => (pc ? pc.yellow(s) : s);
+    // Brand-derived like the wait hints: a wrapper brand's dead token must nudge
+    // toward ITS setup command. Stock bytes unchanged (SERVER_KEY = "pingfusi").
     console.error(
       "\n" +
-        warn("⚠ Your pingfusi token is no longer valid") +
+        warn(`⚠ Your ${SERVER_KEY} token is no longer valid`) +
         " (revoked, or the account was deleted).\n" +
         "  Re-link this machine:  " +
-        (pc ? pc.cyan("npx pingfusi setup") : "npx pingfusi setup") +
+        (pc ? pc.cyan(`npx ${SERVER_KEY} setup`) : `npx ${SERVER_KEY} setup`) +
         "\n"
     );
   }
@@ -1263,7 +1326,9 @@ async function resolveLocalToken() {
   for (const p of candidates) {
     try {
       const cfg = JSON.parse(await readFile(p, "utf8"));
-      const entry = ["pingfusi", ...LEGACY.serverNames]
+      // The active server key first, then the stock lineage — the login is
+      // shared across brand wrappers, so any entry's bearer is good.
+      const entry = [...new Set([SERVER_KEY, "pingfusi", ...LEGACY.serverNames])]
         .map((name) => cfg?.mcpServers?.[name])
         .find(Boolean);
       const header = entry?.headers?.Authorization ?? entry?.headers?.authorization;
@@ -1277,7 +1342,11 @@ async function resolveLocalToken() {
 async function waitForResultsCli(rest) {
   const pingId = rest.find((a) => !a.startsWith("--"));
   if (!pingId || !/^[0-9a-f-]{36}$/i.test(pingId)) {
-    throw new Error("usage: pingfusi wait <ping_id> [--timeout <seconds>]");
+    // Brand-derived like the remove line: a wrapper brand (--server-key
+    // qaping) invokes this as ITS OWN `wait`, so the usage/auth hints must
+    // name its bin, never pingfusi's. Stock bytes unchanged (SERVER_KEY
+    // defaults to "pingfusi").
+    throw new Error(`usage: ${SERVER_KEY} wait <ping_id> [--timeout <seconds>]`);
   }
   const tIdx = rest.indexOf("--timeout");
   const timeoutSec = tIdx >= 0 ? Math.max(30, parseInt(rest[tIdx + 1], 10) || 1800) : 1800;
@@ -1285,7 +1354,7 @@ async function waitForResultsCli(rest) {
   const token = await resolveLocalToken();
   if (!token) {
     throw new Error(
-      "No pingfusi token found. Run `npx pingfusi setup` first."
+      `No ${SERVER_KEY} token found. Run \`npx ${SERVER_KEY} setup\` first.`
     );
   }
 
@@ -1296,14 +1365,17 @@ async function waitForResultsCli(rest) {
     if (remainingSeconds <= 0) {
       console.log(
         `Timed out after ${timeoutSec}s — still pending. ` +
-          `Run \`pingfusi wait ${pingId}\` again to keep the task active ` +
+          `Run \`${SERVER_KEY} wait ${pingId}\` again to keep the task active ` +
           `(without it an unclaimed round leaves the feed; a reviewer already ` +
           `working can still finish).`
       );
       process.exit(2);
     }
     const maxWaitSeconds = Math.max(10, Math.min(45, remainingSeconds));
-    const res = await fetch(`${APP_URL}/api/mcp`, {
+    // Mount + tool name are the brand knobs: stock stays exactly /api/mcp +
+    // cpyany_wait (WAIT_TOOL/MCP_PATH defaults); a wrapper invocation rides its
+    // own mount with the wait tool its bin names via --wait-tool.
+    const res = await fetch(`${APP_URL}${MCP_PATH}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1315,7 +1387,7 @@ async function waitForResultsCli(rest) {
         id: 1,
         method: "tools/call",
         params: {
-          name: "cpyany_wait",
+          name: WAIT_TOOL,
           arguments: { ping_id: pingId, max_wait_seconds: maxWaitSeconds },
         },
       }),
@@ -1331,7 +1403,7 @@ async function waitForResultsCli(rest) {
 
     if (status === "not_found") {
       throw new Error(
-        "Ping not found for this account. Results are asker-scoped — `wait` only works on pings filed with the same pingfusi account."
+        `Ping not found for this account. Results are asker-scoped — \`wait\` only works on pings filed with the same ${SERVER_KEY} account.`
       );
     }
     if (status !== "pending" || received > baseline) {
@@ -1343,7 +1415,7 @@ async function waitForResultsCli(rest) {
     if (Date.now() >= deadline) {
       console.log(
         `Timed out after ${timeoutSec}s — still pending (${received}/${sc.n_target ?? "?"} results). ` +
-          `Run \`pingfusi wait ${pingId}\` again to keep the task active ` +
+          `Run \`${SERVER_KEY} wait ${pingId}\` again to keep the task active ` +
           `(without it an unclaimed round leaves the feed; a reviewer already ` +
           `working can still finish).`
       );
@@ -1366,7 +1438,7 @@ async function whoamiCli() {
   const token = await resolveLocalToken();
   if (!token) {
     console.log(pc.yellow("Not logged in."));
-    console.log(pc.dim("Run `npx pingfusi setup` to authenticate."));
+    console.log(pc.dim(`Run \`npx ${SERVER_KEY} setup\` to authenticate.`));
     return;
   }
   try {
@@ -1376,6 +1448,6 @@ async function whoamiCli() {
     if (who.email) console.log(`${pc.dim("Email:".padEnd(13))}${who.email}`);
   } catch {
     console.log(pc.yellow("Token present but not accepted by the server."));
-    console.log(pc.dim("Run `npx pingfusi setup` to re-authenticate."));
+    console.log(pc.dim(`Run \`npx ${SERVER_KEY} setup\` to re-authenticate.`));
   }
 }

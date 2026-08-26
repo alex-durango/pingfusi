@@ -225,6 +225,117 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
     ok(r.steps.includes("skills-present"), "already-installed skills are kept, not overwritten");
   }
 
+  // ── external-wrapper drive (opts.wrapper): the thin-brand pass-through ──────
+  // A wrapper package (e.g. qaping) rides the whole setup with its own brand,
+  // installer flags, skill root, and always-loaded rule; absent wrapper options
+  // are pinned byte-identical by every stock assertion above ($-anchored run
+  // regexes prove no flags leak into default invocations).
+  {
+    const wrapHome = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-setup-wrap-"));
+    const skillRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-wrap-skills-"));
+    fs.mkdirSync(path.join(skillRoot, "qaping"), { recursive: true });
+    fs.writeFileSync(path.join(skillRoot, "qaping", "SKILL.md"), "---\nname: qaping\n---\nQA loop guidance\n");
+    const wrapper = {
+      brand: "qaping",
+      appUrl: "https://qaping.example",
+      mcpPath: "/api/mcp/qaping",
+      serverKey: "qaping",
+      skipInstructionSurfaces: true,
+      skillRoot,
+      ruleAsset: { fileBaseName: "qaping", body: "Run QA through the wrapper's MCP tools.\n" },
+    };
+    // The kit-only steps (cloudflared, the motion runtime, ditto) serve the
+    // clone/review pipeline only — a wrapper brand must skip them entirely,
+    // so a counting probe pins that motion is never even consulted.
+    let motionProbes = 0;
+    const motionCounted = () => { motionProbes++; return motionReady(); };
+    const { io, logs, runs } = fakeIO({ probes: { cloudflared: true }, answers: [], paths: { qaping: "/usr/local/bin/qaping" } });
+    const r = await setup(io, { home: wrapHome, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: true, mcpClient: "claude-code", probeMotionBrowser: motionCounted, wrapper });
+    ok(r.ok && logs[0] === "qaping setup\n─────────────────────────" && logs.some((l) => /qaping already installed globally/.test(l)),
+      "wrapper drive: the header and global-install step speak the wrapper's own brand/bin");
+    ok(r.steps.includes("kit-steps-skipped") && motionProbes === 0
+      && !logs.some((l) => /cloudflared|motion|ditto|DITTO/i.test(l))
+      && r.steps.every((s) => !/^(cloudflared|motion-browser|ditto)/.test(s)),
+      "wrapper drive: the kit-only steps (cloudflared, motion runtime, ditto) are skipped — never probed, never prompted, never logged");
+    ok(runs.some((r2) => /pingfusi-review\.mjs setup --client claude-code --app-url https:\/\/qaping\.example --mcp-path \/api\/mcp\/qaping --server-key qaping --skip-instruction-surfaces$/.test(r2)),
+      "wrapper drive: appUrl/mcpPath/serverKey/skipInstructionSurfaces all ride the vendored installer's flags");
+    ok(fs.existsSync(path.join(wrapHome, ".claude", "skills", "qaping", "SKILL.md"))
+      && !fs.existsSync(path.join(wrapHome, ".claude", "skills", "pixel-perfect-clone")),
+      "wrapper drive: skills install from the wrapper's own skillRoot — none of the kit's");
+    ok(fs.readFileSync(path.join(wrapHome, ".claude", "rules", "qaping.md"), "utf8") === wrapper.ruleAsset.body,
+      "wrapper drive: the always-loaded rule lands under the wrapper's name (plain md for Claude Code)");
+    ok(!logs.some((l) => /Clone https:\/\/example\.com pixel-perfect/.test(l)) && logs.some((l) => /qaping guidance/.test(l)),
+      "wrapper drive: the pingfusi handoff prompts are replaced by a brand-neutral close");
+    // already-logged-in re-run without a client: a wrapper CANNOT stop at the
+    // `rules` refresh — under --skip-instruction-surfaces that writes no MCP
+    // config, so an existing (shared) pingfusi login made a bare wrapper setup
+    // a silent no-op (found by adversarial review). The existing-login path
+    // must run the vendored `setup` (stored-credential reuse, no re-auth) so
+    // the wrapper's own MCP entry still lands.
+    const again = fakeIO({ probes: {}, answers: [], paths: { qaping: "/usr/local/bin/qaping" } });
+    const rAgain = await setup(again.io, { home: wrapHome, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionCounted, wrapper });
+    ok(again.runs.some((r2) => /pingfusi-review\.mjs setup --app-url https:\/\/qaping\.example --mcp-path \/api\/mcp\/qaping --server-key qaping --skip-instruction-surfaces$/.test(r2))
+      && !again.runs.some((r2) => /pingfusi-review\.mjs rules/.test(r2)),
+      "wrapper drive: the logged-in no-client re-run still runs the vendored `setup` with the wrapper flags (never a bare rules no-op)");
+    ok(rAgain.steps.includes("login-present") && rAgain.steps.includes("login-mcp-configured"),
+      "wrapper drive: the existing-login MCP config write is recorded as its own step");
+    ok(again.logs.some((l) => /^✓ login found/.test(l)) && !again.logs.some((l) => /review login found/.test(l)),
+      "wrapper drive: the login-found line stays brand-neutral (no pingfusi review prose)");
+
+    // failing installer, wrapper drive: for a wrapper the MCP entry IS the
+    // product, so a vendored-installer failure must fail the whole setup loudly
+    // (found by the qaping verifier: a dead service printed the success epilogue
+    // and exited 0 over a machine with no MCP config). Stock setup keeps its
+    // lenient contract — step 5 has always been skippable there.
+    const failing = fakeIO({ probes: {}, answers: [], paths: { qaping: "/usr/local/bin/qaping" } });
+    failing.io.run = (cmd, args) => {
+      failing.runs.push([cmd, ...args].join(" "));
+      return /pingfusi-review\.mjs/.test(args.join(" ")) ? { status: 1 } : { status: 0 };
+    };
+    const rFail = await setup(failing.io, { home: wrapHome, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionCounted, wrapper });
+    ok(!rFail.ok && rFail.steps.includes("login-install-failed")
+      && failing.logs.some((l) => /^✗ qaping MCP install failed — the qaping MCP entry was not written\. Re-run: npx qaping setup$/.test(l)),
+      "wrapper drive: a failing vendored installer fails setup (ok:false, login-install-failed, loud error) instead of a success epilogue");
+    const stockFail = fakeIO({ probes: { cloudflared: true }, answers: [], paths: { pingfusi: "/usr/local/bin/pingfusi" } });
+    stockFail.io.run = (cmd, args) => {
+      stockFail.runs.push([cmd, ...args].join(" "));
+      return { status: 1 };
+    };
+    const stockHome = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-setup-stockfail-"));
+    const rStock = await setup(stockFail.io, { home: stockHome, sourceCheckout: false, resolveToken: () => "tok", mcpClient: "claude-code", probeMotionBrowser: motionReady });
+    ok(rStock.ok && !rStock.steps.includes("login-install-failed"),
+      "stock drive: a failing installer run keeps the lenient stock contract (ok:true, no wrapper failure step) — behavior unchanged");
+
+    // logged-out wrapper drive: the login prompt + skip warning speak the
+    // wrapper's brand, never the pingfusi review-round prose
+    const asked = [];
+    const loggedOut = fakeIO({ probes: {}, answers: [], paths: { qaping: "/usr/local/bin/qaping" } });
+    const askCapture = loggedOut.io.ask;
+    loggedOut.io.ask = (q) => { asked.push(q); return askCapture(q); }; // answers [] → "" but tty:true… force decline below
+    loggedOut.io.isTTY = false; // non-TTY: "" is never consent, so the skip branch runs
+    await setup(loggedOut.io, { home: wrapHome, sourceCheckout: false, resolveToken: () => null, dittoApiKey: false, probeMotionBrowser: motionCounted, wrapper });
+    ok(asked.some((q) => q.startsWith("qaping login + MCP install")) && !asked.some((q) => /review/.test(q)),
+      "wrapper drive: the login prompt says `qaping login + MCP install`, not the review-round prose");
+    ok(loggedOut.logs.some((l) => /qaping rounds will NOT work without a login/.test(l) && /Log in later: qaping setup/.test(l))
+      && !loggedOut.logs.some((l) => /review rounds will NOT work/.test(l)),
+      "wrapper drive: the skipped-login warning speaks the wrapper's brand");
+
+    // cursor rule flavor + scoped wrapper removal (direct agent-setup drive)
+    const as = require("./agent-setup.js");
+    const r2 = as.install(wrapHome, true, "cursor", { skillRoot, ruleAsset: wrapper.ruleAsset });
+    const mdc = fs.readFileSync(path.join(wrapHome, ".cursor", "rules", "qaping.mdc"), "utf8");
+    ok(r2.ok && mdc === "---\nalwaysApply: true\n---\n\n" + wrapper.ruleAsset.body,
+      "wrapper rule for Cursor gets the alwaysApply frontmatter (mirrors the vendored rulePath/ruleContent)");
+    const removed = as.removeSkills(wrapHome, "cursor", { skillRoot, ruleAsset: { fileBaseName: "qaping" } });
+    ok(removed.includes("qaping")
+      && !fs.existsSync(path.join(wrapHome, ".cursor", "skills", "qaping"))
+      && !fs.existsSync(path.join(wrapHome, ".cursor", "rules", "qaping.mdc"))
+      && fs.existsSync(path.join(wrapHome, ".claude", "skills", "qaping", "SKILL.md")),
+      "wrapper removeSkills sweeps its own skillRoot + rule in client scope, nothing else");
+    fs.rmSync(wrapHome, { recursive: true, force: true });
+    fs.rmSync(skillRoot, { recursive: true, force: true });
+  }
+
   // ── exact dependency-supported Node boundaries ───────────────────────────────
   ok(!supportsNode("20.16.9") && supportsNode("20.17.0") && !supportsNode("21.9.0")
     && !supportsNode("22.12.9") && supportsNode("22.13.0")

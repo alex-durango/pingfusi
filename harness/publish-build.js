@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Upload a game build (one zip) to Pingfusi's hosted build store so reviewers
 // can playtest it without a store page. Prints the /b/<slug> URL to file the
-// playtest with (request_review platform:'windows'|'macos', url:<that URL>).
+// playtest with (the review tool, platform:'windows'|'macos', url:<that URL>).
 //
 // Hosted builds are TEMPORARY by design: they live 72 hours unless a filed
 // round extends them, and each account holds at most a handful at once —
@@ -16,9 +16,17 @@ const path = require("path");
 const core = require("../packages/core");
 const { MAX_BUILD_BYTES } = require("../packages/core/builds.js");
 
-const USAGE = "usage: pingfusi publish-build <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]";
+// Brand parameterization (a wrapper brand's bin passes its own command name and
+// the tool name its mount registers); the defaults keep the stock pingfusi bytes.
+const usageFor = (brandCommand) =>
+  `usage: ${brandCommand} <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]`;
+const BRAND_COMMAND = "pingfusi publish-build";
+// The job-named review tool the /api/mcp mount registers — the old next-step
+// named the kit's INTERNAL verb (request_review), which no mount registers.
+const NEXT_STEP_TOOL = "pingfusi_review_website";
+const USAGE = usageFor(BRAND_COMMAND);
 
-function parseArgs(argv) {
+function parseArgs(argv, usage = USAGE) {
   if (!argv[0] || argv[0] === "--help" || argv[0] === "-h") {
     return { help: true };
   }
@@ -28,16 +36,16 @@ function parseArgs(argv) {
     if (arg === "--json") { out.json = true; continue; }
     if (["--platform", "--name", "--record"].includes(arg)) {
       const value = argv[++i];
-      if (!value) throw new Error(`${arg} needs a value — ${USAGE}`);
+      if (!value) throw new Error(`${arg} needs a value — ${usage}`);
       if (arg === "--platform") out.platform = value;
       if (arg === "--name") out.name = value;
       if (arg === "--record") out.recordPath = value;
       continue;
     }
-    throw new Error(`unknown option ${arg} — ${USAGE}`);
+    throw new Error(`unknown option ${arg} — ${usage}`);
   }
   if (out.platform !== "windows" && out.platform !== "macos") {
-    throw new Error(`--platform windows|macos is required (the reviewer pool the build is for) — ${USAGE}`);
+    throw new Error(`--platform windows|macos is required (the reviewer pool the build is for) — ${usage}`);
   }
   return out;
 }
@@ -80,11 +88,16 @@ async function publishBuild(options, deps = {}) {
   return { ...result, receipts };
 }
 
-async function main(argv = process.argv.slice(2)) {
+// opts is the wrapper-brand seam: {brandCommand, nextStepToolName} — absent,
+// the stock pingfusi defaults print.
+async function main(argv = process.argv.slice(2), opts = {}) {
+  const brandCommand = opts.brandCommand || BRAND_COMMAND;
+  const nextStepToolName = opts.nextStepToolName || NEXT_STEP_TOOL;
+  const usage = usageFor(brandCommand);
   let options;
-  try { options = parseArgs(argv); }
+  try { options = parseArgs(argv, usage); }
   catch (error) { console.error(`✗ ${error.message}`); process.exitCode = 2; return; }
-  if (options.help) { console.log(USAGE); return; }
+  if (options.help) { console.log(usage); return; }
   try {
     const result = await publishBuild(options);
     if (options.json) {
@@ -95,7 +108,7 @@ async function main(argv = process.argv.slice(2)) {
     console.log(`  url: ${result.url}`);
     console.log(`  file: ${result.filename} (${fmtMb(result.bytes)}, sha256 ${result.sha256.slice(0, 16)}…)`);
     for (const receipt of result.receipts) console.log(`  receipt: ${receipt}`);
-    console.log(`  next: file the playtest — request_review with platform:'${result.platform}', url:'${result.url}', est_minutes:<5-30>`);
+    console.log(`  next: file the playtest — ${nextStepToolName} with platform:'${result.platform}', url:'${result.url}', est_minutes:<5-30>`);
     if (result.platform === "macos") {
       console.log("  note: the reviewer app downloads and launches the build itself after an unreviewed-build disclosure — no Gatekeeper wall. Pre-flighted here on Macs: Mach-O main executable required, arm64 slices at least ad-hoc signed.");
     } else {

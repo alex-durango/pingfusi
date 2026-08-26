@@ -39,10 +39,26 @@ function skillDir(homeDir, client) {
   return path.join(homeDir, ...CLIENT_SKILL_DIRS[client]);
 }
 
+// Where a brand wrapper's always-loaded rule lands, per client. Mirrors the
+// vendored installer's rulePath()/ruleContent() shape: Claude Code takes plain
+// md in ~/.claude/rules/, Cursor takes .mdc with alwaysApply frontmatter in
+// ~/.cursor/rules/, Codex has no rules dir.
+function ruleAssetPath(homeDir, client, fileBaseName) {
+  if (client === "claude-code") return path.join(homeDir, ".claude", "rules", `${fileBaseName}.md`);
+  if (client === "cursor") return path.join(homeDir, ".cursor", "rules", `${fileBaseName}.mdc`);
+  return null;
+}
+
+function ruleAssetContent(client, body) {
+  return client === "cursor" ? "---\nalwaysApply: true\n---\n\n" + body : body;
+}
+
 function install(homeDir, force, requestedClient, options = {}) {
   // Every skill the kit ships lives in PKG/skill/<skill-name>/SKILL.md — install them
-  // all. One kit, several use-case front doors over the same review verbs.
-  const skillRoot = path.join(PKG, "skill");
+  // all. One kit, several use-case front doors over the same review verbs. A brand
+  // wrapper riding the kit points options.skillRoot at its own skill dir instead, and
+  // may add options.ruleAsset = { fileBaseName, body } for its always-loaded rule.
+  const skillRoot = options.skillRoot || path.join(PKG, "skill");
   if (!fs.existsSync(skillRoot)) return { ok: false, message: `kit skills missing at ${skillRoot} — broken install; reinstall pingfusi`, installed: [] };
   const names = fs.readdirSync(skillRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(skillRoot, e.name, "SKILL.md"))).map((e) => e.name);
   if (!names.length) return { ok: false, message: `no skills found under ${skillRoot} — broken install; reinstall pingfusi`, installed: [] };
@@ -73,11 +89,24 @@ function install(homeDir, force, requestedClient, options = {}) {
       if (exists) refreshed.add(n);
     }
   }
+  // The wrapper's rule is managed text (like the vendored installer's own rule
+  // file): always written to the current body, never preserved as a user edit.
+  const rules = [];
+  if (options.ruleAsset) {
+    for (const client of clients) {
+      const dest = ruleAssetPath(homeDir, client, options.ruleAsset.fileBaseName);
+      if (!dest) continue;
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, ruleAssetContent(client, options.ruleAsset.body));
+      rules.push(dest);
+    }
+  }
+
   const installedNames = [...installed];
   if (!installedNames.length) {
-    return { ok: false, message: `already current for ${clients.join(", ")}${force ? "" : " — re-run with --force to overwrite"}`, installed: installedNames, refreshed: [], skipped, clients, destinations };
+    return { ok: false, message: `already current for ${clients.join(", ")}${force ? "" : " — re-run with --force to overwrite"}`, installed: installedNames, refreshed: [], skipped, clients, destinations, rules };
   }
-  return { ok: true, installed: installedNames, refreshed: [...refreshed], skipped, clients, destinations, message: `✓ installed/refreshed skill(s): ${installedNames.join(", ")}${skipped.length ? `  (kept current/existing: ${skipped.join(", ")})` : ""}
+  return { ok: true, installed: installedNames, refreshed: [...refreshed], skipped, clients, destinations, rules, message: `✓ installed/refreshed skill(s): ${installedNames.join(", ")}${skipped.length ? `  (kept current/existing: ${skipped.join(", ")})` : ""}
   → ${destinations.join("\n  → ")}
   Your agent picks them up on its next session. Then just ask it:
     "Which headline is clearer? Ask a human."    (one advisory judgment call)
@@ -90,15 +119,23 @@ function install(homeDir, force, requestedClient, options = {}) {
 }
 
 // `pingfusi remove` counterpart: delete the kit's skills from the agent's skill
-// dir again. Driven by the same PKG/skill listing as install, so the two stay in
-// sync by construction. Best-effort; returns the names it actually removed.
-function removeSkills(homeDir, requestedClient) {
-  const skillRoot = path.join(PKG, "skill");
+// dir again. Driven by the same skill-root listing as install (options.skillRoot,
+// default PKG/skill), so the two stay in sync by construction. Best-effort;
+// returns the names it actually removed.
+function removeSkills(homeDir, requestedClient, options = {}) {
+  const skillRoot = options.skillRoot || path.join(PKG, "skill");
   const removed = new Set();
-  if (!fs.existsSync(skillRoot)) return [];
   let clients;
   try { clients = requestedClient ? resolveClients(homeDir, requestedClient) : Object.keys(CLIENT_SKILL_DIRS); }
   catch { return []; }
+  if (options.ruleAsset) {
+    for (const client of clients) {
+      const dest = ruleAssetPath(homeDir, client, options.ruleAsset.fileBaseName);
+      if (!dest) continue;
+      try { fs.rmSync(dest, { force: true }); } catch { /* leave what we can't delete */ }
+    }
+  }
+  if (!fs.existsSync(skillRoot)) return [];
   for (const client of clients) {
     for (const e of fs.readdirSync(skillRoot, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
@@ -126,4 +163,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { CLIENT_SKILL_DIRS, resolveClients, install, removeSkills };
+module.exports = { CLIENT_SKILL_DIRS, resolveClients, install, removeSkills, ruleAssetPath };

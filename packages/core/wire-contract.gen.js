@@ -110,6 +110,24 @@ const ALIAS_TOOL_NAMES = [
   "pingfusi_check_source"
 ];
 
+// Brand-profile mounts of the same service: a profile registers a RENAMED subset of the
+// canonical tools at its own mount path — same handlers, schemas and auth; profile names
+// freeze once shipped exactly like wireNames. Keys of each profile's tools object are the
+// kit's INTERNAL verbs. The kit itself never registers or calls these names; wrapper
+// packages riding the kit (their bins point the installer at the mount) lint their shipped
+// prose against them.
+const PROFILES = {
+  "qaping": {
+    "mountPath": "/api/mcp/qaping",
+    "frozen": true,
+    "tools": {
+      "request_review": "qaping_playtest",
+      "get_test_results": "qaping_results",
+      "wait_for_results": "qaping_wait"
+    }
+  }
+};
+
 // The service's round-filing caps, mirrored kit-side so a too-big filing is a NAMED local
 // failure before any bytes move. A round past 20 steps, or a step past 300 chars, is
 // rejected WHOLE with a Zod "too_big" — not a graceful degrade.
@@ -201,6 +219,36 @@ const LINEAGE = {
         "cpyany"
       ]
     }
+  },
+  "qaping": {
+    "mcpServerNames": {
+      "current": "qaping",
+      "sweeps": []
+    },
+    "ruleFiles": {
+      "claude-code": {
+        "current": "qaping.md",
+        "sweeps": []
+      },
+      "cursor": {
+        "current": "qaping.mdc",
+        "sweeps": []
+      }
+    },
+    "skillDirs": {
+      "claude-code": {
+        "current": "qaping",
+        "sweeps": []
+      },
+      "cursor": {
+        "current": "qaping",
+        "sweeps": []
+      },
+      "codex": {
+        "current": "qaping",
+        "sweeps": []
+      }
+    }
   }
 };
 
@@ -210,6 +258,7 @@ module.exports = {
   LIVE_TOOL_NAME,
   WIRE_TOOL_NAMES,
   ALIAS_TOOL_NAMES,
+  PROFILES,
   SERVICE_CAPS,
   DEFAULT_REVIEW_RESULTS,
   MAX_REVIEW_RESULTS,

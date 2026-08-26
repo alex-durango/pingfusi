@@ -160,9 +160,10 @@ ok(/install the pingfusi review MCP server/.test(vendorText), "vendored file is 
 const waitStart = vendorText.indexOf("async function waitForResultsCli");
 const waitEnd = vendorText.indexOf("\n// ───", waitStart + 1);
 const waitText = waitStart >= 0 ? vendorText.slice(waitStart, waitEnd > waitStart ? waitEnd : undefined) : "";
-ok(/name: "cpyany_wait"/.test(waitText) && !/name: "cpyany_test_results"/.test(waitText)
+ok(/name: WAIT_TOOL/.test(waitText) && vendorText.includes('?? "cpyany_wait"')
+  && !/name: "cpyany_test_results"/.test(waitText)
   && /for \(;;\)/.test(waitText) && /keep the task active/.test(waitText),
-  "`pingfusi wait` uses the lease-renewing server wait in a continuous heartbeat loop");
+  "`pingfusi wait` uses the lease-renewing server wait (WAIT_TOOL, stock default cpyany_wait) in a continuous heartbeat loop");
 ok(vendorText.includes("Choose the smallest matching job:")
   && vendorText.includes("pingfusi_quick_question") && vendorText.includes("pingfusi_review_video")
   && vendorText.includes("targets/<name>/workflow.json")
