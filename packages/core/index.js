@@ -200,5 +200,5 @@ module.exports = {
   ping, pingResult,
   review: { file: reviewFile, wait: reviewWait, verify: reviewVerify },
   draft: { push: draftPush, status: draftStatus, delete: draftDelete },
-  build: { push: builds.buildPush, status: builds.buildStatus, delete: builds.buildDelete },
+  build: { push: builds.buildPush, status: builds.buildStatus, delete: builds.buildDelete, list: builds.buildList },
 };

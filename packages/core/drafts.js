@@ -115,7 +115,15 @@ async function api(pathname, opts = {}) {
   });
   let payload = {};
   try { payload = JSON.parse(await r.text()); } catch (e) {}
-  if (!r.ok) throw new Error(`${pathname} → HTTP ${r.status}${payload.error ? `: ${payload.error}` : ""}${payload.missing ? ` missing=${JSON.stringify(payload.missing)}` : ""}${payload.size_mismatch && payload.size_mismatch.length ? ` size_mismatch=${JSON.stringify(payload.size_mismatch)}` : ""}`);
+  if (!r.ok) {
+    const err = new Error(`${pathname} → HTTP ${r.status}${payload.error ? `: ${payload.error}` : ""}${payload.missing ? ` missing=${JSON.stringify(payload.missing)}` : ""}${payload.size_mismatch && payload.size_mismatch.length ? ` size_mismatch=${JSON.stringify(payload.size_mismatch)}` : ""}`);
+    // The refusal's own body, kept on the error: a service that names WHAT is
+    // in the way (the live builds behind a 429, say) is useless if the client
+    // throws that half away and leaves the caller guessing.
+    err.status = r.status;
+    err.payload = payload;
+    throw err;
+  }
   return payload;
 }
 

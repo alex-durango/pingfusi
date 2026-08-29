@@ -12,7 +12,12 @@ const path = require("path");
 const core = require("../packages/core");
 const { MAX_FILE_BYTES } = require("../packages/core/drafts.js");
 
-const USAGE = "usage: pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <clone-target>] [--record <file>] [--json]";
+// Brand seam (the publish-build.js pattern): a wrapper bin (qaping) passes its
+// own command name so error/usage prose never teaches a command the caller's
+// install does not have. Default reproduces the stock string exactly.
+const usageFor = (brandCommand = "pingfusi publish") =>
+  `usage: ${brandCommand} <built-dir|video.mp4> [--name <label>] [--target <clone-target>] [--record <file>] [--json]`;
+const USAGE = usageFor();
 
 function parseArgs(argv) {
   if (!argv[0] || argv[0] === "--help" || argv[0] === "-h") {
@@ -131,11 +136,12 @@ async function publishPath(options, deps = {}) {
   }
 }
 
-async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2), opts = {}) {
+  const usage = usageFor(opts.brandCommand);
   let options;
   try { options = parseArgs(argv); }
-  catch (error) { console.error(`✗ ${error.message}`); process.exitCode = 2; return; }
-  if (options.help) { console.log(USAGE); return; }
+  catch (error) { console.error(`✗ ${error.message.replace(USAGE, usage)}`); process.exitCode = 2; return; }
+  if (options.help) { console.log(usage); return; }
   try {
     const result = await publishPath(options);
     if (options.json) {
@@ -153,4 +159,4 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) void main();
-module.exports = { USAGE, parseArgs, prepareSource, assetUrl, publishPath, main };
+module.exports = { USAGE, usageFor, parseArgs, prepareSource, assetUrl, publishPath, main };

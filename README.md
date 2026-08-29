@@ -16,7 +16,7 @@
         <img src="https://img.shields.io/npm/dw/pingfusi.svg"></a>
     <a href="LICENSE" alt="License">
         <img src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-    <a href="https://discord.com/invite/smYn6M4Cb" alt="Discord">
+    <a href="https://discord.gg/pUKzftBUTY" alt="Discord">
         <img src="https://img.shields.io/badge/discord-join-5865F2.svg?logo=discord&logoColor=white"></a>
 </p>
 </div>

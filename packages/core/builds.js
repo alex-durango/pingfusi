@@ -14,15 +14,17 @@
 //      upload — so a 400/403 mid-ladder re-mints a fresh URL via
 //      POST /api/build/<slug>/upload-url instead of retrying a dead token.
 //
-// Hosted builds are TEMPORARY on purpose (72 hours unless a filed round
-// extends them) — the receipt carries expires_at and every printed surface
+// Hosted builds are TEMPORARY on purpose, on two clocks: an unfinished upload
+// is a short-lived RESERVATION, and finalize promotes it to the 72-hour build
+// TTL a filed round extends further. The receipt carries the expiry FINALIZE
+// reported — never create's reservation stamp — and every printed surface
 // says so.
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { PassThrough } = require("stream");
+const { Transform } = require("stream");
 const { BASE } = require("./wire.js");
 const { api, fetchOrExplain } = require("./drafts.js");
 const { MAX_BUILD_BYTES } = require("./wire-contract.gen.js");
@@ -249,6 +251,35 @@ function looksLikeDeadToken(status) {
   return status === 400 || status === 401 || status === 403;
 }
 
+/**
+ * The upload body, wrapped so bytes can be counted on their way past.
+ *
+ * NEVER count with `counter.on("data", …)`. Attaching a 'data' listener puts
+ * the stream into FLOWING mode the instant it is attached — so every byte that
+ * arrives before fetch attaches its own reader is handed to the counter and
+ * then DISCARDED. The request body ends short of the declared content-length
+ * and undici rejects it with UND_ERR_REQ_CONTENT_LENGTH_MISMATCH, while the
+ * progress meter — which saw those bytes — reads a confident 100%. It is a
+ * race, so it looks like a flaky network: reproduced here at 1/60 uploads with
+ * the server receiving ZERO bytes, and reported from the field as four failed
+ * attempts in a row on one machine (Windows, node 24, a 682 MB zip).
+ *
+ * Counting inside transform() keeps the stream paused and back-pressured, so
+ * nothing moves until fetch pulls it — which also makes the progress meter
+ * honest: it now measures bytes actually consumed by the request, not bytes
+ * read off the disk ahead of it.
+ */
+function countingBody(file, onChunk) {
+  const source = fs.createReadStream(file);
+  const counter = new Transform({
+    transform(chunk, _enc, cb) {
+      onChunk(chunk.length);
+      cb(null, chunk);
+    },
+  });
+  return { source, body: source.pipe(counter) };
+}
+
 /** One streaming PUT attempt with the inactivity watchdog. */
 async function putOnce(file, bytes, url, onProgress) {
   const controller = new AbortController();
@@ -260,18 +291,24 @@ async function putOnce(file, bytes, url, onProgress) {
     watchdog = setTimeout(() => controller.abort(new Error(`no upload progress for ${INACTIVITY_MS / 1000}s`)), INACTIVITY_MS);
   };
   const ceiling = setTimeout(() => controller.abort(new Error("upload exceeded the 4h ceiling")), HARD_CEILING_MS);
-  const counter = new PassThrough();
-  counter.on("data", (chunk) => {
-    loaded += chunk.length;
+  const { source, body } = countingBody(file, (n) => {
+    loaded += n;
     if (onProgress) onProgress(loaded, bytes, started);
     rearm();
   });
   rearm();
+  // pipe() only forwards errors for the DESTINATION. An unhandled 'error' on
+  // the source read stream (the zip deleted mid-upload, a disk fault) is an
+  // uncaught exception that kills the process outright — past the ladder,
+  // past publish-build's own catch, and past the rollback that frees this
+  // build's cap slot. Route it into the abort signal so it is just another
+  // named upload failure.
+  source.on("error", (e) => controller.abort(e instanceof Error ? e : new Error(String(e))));
   try {
     const r = await fetchOrExplain("upload build", url, {
       method: "PUT",
       headers: { "content-type": "application/zip", "content-length": String(bytes) },
-      body: fs.createReadStream(file).pipe(counter),
+      body,
       duplex: "half",
       signal: controller.signal,
     });
@@ -283,10 +320,41 @@ async function putOnce(file, bytes, url, onProgress) {
 }
 
 /**
+ * Did the bytes actually land? finalize is the only honest oracle — it counts
+ * the object in storage against the declared byte count — and it is safe to
+ * ask more than once (finalizing an already-finalized build is a no-op 200).
+ *
+ * This exists because of the 2026-08-28 QA dead-end: a streamed PUT can move
+ * every byte and then lose its RESPONSE (the far side closes the socket and
+ * node reports EPIPE / UND_ERR_SOCKET), so "upload failed" and "upload
+ * succeeded" look identical from the client. Retrying a landed upload is
+ * merely wasteful; reporting a landed upload as a failure is what sent an
+ * agent round the retry loop that filled its build cap.
+ */
+function finalizeBuild(slug) {
+  return api(`/api/build/${slug}/finalize`, { method: "POST" });
+}
+
+async function landedAlready(slug) {
+  try {
+    // The payload carries the PROMOTED expiry (finalize moves the row off the
+    // short reservation clock), which is the life the caller must report.
+    return (await finalizeBuild(slug)) || {};
+  } catch {
+    return null; // 409 (nothing/partial landed), 404, offline — keep trying
+  }
+}
+
+/**
  * PUT with the full ladder: up to PUT_ATTEMPTS tries with backoff, retrying
  * network errors / 5xx / 429 / watchdog aborts; a dead-token 4xx re-mints
  * (up to REMINT_LIMIT) and does NOT consume an attempt; any other 4xx throws
  * immediately. The stream restarts cleanly from disk on every try.
+ *
+ * Returns the finalize record when the build turned out to be FINALIZED
+ * already (the landed-response-lost case above) so the caller can skip its own
+ * finalize and still report the real expiry; null when the caller must
+ * finalize itself.
  */
 async function putBuildWithRetry(file, bytes, slug, firstUrl, onProgress) {
   let url = firstUrl;
@@ -298,14 +366,35 @@ async function putBuildWithRetry(file, bytes, slug, firstUrl, onProgress) {
       r = await putOnce(file, bytes, url, onProgress);
     } catch (e) {
       lastFailure = e.message;
+      // A connection-level failure is exactly the shape a lost response takes.
+      // Ask the service what actually landed before spending another upload.
+      const landed = await landedAlready(slug);
+      if (landed) return landed;
     }
     if (r) {
-      if (r.ok) return;
+      if (r.ok) return null;
       lastFailure = `HTTP ${r.status}`;
       if (looksLikeDeadToken(r.status)) {
         if (remints >= REMINT_LIMIT) throw new Error(`upload build → ${lastFailure} after ${remints} re-minted URLs — the upload window keeps dying; retry on a steadier connection`);
         remints++;
-        const fresh = await api(`/api/build/${slug}/upload-url`, { method: "POST" });
+        let fresh;
+        try {
+          fresh = await api(`/api/build/${slug}/upload-url`, { method: "POST" });
+        } catch (e) {
+          // 409 = "build already finalized". Reachable without any concurrency:
+          // a landedAlready probe can finalize the build server-side and lose
+          // ITS response too, and the next attempt then trades a dead token for
+          // this refusal. Treating it as an upload failure would send a LANDED,
+          // finalized build into the caller's rollback and delete it mid-round.
+          // Fall back to the build's own status for the expiry — never to
+          // create's reservation stamp, which is not this build's life.
+          if (e.status === 409) {
+            const confirmed = await landedAlready(slug);
+            if (confirmed) return confirmed;
+            try { return await buildStatus(slug); } catch { return {}; }
+          }
+          throw e;
+        }
         if (!fresh.url) throw new Error("re-mint returned no upload url");
         url = fresh.url;
         attempt--; // a token refresh is not an upload failure
@@ -319,13 +408,85 @@ async function putBuildWithRetry(file, bytes, slug, firstUrl, onProgress) {
       await new Promise((res) => setTimeout(res, 1000 * 2 ** (attempt - 1)));
     }
   }
+  const late = await landedAlready(slug); // a late-landing final attempt
+  if (late) return late;
   throw new Error(`upload build failed after ${PUT_ATTEMPTS} attempts: ${lastFailure}`);
+}
+
+const fmtBuildMb = (n) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
+/** Render a cap refusal into something a caller can ACT on. The service sends
+ * the live builds with its 429 (they are what the cap is counting); this turns
+ * them into the two commands that free a slot, oldest first, and says plainly
+ * which ones no round can be using.
+ *
+ * It names a CONCRETE slug only when deleting that slug is provably safe — a
+ * never-finished upload, which no round can reference, or a finished build the
+ * service says no open round is pointing at. Otherwise the remedy stays a
+ * placeholder and says to look first: the oldest finished build may be the one
+ * a playtester is downloading right now, and a remedy that silently burns a
+ * paid round is worse than one that costs a second command. */
+function explainBuildCap(payload, brandRoot) {
+  const builds = Array.isArray(payload && payload.builds) ? payload.builds : [];
+  if (!builds.length) return null;
+  const lines = builds.map((b) => {
+    const when = b.expires_at ? ` — expires ${b.expires_at}` : "";
+    const what = b.reclaimable
+      ? " [never finished uploading — safe to delete]"
+      : b.in_round
+        ? " [IN USE by an open round — do not delete]"
+        : "";
+    return `    ${b.slug}  ${b.filename} (${fmtBuildMb(b.bytes || 0)})${when}${what}`;
+  });
+  const free = builds.find((b) => b.reclaimable) || builds.find((b) => b.in_round === false);
+  return [
+    "  your live builds:",
+    ...lines,
+    free
+      ? `  free a slot: ${brandRoot} builds rm ${free.slug}    (list them any time: ${brandRoot} builds)`
+      : `  every one is finished and may still be serving a round — check with \`${brandRoot} builds\`, then free the one you are done with: ${brandRoot} builds rm <slug>`,
+  ].join("\n");
+}
+
+/** Release a reservation this invocation created and could not turn into a
+ * build. Three refusals, each one a bug we already shipped once:
+ *   - never a build we did not create (a REUSED row predates this call and may
+ *     have another publish streaming into it right now);
+ *   - never a FINALIZED build (it is playable, and a round may be on it);
+ *   - never without positive evidence — an outage, or a 2xx body we could not
+ *     parse, is not proof of garbage, and the reservation clock frees the slot
+ *     on its own within hours.
+ * Returns a note to append to the caller's error, or "". */
+async function releaseReservation(slug, { ours, brandRoot }) {
+  const leave = (why) =>
+    ` (its reservation ${slug} was left in place — ${why}; free it with \`${brandRoot} builds rm ${slug}\` if it is not wanted)`;
+  if (!ours) return leave("it was an existing build, not one this upload created");
+  let status;
+  try {
+    status = await buildStatus(slug);
+  } catch {
+    return leave("the service did not answer when asked whether it landed");
+  }
+  // POSITIVE evidence only. api() returns {} for any 2xx body it cannot parse
+  // (a captive portal, a proxy interstitial), and the ABSENCE of finalized:true
+  // is not the same as knowing the build did not land.
+  if (status && status.finalized === true) return ""; // it landed — leave it, say nothing
+  if (!status || status.finalized !== false) {
+    return leave("the service did not clearly say whether it landed");
+  }
+  try {
+    await buildDelete(slug);
+    return "";
+  } catch {
+    return leave("it could not be deleted");
+  }
 }
 
 // ── build.push — upload one zip, verify via finalize, return the record ─────
 // opts.platform is REQUIRED ('windows' | 'macos'): it routes the round to the
 // right reviewer pool and the service refuses a mismatched filing.
-async function buildPush(file, { name, platform, onProgress } = {}) {
+// opts.brandRoot names the command in printed remedies ('pingfusi' | 'qaping').
+async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfusi" } = {}) {
   if (platform !== "windows" && platform !== "macos") {
     throw new Error("platform is required: 'windows' or 'macos' — the reviewer pool the build is for");
   }
@@ -333,17 +494,69 @@ async function buildPush(file, { name, platform, onProgress } = {}) {
   refuseWebBuildZip(file);
   if (platform === "macos") refuseUnsignedMacApp(file);
   const sha256 = await sha256File(file);
-  const created = await api("/api/build", {
-    method: "POST",
-    body: { filename, bytes, sha256, platform, ...(name ? { name } : {}) },
-  });
-  if (!created.slug || !created.upload || !created.upload.url) {
-    throw new Error("build create returned no slug/upload url");
+
+  let created;
+  try {
+    created = await api("/api/build", {
+      method: "POST",
+      // reuse:true is the opt-in that lets the service hand back an identical
+      // build it already holds instead of minting a second one. Older services
+      // ignore the field; older CLIs never send it and keep the old contract.
+      body: { filename, bytes, sha256, platform, reuse: true, ...(name ? { name } : {}) },
+    });
+  } catch (e) {
+    // The live-builds cap. The service already sent the list; without this the
+    // caller sees a number it cannot act on and starts guessing (the
+    // 2026-08-28 dead-end, where an agent stopped and asked a human).
+    if (e.status === 429) {
+      const detail = explainBuildCap(e.payload, brandRoot);
+      if (detail) throw new Error(`${e.message}\n${detail}`);
+    }
+    throw e;
   }
-  await putBuildWithRetry(file, bytes, created.slug, created.upload.url, onProgress);
+  if (!created.slug) throw new Error("build create returned no slug");
+
+  // A row this call created is ours to release on failure; a REUSED one is not.
+  const ours = created.reused !== true;
+
+  // The same zip, already hosted and verified: the service handed back the
+  // existing build rather than a second copy of it. Nothing to upload.
+  let done = created.reused === true && created.finalized === true ? {} : null;
+  if (!done) {
+    if (!created.upload || !created.upload.url) {
+      throw new Error("build create returned no upload url");
+    }
+    try {
+      done = await putBuildWithRetry(file, bytes, created.slug, created.upload.url, onProgress);
+    } catch (e) {
+      // ROLLBACK. A create reserves a cap slot before a byte moves, so a dead
+      // upload that leaves its row behind costs the account a slot it can't
+      // see or name — five of those in a row is how the cap filled with
+      // nothing in it.
+      throw new Error(`${e.message}${await releaseReservation(created.slug, { ours, brandRoot })}`);
+    }
+  }
   // Finalize verifies the landed byte count exactly — a truncated upload is a
-  // named 409 here, never a broken download in front of a reviewer.
-  await api(`/api/build/${created.slug}/finalize`, { method: "POST" });
+  // named 409 here, never a broken download in front of a reviewer. Skipped
+  // only when the build is finalized already (reused, or landed on a PUT whose
+  // response was lost).
+  if (!done) {
+    try {
+      done = (await finalizeBuild(created.slug)) || {};
+    } catch (e) {
+      // Only a DEFINITE refusal means the bytes are garbage: 409 (they do not
+      // match what was declared), 404/410 (the row is gone). A 500 or a
+      // timeout says nothing about the object, and deleting on one throws away
+      // an upload that may only need finalizing again — up to a gigabyte of it.
+      const definite = e.status === 409 || e.status === 404 || e.status === 410;
+      if (definite) throw new Error(`${e.message}${await releaseReservation(created.slug, { ours, brandRoot })}`);
+      throw e;
+    }
+  }
+  // The expiry the caller reports must be the one the row actually has.
+  // Create stamps the SHORT reservation clock; finalize promotes it. Printing
+  // create's value would tell a developer their build dies this afternoon.
+  const expiresAt = done.expires_at || created.expires_at || null;
   // Serve urls are built from OUR base, not the server's echo (BASE override
   // consistency — the draftPush precedent).
   return {
@@ -353,8 +566,21 @@ async function buildPush(file, { name, platform, onProgress } = {}) {
     bytes,
     sha256,
     platform,
-    expires_at: created.expires_at || null,
+    reused: created.reused === true,
+    expires_at: expiresAt,
     pushedAt: new Date().toISOString(),
+  };
+}
+
+// ── build.list — every live build this account holds ───────────────────────
+// The half that was missing when the cap bit: nothing reachable from a CLI or
+// an agent could even name the builds occupying the five slots.
+async function buildList() {
+  const r = await api("/api/build");
+  return {
+    builds: Array.isArray(r.builds) ? r.builds : [],
+    live: typeof r.live === "number" ? r.live : (r.builds || []).length,
+    cap: r.cap ?? null,
   };
 }
 
@@ -372,6 +598,10 @@ module.exports = {
   buildPush,
   buildStatus,
   buildDelete,
+  buildList,
+  countingBody,
+  explainBuildCap,
+  releaseReservation,
   preflightBuildZip,
   listZipEntryNames,
   refuseWebBuildZip,

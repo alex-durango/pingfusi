@@ -26,7 +26,10 @@ pingfusi publish-build <game.zip> --platform windows|macos
                                         file `request_review` with that URL and the same
                                         platform:. Hosted builds are TEMPORARY: 72h unless
                                         a filed round extends them, and a handful per
-                                        account (delete with the API or let them expire).
+                                        account — `pingfusi builds` shows what you hold and
+                                        `pingfusi builds rm <slug>` frees a slot. Publishing
+                                        the SAME zip twice returns the same build rather
+                                        than a second copy, so a retry costs nothing.
                                         Reviewers see an unreviewed-developer-build
                                         disclosure and may stop, penalty-free. On macOS the
                                         reviewer app downloads and launches the build itself
@@ -39,6 +42,18 @@ pingfusi publish-build <game.zip> --platform windows|macos
                                         WEB build is pointed at `pingfusi publish` + a web
                                         playtest instead.
                                         (`--name`, `--record`, and `--json` available)
+pingfusi builds                         the hosted builds this account holds, oldest first,
+                                        with each one's URL, size and expiry, and what it is
+                                        doing. Builds whose upload never finished are marked
+                                        safe to delete — no round can reference one (filing
+                                        needs a finalized build). Builds an OPEN round is
+                                        still downloading are marked IN USE: deleting one
+                                        404s a playtester mid-session and burns the round.
+pingfusi builds rm <slug>               delete one now, freeing its slot. Deleting a build a
+                                        round is still using breaks that reviewer's download
+                                        — check the listing first. (`--json` available; a
+                                        slug may begin with `-` and is still read as the
+                                        slug, never as an option)
 pingfusi studio  [ping_id ...]          LOCAL RESULTS VIEWER (playtests first): fetches a
                                         round's results over the wire and caches them —
                                         JSON + media bytes — under <cwd>/.pingfusi/studio/

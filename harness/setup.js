@@ -88,6 +88,12 @@ async function setup(io, opts) {
   // cloudflared, the motion browser runtime, the ditto probe (kitOnlySteps below).
   const wrapper = opts.wrapper || {};
   const BRAND = wrapper.brand || "pingfusi";
+  // What `npm i -g` actually installs. Defaults to the brand (the stock case:
+  // package and bin share the name); a wrapper whose npm name differs from its
+  // bin passes installPackage (qaping's registry name is @qaping/cli — the
+  // similarity rule blocks the bare name, QAPING_PLAN §8). io.which() still
+  // probes the BIN name — that is what lands on PATH either way.
+  const INSTALL_PACKAGE = wrapper.installPackage || BRAND;
   const installerFlags = [
     ...(wrapper.appUrl ? ["--app-url", wrapper.appUrl] : []),
     ...(wrapper.mcpPath ? ["--mcp-path", wrapper.mcpPath] : []),
@@ -116,10 +122,10 @@ async function setup(io, opts) {
     io.log(`✓ ${BRAND} already installed globally`);
     steps.push("global-present");
     persistentInstall = true;
-  } else if (saidYes(await io.ask(`${BRAND} isn't installed globally yet — install now? (npm i -g ${BRAND}) [Y/n] `), io.isTTY)) {
-    const installed = io.run("npm", ["i", "-g", BRAND]);
+  } else if (saidYes(await io.ask(`${BRAND} isn't installed globally yet — install now? (npm i -g ${INSTALL_PACKAGE}) [Y/n] `), io.isTTY)) {
+    const installed = io.run("npm", ["i", "-g", INSTALL_PACKAGE]);
     if (!installed || installed.error || installed.signal || installed.status !== 0) {
-      io.log(`❌ global ${BRAND} install failed — retry: npm i -g ${BRAND}@latest`);
+      io.log(`❌ global ${BRAND} install failed — retry: npm i -g ${INSTALL_PACKAGE}@latest`);
       steps.push("global-failed");
       requiredFailure = true;
     } else {

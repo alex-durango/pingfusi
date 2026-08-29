@@ -90,6 +90,8 @@ for (const required of [
   "harness/capability-router.js",
   "harness/motion-sampler.js",
   "harness/publish.js",
+  "harness/publish-build.js",
+  "harness/builds.js",
   "harness/studio.js",
   "harness/studio-ui/index.html",
   "packages/motion/bin/motion-kit.js",
@@ -136,6 +138,11 @@ const entry = path.join(packed, "bin", "pingfusi");
 const publishHelp = run(entry, ["publish", "--help"], blank, home);
 ok(publishHelp.status === 0 && /built-dir\|video\.mp4/.test((publishHelp.stdout || "") + (publishHelp.stderr || "")),
   "packed CLI exposes hosted website/video publishing without starting a tunnel");
+// The build-store management half. A packed CLI that can create hosted builds
+// but not list or free them is the shape that dead-ended a QA loop in Aug 2026.
+const buildsHelp = run(entry, ["builds", "--help"], blank, home);
+ok(buildsHelp.status === 0 && /builds rm <slug>/.test((buildsHelp.stdout || "") + (buildsHelp.stderr || "")),
+  "packed CLI can list and free hosted builds, not just create them");
 // LAZY WORLD — there is no postinstall anymore, so a fresh install has NO
 // packages/motion/node_modules. The core CLI must work in that world, and motion
 // commands must fail closed with the install remedy instead of an ESM stack.

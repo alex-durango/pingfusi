@@ -3,9 +3,10 @@
 // can playtest it without a store page. Prints the /b/<slug> URL to file the
 // playtest with (the review tool, platform:'windows'|'macos', url:<that URL>).
 //
-// Hosted builds are TEMPORARY by design: they live 72 hours unless a filed
-// round extends them, and each account holds at most a handful at once —
-// this hosts a playtest round, not a game. Reviewers are told up front the
+// Hosted builds are TEMPORARY by design: a finished one lives 72 hours unless
+// a filed round extends it (an upload that never finished is dropped within
+// hours), and each account holds at most a handful at once — this hosts a
+// playtest round, not a game. `pingfusi builds` shows what you hold. Reviewers are told up front the
 // build is an unreviewed developer upload and may stop, penalty-free. On
 // macOS the reviewer app downloads and launches the build itself (no browser
 // quarantine, no Gatekeeper wall), which is why an unsigned .app is refused
@@ -72,6 +73,9 @@ async function publishBuild(options, deps = {}) {
   const result = await push(path.resolve(options.sourcePath), {
     name: options.name,
     platform: options.platform,
+    // Names the command in any remedy the client prints (the live-builds cap
+    // refusal) so a qaping user is never told to run `pingfusi …`.
+    brandRoot: options.brandRoot,
     onProgress: deps.onProgress === undefined ? makeProgressRenderer() : deps.onProgress,
   });
   const receipts = [];
@@ -98,13 +102,18 @@ async function main(argv = process.argv.slice(2), opts = {}) {
   try { options = parseArgs(argv, usage); }
   catch (error) { console.error(`✗ ${error.message}`); process.exitCode = 2; return; }
   if (options.help) { console.log(usage); return; }
+  options.brandRoot = brandCommand.split(" ")[0];
   try {
     const result = await publishBuild(options);
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
     }
-    console.log(`✓ hosted build — expires ${result.expires_at || "per service policy"} (temporary by design; filing a playtest extends it through the round)`);
+    // A re-publish of bytes already hosted returns the SAME build rather than
+    // a second copy of it — say so, or an unchanged URL reads as a bug.
+    console.log(result.reused
+      ? `✓ already hosted — this exact zip is build ${result.slug}, reused (expires ${result.expires_at || "per service policy"})`
+      : `✓ hosted build — expires ${result.expires_at || "per service policy"} (temporary by design; filing a playtest extends it through the round)`);
     console.log(`  url: ${result.url}`);
     console.log(`  file: ${result.filename} (${fmtMb(result.bytes)}, sha256 ${result.sha256.slice(0, 16)}…)`);
     for (const receipt of result.receipts) console.log(`  receipt: ${receipt}`);

@@ -1298,9 +1298,15 @@ THE EVERYDAY JOBS
                                                      upload a GAME BUILD (one zip, ≤1 GiB) for a native
                                                      playtest with no store page: returns the /b/<slug>
                                                      URL to file request_review with (same platform:).
-                                                     Hosted builds are temporary — 72h unless a filed
-                                                     round extends them; reviewers see an unreviewed-dev-
-                                                     build disclosure and may stop at an OS warning
+                                                     Hosted builds are temporary — 72h once finished,
+                                                     unless a filed round extends them (an upload that
+                                                     never finished is dropped within hours); reviewers
+                                                     see an unreviewed-dev-build disclosure and may stop
+                                                     at an OS warning
+  pingfusi builds  [--json]  |  pingfusi builds rm <slug> [--json]
+                                                     the hosted builds this account holds and their slots:
+                                                     list them (oldest first, with the ones whose upload
+                                                     never finished marked safe to delete), or free one now
   pingfusi wait    <ping_id>                         continue a pending ping through client-safe wait legs
   pingfusi studio  [ping_id ...] [--port N] [--open] [--fetch-only] [--no-media] [--json]
                                                      LOCAL RESULTS VIEWER: fetch a round's results and
@@ -1476,6 +1482,9 @@ function main() {
     case "ask": { if (!name) { console.error('usage: pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]   |   pingfusi ask result <ping_id>'); process.exit(2); } return delegate("harness/ask.js", [name, ...rest]); }
     case "publish": { if (!name) { console.error("usage: pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish.js", [name, ...rest]); }
     case "publish-build": { if (!name) { console.error("usage: pingfusi publish-build <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish-build.js", [name, ...rest]); }
+    // No argument is the LIST — the surface an agent reaches for the moment a
+    // publish is refused for the cap, so it must never be a usage error.
+    case "builds": return delegate("harness/builds.js", [name, ...rest].filter((a) => a != null));
     // The local results viewer — also workspace-free: cache under <cwd>/.pingfusi/studio/.
     case "studio": return delegate("harness/studio.js", [name, ...rest].filter((a) => a != null));
     case "serve": { if (!name) { console.error("usage: pingfusi serve <name> [port]"); process.exit(2); } return delegate("harness/serve.js", [name, ...rest]); }
