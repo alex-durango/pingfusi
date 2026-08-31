@@ -5,6 +5,12 @@
 // directory. The universal pingfusi-review router teaches WHEN to ask a reviewer and
 // which job to choose; the specialized skills own their detailed workflows.
 //
+// An already-installed SKILL.md is resolved by PROVENANCE, not by byte-equality alone
+// (harness/skill-provenance.js): content this package has shipped before is OURS and a
+// plain re-run refreshes it, so an upgrade's new guidance actually reaches an existing
+// install; anything unrecognized is the user's edit and only --force replaces it, saving
+// what it replaced as SKILL.md.bak.
+//
 // USAGE:  pingfusi agent-setup [claude-code|cursor|codex] [--force]
 //         With no client, existing agent homes are detected; Claude Code is the fallback.
 "use strict";
@@ -12,6 +18,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { skillNames, loadManifest, isShippedVersion } = require("./skill-provenance.js");
 
 const PKG = path.resolve(__dirname, "..");
 
@@ -60,8 +67,12 @@ function install(homeDir, force, requestedClient, options = {}) {
   // may add options.ruleAsset = { fileBaseName, body } for its always-loaded rule.
   const skillRoot = options.skillRoot || path.join(PKG, "skill");
   if (!fs.existsSync(skillRoot)) return { ok: false, message: `kit skills missing at ${skillRoot} — broken install; reinstall pingfusi`, installed: [] };
-  const names = fs.readdirSync(skillRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(skillRoot, e.name, "SKILL.md"))).map((e) => e.name);
+  const names = skillNames(skillRoot);
   if (!names.length) return { ok: false, message: `no skills found under ${skillRoot} — broken install; reinstall pingfusi`, installed: [] };
+  // Provenance for the preserve rule below (harness/skill-provenance.js): the hash of
+  // every SKILL.md version this package has shipped, so an install carrying an OLD one
+  // can be refreshed without asking the user for --force.
+  const shipped = loadManifest(skillRoot);
 
   let clients;
   try { clients = resolveClients(homeDir, requestedClient); }
@@ -70,18 +81,36 @@ function install(homeDir, force, requestedClient, options = {}) {
     return { ok: false, message: "the selected client has no coding-agent skill directory; MCP setup still applies", installed: [], clients };
   }
 
-  const installed = new Set(), refreshed = new Set(), skipped = [], destinations = [];
+  const installed = new Set(), refreshed = new Set(), skipped = [], preserved = [], backups = [], destinations = [];
   for (const client of clients) {
     const root = skillDir(homeDir, client);
     destinations.push(root);
     for (const n of names) {
       const source = path.join(skillRoot, n, "SKILL.md");
       const dest = path.join(root, n, "SKILL.md");
-      const exists = fs.existsSync(dest);
-      const current = exists && fs.readFileSync(source).equals(fs.readFileSync(dest));
-      if (exists && (!force || (options.skipCurrent && current))) {
+      let onDisk = null;
+      try { onDisk = fs.readFileSync(dest); } catch { /* nothing installed yet */ }
+      const exists = onDisk !== null;
+      const current = exists && fs.readFileSync(source).equals(onDisk);
+      // A byte-difference is not evidence of a hand edit: content we have shipped
+      // before is OURS, and a plain re-run refreshes it (that is how an upgrade's new
+      // guidance reaches an existing install at all). Anything unrecognized is the
+      // user's and still survives everything but --force.
+      const ours = exists && !current && isShippedVersion(shipped, n, onDisk);
+      const preserve = exists && !current && !ours && !force;
+      const alreadyCurrent = exists && current && (!force || options.skipCurrent);
+      if (preserve || alreadyCurrent) {
         skipped.push(`${client}:${n}`);
+        if (preserve) preserved.push(`${client}:${n}`);
         continue;
+      }
+      // --force over an unrecognized file is the ONLY path that can lose the user's
+      // work: copy it beside the skill first, the way the vendored installer's refresh
+      // does. The `.bak` suffix falls outside the agent's SKILL.md discovery, so the
+      // backup never becomes a second, stale copy of the guidance. Best-effort — a
+      // backup we cannot write must not block the refresh.
+      if (exists && !current && !ours) {
+        try { fs.writeFileSync(`${dest}.bak`, onDisk); backups.push(`${dest}.bak`); } catch { /* best-effort */ }
       }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(source, dest);
@@ -102,11 +131,16 @@ function install(homeDir, force, requestedClient, options = {}) {
     }
   }
 
+  // Only a file we could not recognize keeps the --force advice — after provenance,
+  // "already current" usually means exactly that, with nothing left to overwrite.
+  const preservedNote = preserved.length
+    ? ` — kept your locally-edited skill(s): ${preserved.join(", ")}; re-run with --force to overwrite`
+    : "";
   const installedNames = [...installed];
   if (!installedNames.length) {
-    return { ok: false, message: `already current for ${clients.join(", ")}${force ? "" : " — re-run with --force to overwrite"}`, installed: installedNames, refreshed: [], skipped, clients, destinations, rules };
+    return { ok: false, message: `already current for ${clients.join(", ")}${preservedNote}`, installed: installedNames, refreshed: [], skipped, preserved, backups, clients, destinations, rules };
   }
-  return { ok: true, installed: installedNames, refreshed: [...refreshed], skipped, clients, destinations, rules, message: `✓ installed/refreshed skill(s): ${installedNames.join(", ")}${skipped.length ? `  (kept current/existing: ${skipped.join(", ")})` : ""}
+  return { ok: true, installed: installedNames, refreshed: [...refreshed], skipped, preserved, backups, clients, destinations, rules, message: `✓ installed/refreshed skill(s): ${installedNames.join(", ")}${skipped.length ? `  (kept current/existing: ${skipped.join(", ")})` : ""}${preservedNote}
   → ${destinations.join("\n  → ")}
   Your agent picks them up on its next session. Then just ask it:
     "Which headline is clearer? Ask a human."    (one advisory judgment call)

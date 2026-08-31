@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 const { checkNode, checkMotionEngine, probeMotionBrowser, checkKitVersion, checkReviewToken, report } = require("./doctor.js");
 const { install } = require("./agent-setup.js");
+const { MANIFEST_BASENAME, hashSkill, missingCurrentSkills } = require("./skill-provenance.js");
 
 let failed = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed++; console.log(`  ✗ ${msg}`); } };
@@ -140,7 +141,8 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
   ok(/PUBLIC/.test(videoSkill) && /private until claim/i.test(videoSkill),
     "video skill draws the public/private line so a brief cannot leak through title");
   const r2 = install(home, false);
-  ok(!r2.ok && /--force/.test(r2.message), "refuses to overwrite an existing install without --force");
+  ok(!r2.ok && /already current/.test(r2.message) && !r2.preserved.length,
+    "a re-run over the current skills installs nothing and has no local edit to report");
   ok(install(home, true).ok, "--force overwrites");
   const codex = install(home, false, "codex");
   const cursor = install(home, false, "cursor");
@@ -149,6 +151,63 @@ ok(checkKitVersion("0.7.0", null).ok && /skipped/.test(checkKitVersion("0.7.0", 
     fs.existsSync(path.join(home, ".cursor", "skills", "pixel-perfect-clone", "SKILL.md")),
     "installs the same routing skills into Codex and Cursor native skill directories");
   fs.rmSync(home, { recursive: true, force: true });
+}
+
+// ── skill provenance: OUR old version refreshes, a hand edit is preserved ─────
+// The wart this closes (QAPING_PLAN.md §8): setup preserved ANY byte-different
+// SKILL.md, so a package upgrade's new agent guidance only ever reached FRESH
+// installs — every existing one stayed on the skill it was first set up with until
+// someone happened to run --force. A synthetic skill root pins the mechanism
+// without leaning on the kit's own git history.
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-provenance-root-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pingfusi-provenance-home-"));
+  const SHIPPED_OLD = "---\nname: demo\ndescription: v1\n---\n\nv1 guidance\n";
+  const SHIPPED_NEW = "---\nname: demo\ndescription: v2\n---\n\nv2 guidance\n";
+  fs.mkdirSync(path.join(root, "demo"), { recursive: true });
+  fs.writeFileSync(path.join(root, "demo", "SKILL.md"), SHIPPED_NEW);
+  fs.writeFileSync(path.join(root, MANIFEST_BASENAME),
+    JSON.stringify({ skills: { demo: [hashSkill(SHIPPED_OLD), hashSkill(SHIPPED_NEW)] } }));
+  const opts = { skillRoot: root, skipCurrent: true };
+  const dest = path.join(home, ".claude", "skills", "demo", "SKILL.md");
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+
+  fs.writeFileSync(dest, SHIPPED_OLD);
+  const stale = install(home, false, "claude-code", opts);
+  ok(stale.ok && stale.refreshed.includes("demo") && fs.readFileSync(dest, "utf8") === SHIPPED_NEW
+    && !stale.preserved.length && !fs.existsSync(`${dest}.bak`),
+    "a PREVIOUSLY SHIPPED skill refreshes on a plain re-run — no --force, nothing to back up");
+
+  fs.writeFileSync(dest, SHIPPED_OLD + "\nmy own note\n");
+  const edited = install(home, false, "claude-code", opts);
+  ok(!edited.ok && edited.preserved.includes("claude-code:demo") && /--force/.test(edited.message)
+    && fs.readFileSync(dest, "utf8").includes("my own note"),
+    "an UNRECOGNIZED skill is still preserved without --force, and the message names the way to take ours");
+
+  const forced = install(home, true, "claude-code", opts);
+  ok(forced.ok && fs.readFileSync(dest, "utf8") === SHIPPED_NEW && forced.backups.length === 1
+    && fs.readFileSync(`${dest}.bak`, "utf8").includes("my own note"),
+    "--force takes ours but saves the clobbered edit next to it as SKILL.md.bak");
+
+  // Provenance may only ever cost a refresh: a manifest we cannot read must fall back
+  // to the preserve-everything behavior that shipped before it existed.
+  fs.writeFileSync(path.join(root, MANIFEST_BASENAME), "{ not json");
+  fs.writeFileSync(dest, SHIPPED_OLD);
+  const blind = install(home, false, "claude-code", opts);
+  ok(!blind.ok && blind.preserved.includes("claude-code:demo") && fs.readFileSync(dest, "utf8") === SHIPPED_OLD,
+    "a corrupt manifest degrades to preserve-everything, never to clobber-everything");
+
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+}
+
+// The append-only manifest only works if it is regenerated in the same commit as any
+// skill edit — otherwise the version we are about to ship is unrecognizable to the NEXT
+// release, and every install of it freezes exactly the way this fix was meant to end.
+{
+  const missing = missingCurrentSkills(path.join(__dirname, "..", "skill"));
+  ok(missing.length === 0,
+    `every shipped skill is recorded in skill/${MANIFEST_BASENAME}${missing.length ? ` — stale: ${missing.join(", ")}; fix: node scripts/gen-skill-hashes.js` : ""}`);
 }
 
 console.log(failed ? `\n❌ doctor-selftest: ${failed} assertion(s) failed.` : "\n✓ doctor-selftest: all assertions pass.");

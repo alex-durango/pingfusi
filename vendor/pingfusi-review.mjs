@@ -31,7 +31,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone installer.
 
-const VERSION = "0.16.1";
+const VERSION = "0.17.0";
 const execFileP = promisify(execFile);
 const APP_URL =
   cliFlagValue("--app-url") ??

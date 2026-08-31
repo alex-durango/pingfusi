@@ -283,9 +283,11 @@ async function setup(io, opts) {
 
   // 7. teach the coding agent — install every kit skill into the explicitly selected
   // client, or auto-detect existing agent homes when the interactive installer selected
-  // one internally. PRESERVE by default: an existing skill file that differs from the
-  // kit's copy may be a user edit, and a plain re-run must never clobber it — only
-  // `setup --force` refreshes byte-different files (byte-current ones stay untouched).
+  // one internally. A byte-different skill on disk is resolved by PROVENANCE
+  // (harness/skill-provenance.js): content this package has shipped before is refreshed
+  // by a plain re-run — that is how an upgrade's new guidance reaches an existing
+  // install — while an unrecognized file is the user's edit and only `setup --force`
+  // replaces it (saving what it replaces beside the skill).
   const r = require("./agent-setup.js").install(opts.home, !!opts.force, opts.mcpClient, {
     skipCurrent: true,
     skillRoot: wrapper.skillRoot,
@@ -294,6 +296,13 @@ async function setup(io, opts) {
   io.log(r.ok
     ? `✓ taught your AI agent (${r.clients.join(", ")}): ${r.installed.join(", ")}`
     : `✓ agent skills current (${r.clients.length ? r.clients.join(", ") : r.message})`);
+  // A preserved edit means this package ships guidance the agent will never load — say
+  // so and name the one command that changes it, rather than leaving it silent.
+  if (r.preserved && r.preserved.length) {
+    io.log(`  ⚠ kept your locally-edited skill(s): ${r.preserved.join(", ")} — this ${BRAND} version ships a newer copy your agent will not load.\n    Take ours (--force saves your copy as SKILL.md.bak): ${BRAND} setup --force`);
+    steps.push("skills-preserved");
+  }
+  if (r.backups && r.backups.length) io.log(`  replaced text saved: ${r.backups.join(", ")}`);
   steps.push(r.ok ? "skills-installed" : "skills-present");
 
   if (requiredFailure) {

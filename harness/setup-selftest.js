@@ -8,6 +8,7 @@ const path = require("path");
 const { setup, saidYes } = require("./setup.js");
 const { supportsNode } = require("./node-runtime.js");
 const { globalMotionPackageDir } = require("./motion-browser.js");
+const { MANIFEST_BASENAME, hashSkill } = require("./skill-provenance.js");
 
 let failed = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ✓ ${msg}`); else { failed++; console.log(`  ✗ ${msg}`); } };
@@ -319,6 +320,33 @@ const motionMissing = () => ({ ok: false, reason: "browser missing in offline te
     ok(loggedOut.logs.some((l) => /qaping rounds will NOT work without a login/.test(l) && /Log in later: qaping setup/.test(l))
       && !loggedOut.logs.some((l) => /review rounds will NOT work/.test(l)),
       "wrapper drive: the skipped-login warning speaks the wrapper's brand");
+
+    // the upgrade path a wrapper's users actually hit: the package ships a NEW SKILL.md
+    // while the machine still carries the one its first setup wrote. Without provenance
+    // that stale file survived every re-run and the new guidance reached fresh installs
+    // only (QAPING_PLAN.md §8) — with it, a plain `qaping setup` takes ours, and only a
+    // file we have never shipped is held back (loudly, naming the override).
+    {
+      const SHIPPED_OLD = fs.readFileSync(path.join(skillRoot, "qaping", "SKILL.md"), "utf8");
+      const SHIPPED_NEW = SHIPPED_OLD + "\nthe next version's doctrine\n";
+      fs.writeFileSync(path.join(skillRoot, "qaping", "SKILL.md"), SHIPPED_NEW);
+      fs.writeFileSync(path.join(skillRoot, MANIFEST_BASENAME),
+        JSON.stringify({ skills: { qaping: [hashSkill(SHIPPED_OLD), hashSkill(SHIPPED_NEW)] } }));
+      const dest = path.join(wrapHome, ".claude", "skills", "qaping", "SKILL.md"); // holds SHIPPED_OLD
+
+      const up = fakeIO({ probes: {}, answers: [], paths: { qaping: "/usr/local/bin/qaping" } });
+      await setup(up.io, { home: wrapHome, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionCounted, wrapper });
+      ok(fs.readFileSync(dest, "utf8") === SHIPPED_NEW && !up.logs.some((l) => /kept your locally-edited/.test(l)),
+        "wrapper drive: a plain re-run upgrades a skill this package shipped before — no --force, no warning");
+
+      fs.writeFileSync(dest, SHIPPED_OLD + "\nthe user's own note\n");
+      const kept = fakeIO({ probes: {}, answers: [], paths: { qaping: "/usr/local/bin/qaping" } });
+      const rKept = await setup(kept.io, { home: wrapHome, sourceCheckout: false, resolveToken: () => "tok", dittoApiKey: false, probeMotionBrowser: motionCounted, wrapper });
+      ok(rKept.steps.includes("skills-preserved")
+        && fs.readFileSync(dest, "utf8").includes("the user's own note")
+        && kept.logs.some((l) => /kept your locally-edited skill\(s\): claude-code:qaping/.test(l) && /qaping setup --force/.test(l)),
+        "wrapper drive: an unrecognized skill is kept, and setup says so in the wrapper's brand with the exact override command");
+    }
 
     // cursor rule flavor + scoped wrapper removal (direct agent-setup drive)
     const as = require("./agent-setup.js");
