@@ -1,0 +1,106 @@
+---
+title: "The studio: results on disk, findings from your agent"
+sidebarTitle: "Studio"
+---
+
+`pingfusi studio <ping_id>` fetches a round's results over the wire and caches them under
+`<cwd>/.pingfusi/studio/<ping_id>/`, then serves a read-only viewer at
+`http://localhost:7788`. The cache is the durable copy: signed media URLs die in about an
+hour and recordings are retention-swept, so the fetch downloads the bytes next to the
+JSON and old rounds replay forever.
+
+This document is the contract for the half your agent writes: **`annotations.json`** —
+the analysis pass that turns raw sessions into findings and key moments, the way a
+research assistant would. The studio never generates findings itself, and no annotation
+carries a verdict: verdicts come from the independent human reviewer on the service;
+findings are your agent's observations layered on top.
+
+## Cache layout (read side)
+
+```
+.pingfusi/studio/<ping_id>/
+  result.json        # pingfusi-studio-cache/v1 — status, responses, comments
+  annotations.json   # pingfusi-studio-annotations/v1 — YOUR AGENT WRITES THIS
+  media/response-<i>.<ext>   # each session's recording, downloaded
+```
+
+`result.json` responses carry everything the analysis needs:
+
+- `transcript.segments[]` — `{ t_ms, end_ms, text }` think-aloud lines, and
+  `transcript.markers[]` — `{ t_ms, label }` moments the recorder flagged.
+- `steps_result[]` — the questionnaire: `{ text, answer }`, scored answers leading with a
+  signed integer (`"+2 · agree"`).
+- `choice` (the reviewer's verdict — read-only context, never restate it as a finding),
+  `free_text` (their closing note), and round-level `comments[]` with optional
+  `video_anchor.time_ms`.
+
+## annotations.json (write side)
+
+```json
+{
+  "schema": "pingfusi-studio-annotations/v1",
+  "ping_id": "<the round's uuid>",
+  "summary": "One paragraph: the round's dominant theme(s), cross-session.",
+  "findings": [
+    {
+      "id": "f1",
+      "created_at": "2026-08-18T00:00:00Z",
+      "author": "agent",
+      "title": "Purple status effect is never explained",
+      "sentiment": "negative",
+      "tags": ["onboarding", "clarity"],
+      "body": "Two of three sessions stalled on first contact; session 1 died to it while still guessing.",
+      "evidence": [
+        { "response_index": 0, "time_ms": 7900, "end_ms": 24000, "quote": "why did I turn purple?" },
+        { "response_index": 1, "time_ms": 4100 },
+        { "response_index": 0, "step_index": 5 }
+      ]
+    }
+  ]
+}
+```
+
+Field rules:
+
+- `sentiment` — `"positive"`, `"negative"`, or omit for neutral. It describes the
+  observation, never approval of the work.
+- `tags` — free-form, lowercase. Recommended vocabulary (the studio renders the first tag
+  as the finding's category): `usability`, `game-design`, `enjoyment`, `frustration`,
+  `onboarding`, `clarity`, `navigation`, `difficulty`, `performance`, `audio`,
+  `monetization`.
+- `evidence` anchors — each entry names the session (`response_index`, 0-based) plus one
+  of: `time_ms` (a moment in that session's recording), `time_ms` + `end_ms` (a CLIP —
+  the span that matters, from where the moment starts to where it resolves), or
+  `step_index` (a questionnaire item, 0-based). `quote` is the verbatim transcript line
+  that backs the claim; the studio shows it on hover.
+- Timestamps come from the transcript's own `t_ms`/`end_ms` — never invent times.
+
+## How the studio renders it
+
+- **Findings tab** — cross-session: every finding with sentiment on the card edge,
+  "Reported by N/M session(s)", and evidence chips that jump into the exact second of the
+  right session's recording.
+- **Session view → Key moments** — per-session, chronological: this session's evidence,
+  anchored reviewer comments, and transcript markers merged into one click-to-seek rail
+  beside the player (clips render as spans on the recording's timeline).
+
+## Writing a good analysis pass
+
+1. Read every session's transcript and questionnaire before writing anything. The unit of
+   a finding is a THEME, not a transcript line — a moment two sessions independently hit
+   outranks anything one session said once, and the `evidence` array is where the
+   cross-session case is made.
+2. Mine the transcript for the seams: confusion ("why…", "what is…", "I thought…"),
+   abandoned intents, long silent gaps between segments, delight ("oh nice", laughter),
+   and every `markers[]` entry. Tie each to the questionnaire when an item scored against
+   the trend (`step_index` evidence).
+3. Prefer clips over instants: anchor `time_ms` where the moment begins and `end_ms`
+   where it resolves, so a reader lands on the whole beat rather than a single frame.
+4. Quote verbatim. A paraphrase is a claim; a quote is evidence.
+5. Positive findings are findings — what must NOT be changed is analysis too.
+6. Write `summary` last, from the findings.
+
+Then tell the user the studio has it: rerun `pingfusi studio` (no arguments) and the
+findings and key moments are live on the already-cached rounds. The command itself prints
+which cached rounds still have transcripts without an analysis, so the gap is visible
+right where an agent runs it.

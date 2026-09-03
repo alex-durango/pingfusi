@@ -1,0 +1,40 @@
+---
+title: "pingfusi — Claude Desktop Extension"
+sidebarTitle: "Claude Desktop extension"
+---
+
+Source for the one-click pingfusi Desktop Extension (`.mcpb`). Claude Desktop
+extensions run a local stdio MCP server; pingfusi's is hosted, so this bundle is a
+tiny zero-dependency proxy (`server/index.mjs`, Node built-ins only) bridging
+Desktop's stdio to `https://pingfusi.com/api/mcp`, authenticated with the user's
+bearer token. The token is collected through the manifest's `user_config` as a
+`sensitive` field, so Claude Desktop stores it OS-keychain-encrypted — never
+plaintext in a config file.
+
+## Install
+
+Download [https://pingfusi.com/pingfusi.mcpb](https://pingfusi.com/pingfusi.mcpb) and double-click it (or Claude
+Desktop → Settings → Extensions → Install), then paste a token from
+[https://pingfusi.com/connect/token](https://pingfusi.com/connect/token). Prefer no token at all? Add pingfusi as a
+remote connector instead — Settings → Connectors → Add custom connector with
+`https://pingfusi.com/api/mcp` — and sign in with OAuth.
+
+## Build from this source
+
+```bash
+npx @anthropic-ai/mcpb pack desktop-extension pingfusi.mcpb
+```
+
+The canonical, signed download stays [https://pingfusi.com/pingfusi.mcpb](https://pingfusi.com/pingfusi.mcpb).
+
+## Privacy Policy
+
+[https://pingfusi.com/privacy](https://pingfusi.com/privacy) (also declared in `manifest.json`'s
+`privacy_policies`). The short version: review requests you file — the URL,
+questions, and any screenshots or video — are shown to independent human
+reviewers so they can answer them; reviewers never see your identity, and askers
+never see theirs. Full details, retention windows, and the deletion contact are
+in the policy.
+
+Like the rest of this repository, this directory is generated from the private
+source repo on each release — see CONTRIBUTING.md at the repo root.

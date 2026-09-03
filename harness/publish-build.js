@@ -3,10 +3,11 @@
 // can playtest it without a store page. Prints the /b/<slug> URL to file the
 // playtest with (the review tool, platform:'windows'|'macos', url:<that URL>).
 //
-// Hosted builds are TEMPORARY by design: a finished one lives 72 hours unless
-// a filed round extends it (an upload that never finished is dropped within
-// hours), and each account holds at most a handful at once — this hosts a
-// playtest round, not a game. `pingfusi builds` shows what you hold. Reviewers are told up front the
+// Hosted builds are KEPT UNTIL YOU DELETE THEM (service policy since 061);
+// pass --expires-in-hours <n> to have one reaped instead. An upload that never
+// finished is still dropped within hours, and each account holds at most a
+// handful at once — `pingfusi builds` shows what you hold and `pingfusi builds
+// rm <slug>` frees a slot. Reviewers are told up front the
 // build is an unreviewed developer upload and may stop, penalty-free. On
 // macOS the reviewer app downloads and launches the build itself (no browser
 // quarantine, no Gatekeeper wall), which is why an unsigned .app is refused
@@ -20,7 +21,7 @@ const { MAX_BUILD_BYTES } = require("../packages/core/builds.js");
 // Brand parameterization (a wrapper brand's bin passes its own command name and
 // the tool name its mount registers); the defaults keep the stock pingfusi bytes.
 const usageFor = (brandCommand) =>
-  `usage: ${brandCommand} <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]`;
+  `usage: ${brandCommand} <game.zip> --platform windows|macos [--name <label>] [--expires-in-hours <n>] [--record <file>] [--json]`;
 const BRAND_COMMAND = "pingfusi publish-build";
 // The job-named review tool the /api/mcp mount registers — the old next-step
 // named the kit's INTERNAL verb (request_review), which no mount registers.
@@ -31,16 +32,24 @@ function parseArgs(argv, usage = USAGE) {
   if (!argv[0] || argv[0] === "--help" || argv[0] === "-h") {
     return { help: true };
   }
-  const out = { sourcePath: argv[0], platform: null, name: null, recordPath: null, json: false };
+  const out = { sourcePath: argv[0], platform: null, name: null, recordPath: null, json: false, ttlHours: null };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json") { out.json = true; continue; }
-    if (["--platform", "--name", "--record"].includes(arg)) {
+    if (["--platform", "--name", "--record", "--expires-in-hours"].includes(arg)) {
       const value = argv[++i];
       if (!value) throw new Error(`${arg} needs a value — ${usage}`);
       if (arg === "--platform") out.platform = value;
       if (arg === "--name") out.name = value;
       if (arg === "--record") out.recordPath = value;
+      if (arg === "--expires-in-hours") {
+        // The opt-in expiry. Without it the build is kept until deleted.
+        const n = Number(value);
+        if (!Number.isInteger(n) || n <= 0) {
+          throw new Error(`--expires-in-hours needs a positive whole number of hours (got "${value}") — ${usage}`);
+        }
+        out.ttlHours = n;
+      }
       continue;
     }
     throw new Error(`unknown option ${arg} — ${usage}`);
@@ -73,6 +82,7 @@ async function publishBuild(options, deps = {}) {
   const result = await push(path.resolve(options.sourcePath), {
     name: options.name,
     platform: options.platform,
+    ttlHours: options.ttlHours ?? null,
     // Names the command in any remedy the client prints (the live-builds cap
     // refusal) so a qaping user is never told to run `pingfusi …`.
     brandRoot: options.brandRoot,
@@ -111,9 +121,14 @@ async function main(argv = process.argv.slice(2), opts = {}) {
     }
     // A re-publish of bytes already hosted returns the SAME build rather than
     // a second copy of it — say so, or an unchanged URL reads as a bug.
+    // expires_at is null for a permanent build (the default since service
+    // migration 061) — say "kept until you delete it", never "expires null".
+    const life = result.expires_at
+      ? `expires ${result.expires_at}`
+      : "kept until you delete it (`--expires-in-hours <n>` to have it reaped instead)";
     console.log(result.reused
-      ? `✓ already hosted — this exact zip is build ${result.slug}, reused (expires ${result.expires_at || "per service policy"})`
-      : `✓ hosted build — expires ${result.expires_at || "per service policy"} (temporary by design; filing a playtest extends it through the round)`);
+      ? `✓ already hosted — this exact zip is build ${result.slug}, reused (${life})`
+      : `✓ hosted build — ${life}`);
     console.log(`  url: ${result.url}`);
     console.log(`  file: ${result.filename} (${fmtMb(result.bytes)}, sha256 ${result.sha256.slice(0, 16)}…)`);
     for (const receipt of result.receipts) console.log(`  receipt: ${receipt}`);

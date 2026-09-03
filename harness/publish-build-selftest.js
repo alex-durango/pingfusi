@@ -59,6 +59,14 @@ function writeZip(name, bytes) {
       "a filing without --platform is refused by name");
     refuses(() => parseArgs(["game.zip", "--platform", "linux"]), /--platform windows\|macos/,
       "an unsupported platform is refused by name");
+    // Builds are kept until deleted unless the developer opts into an expiry.
+    ok(parsed.ttlHours === null, "no --expires-in-hours means a permanent build (ttlHours null)");
+    ok(parseArgs(["game.zip", "--platform", "macos", "--expires-in-hours", "48"]).ttlHours === 48,
+      "--expires-in-hours <n> is the opt-in expiry, in whole hours");
+    refuses(() => parseArgs(["game.zip", "--platform", "macos", "--expires-in-hours", "1.5"]), /positive whole number of hours/,
+      "a fractional or non-numeric expiry is refused by name");
+    refuses(() => parseArgs(["game.zip", "--platform", "macos", "--expires-in-hours", "0"]), /positive whole number of hours/,
+      "a zero expiry is refused rather than treated as 'delete now'");
 
     // ── local pre-flight (no bytes move) ────────────────────────────────────
     refuses(() => preflightBuildZip(path.join(root, "missing.zip")), /does not exist/,

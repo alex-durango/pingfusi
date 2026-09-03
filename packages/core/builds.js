@@ -14,11 +14,14 @@
 //      upload — so a 400/403 mid-ladder re-mints a fresh URL via
 //      POST /api/build/<slug>/upload-url instead of retrying a dead token.
 //
-// Hosted builds are TEMPORARY on purpose, on two clocks: an unfinished upload
-// is a short-lived RESERVATION, and finalize promotes it to the 72-hour build
-// TTL a filed round extends further. The receipt carries the expiry FINALIZE
-// reported — never create's reservation stamp — and every printed surface
-// says so.
+// Hosted builds are PERMANENT by default (service migration 061): a finished
+// build is kept until the developer deletes it (`pingfusi builds rm`). The
+// developer may opt in to an expiry with `ttlHours` (the CLI's
+// --expires-in-hours), which the service applies at finalize. An unfinished
+// upload is still a short-lived RESERVATION so a dead publish frees its cap
+// slot. The receipt carries the expiry FINALIZE reported — null for a
+// permanent build, never create's reservation stamp — and every printed
+// surface says so.
 "use strict";
 
 const fs = require("fs");
@@ -486,9 +489,15 @@ async function releaseReservation(slug, { ours, brandRoot }) {
 // opts.platform is REQUIRED ('windows' | 'macos'): it routes the round to the
 // right reviewer pool and the service refuses a mismatched filing.
 // opts.brandRoot names the command in printed remedies ('pingfusi' | 'qaping').
-async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfusi" } = {}) {
+// opts.ttlHours (optional positive integer) asks the service to reap the
+// finished build that many hours after it lands; absent, it is kept until
+// deleted.
+async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfusi", ttlHours = null } = {}) {
   if (platform !== "windows" && platform !== "macos") {
     throw new Error("platform is required: 'windows' or 'macos' — the reviewer pool the build is for");
+  }
+  if (ttlHours !== null && (!Number.isInteger(ttlHours) || ttlHours <= 0)) {
+    throw new Error("ttlHours must be a positive whole number of hours, or omitted to keep the build until you delete it");
   }
   const { bytes, filename } = preflightBuildZip(file);
   refuseWebBuildZip(file);
@@ -502,7 +511,13 @@ async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfu
       // reuse:true is the opt-in that lets the service hand back an identical
       // build it already holds instead of minting a second one. Older services
       // ignore the field; older CLIs never send it and keep the old contract.
-      body: { filename, bytes, sha256, platform, reuse: true, ...(name ? { name } : {}) },
+      // ttl_hours is sent only when the developer asked for an expiry — silence
+      // means "keep it until I delete it" on every service since 061.
+      body: {
+        filename, bytes, sha256, platform, reuse: true,
+        ...(name ? { name } : {}),
+        ...(ttlHours !== null ? { ttl_hours: ttlHours } : {}),
+      },
     });
   } catch (e) {
     // The live-builds cap. The service already sent the list; without this the

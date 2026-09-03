@@ -70,11 +70,14 @@ function renderList({ builds, live, cap }, brandCommand) {
   const lines = [`${live} live build${live === 1 ? "" : "s"}${cap ? ` of ${cap}` : ""}, oldest first:`];
   for (const b of builds) {
     const label = b.name ? ` "${b.name}"` : "";
+    // expires_at is null for a permanent build (kept until deleted — the
+    // default since service migration 061).
+    const life = b.expires_at ? `expires ${b.expires_at}` : "kept until deleted";
     const state = b.reclaimable
       ? "never finished uploading — safe to delete"
       : b.in_round
-        ? `IN USE by an open round — deleting it 404s the download mid-session. expires ${b.expires_at}`
-        : `expires ${b.expires_at}`;
+        ? `IN USE by an open round — deleting it 404s the download mid-session. ${life}`
+        : life;
     lines.push(`  ${b.slug}  ${b.filename}${label} (${fmtMb(b.bytes || 0)}, ${b.platform})`);
     lines.push(`    ${b.url}`);
     lines.push(`    ${state}`);

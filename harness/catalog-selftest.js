@@ -163,8 +163,9 @@ ok(playtest.includes("core.review.file") && playtest.includes("est_minutes")
   "playtest files through the generic core review verb and says est_minutes is the price");
 ok(playtest.includes("publish-build") && playtest.includes("/b/<slug>"),
   "playtest teaches the uploaded-build path for games with no store page");
-ok(/transcript_status:'unavailable'/.test(playtest) && /[Nn]o inline transcript/.test(playtest),
-  "playtest states the Windows no-transcript caveat out loud");
+ok(/transcript_status:'unavailable'/.test(playtest) && /[Nn]o inline transcript/.test(playtest)
+  && /transcript_status:'ok'/.test(playtest) && /transcript is per session/.test(playtest),
+  "playtest states the per-session Windows transcript caveat out loud (recorder app: ok; Game Bar: none)");
 ok(/gamepad/.test(playtest) && playtest.includes("`instructions`") && playtest.includes("steps_result"),
   "playtest carries the hardware convention (declare in instructions, verify via an authored step)");
 ok(/penalty-free/.test(playtest) && /never steer/.test(playtest),

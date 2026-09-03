@@ -1,0 +1,83 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "pingfusi",
+  "description": "MCP server + CLI that puts a real human in your coding agent's loop.",
+  "colors": {
+    "primary": "#7BC96F",
+    "light": "#A6DE9C",
+    "dark": "#4F9A46"
+  },
+  "logo": {
+    "light": "/icon.svg",
+    "dark": "/icon.svg",
+    "href": "https://pingfusi.com"
+  },
+  "favicon": "/icon.svg",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start here",
+        "pages": ["index", "commands", "studio", "desktop-extension", "contributing"]
+      },
+      {
+        "group": "Jobs",
+        "pages": [
+          "use-cases",
+          "use-cases/quick-question",
+          "use-cases/review-anything",
+          "use-cases/copy-anything",
+          "use-cases/beautify",
+          "use-cases/video-review",
+          "use-cases/playtest",
+          "use-cases/your-own"
+        ]
+      },
+      {
+        "group": "Agent skills",
+        "pages": [
+          "skills/pingfusi-review",
+          "skills/pixel-perfect-clone",
+          "skills/fix-with-pingfusi",
+          "skills/beautify-with-pingfusi",
+          "skills/review-video-with-pingfusi"
+        ]
+      },
+      {
+        "group": "Cloning websites",
+        "pages": [
+          "clone/workflow",
+          "clone/playbook",
+          "clone/prompt-template",
+          "clone/launch-prompt",
+          "clone/runbook",
+          "clone/learnings"
+        ]
+      },
+      {
+        "group": "Building on the kit",
+        "pages": ["develop/core", "develop/improving-the-kit", "develop/motion-engine"]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      { "label": "GitHub", "href": "https://github.com/alex-durango/pingfusi" },
+      { "label": "npm", "href": "https://www.npmjs.com/package/pingfusi" }
+    ],
+    "primary": { "type": "button", "label": "pingfusi.com", "href": "https://pingfusi.com" }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/alex-durango/pingfusi",
+      "discord": "https://discord.gg/pUKzftBUTY"
+    }
+  },
+  "seo": {
+    "organization": {
+      "name": "pingfusi",
+      "url": "https://pingfusi.com",
+      "sameAs": ["https://github.com/alex-durango/pingfusi", "https://www.npmjs.com/package/pingfusi"]
+    }
+  }
+}
