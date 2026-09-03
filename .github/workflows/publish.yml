@@ -39,7 +39,7 @@ jobs:
   smoke:
     needs: npm-publish
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
@@ -48,13 +48,16 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
           cd "$(mktemp -d)"
-          # registry propagation can lag a publish by a minute or two
-          for i in 1 2 3 4 5; do
+          # npm now holds a freshly published version for asynchronous processing
+          # ("Your package is being processed and may take a few minutes to become
+          # available" — first seen on 0.17.1, 2026-09-03, when a 2.5-minute window
+          # turned a successful publish into a red run). Give it up to 15 minutes.
+          for i in $(seq 1 30); do
             GOT=$(npx -y "pingfusi@$TAG" version 2>/dev/null || true)
             [ "$GOT" = "$TAG" ] && break
             echo "attempt $i: got '$GOT', want '$TAG' — waiting"; sleep 30
           done
-          [ "$GOT" = "$TAG" ] || { echo "::error::npx pingfusi@$TAG version returned '$GOT'"; exit 1; }
+          [ "$GOT" = "$TAG" ] || { echo "::error::npx pingfusi@$TAG version returned '$GOT' after 15 minutes"; exit 1; }
       - name: packed layout + lazy motion install
         run: |
           set -euo pipefail
