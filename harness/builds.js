@@ -97,6 +97,11 @@ function renderList({ builds, live, cap }, brandCommand) {
 
 // opts is the wrapper-brand seam: {brandCommand} — absent, stock pingfusi.
 async function main(argv = process.argv.slice(2), opts = {}) {
+  if (opts.product !== "qaping") {
+    console.error("Game builds are managed through Qaping. Run npx @qaping/cli setup, then qaping builds.");
+    process.exitCode = 2;
+    return;
+  }
   const brandCommand = opts.brandCommand || BRAND_COMMAND;
   const usage = usageFor(brandCommand);
   let options;
@@ -106,12 +111,12 @@ async function main(argv = process.argv.slice(2), opts = {}) {
 
   try {
     if (options.action === "rm") {
-      await core.build.delete(options.slug);
+      await core.build.delete(options.slug, { product: opts.product });
       if (options.json) console.log(JSON.stringify({ deleted: options.slug }, null, 2));
       else console.log(`✓ deleted build ${options.slug} — its slot is free and /b/${options.slug} no longer downloads`);
       return;
     }
-    const listing = await core.build.list();
+    const listing = await core.build.list({ product: opts.product });
     if (options.json) { console.log(JSON.stringify(listing, null, 2)); return; }
     for (const line of renderList(listing, brandCommand)) console.log(line);
   } catch (error) {

@@ -1,13 +1,17 @@
 ---
 title: "Route human judgment through Pingfusi"
 sidebarTitle: "pingfusi-review"
-description: "Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route by what the reviewer must see: text-only judgments to the quick question; websites, builds, and artifacts to a website review against a published URL; clone comparisons and video reviews to their matching Pingfusi utilities. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies."
+description: "Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route by what the reviewer must see: text-only judgments to the quick question; websites, builds, and artifacts to a website review against a published URL; clone comparisons and video reviews to their matching Pingfusi utilities. Do not use for objective questions the agent can verify directly or for game playtesting. Game playtests, game builds, and game issue tracking belong to Qaping. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies."
 ---
 
 Use Pingfusi as the real-human verification layer inside an agent's normal work. Ask a
 reviewer only for the part that requires perception, judgment, a real device, or external
 reach. Keep deterministic verification in code, tests, documentation or search, and the
 local browser.
+
+Game playtesting belongs to Qaping. Use `npx @qaping/cli setup` and
+`qaping_playtest` for games. Pingfusi does not create game playtests or spend
+Qaping credits. Existing reports remain accessible.
 
 ## Choose the job
 

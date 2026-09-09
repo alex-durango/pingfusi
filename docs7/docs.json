@@ -29,7 +29,6 @@
           "use-cases/copy-anything",
           "use-cases/beautify",
           "use-cases/video-review",
-          "use-cases/playtest",
           "use-cases/your-own"
         ]
       },

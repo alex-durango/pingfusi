@@ -45,7 +45,6 @@ Here are some example prompts you can try with the pingfusi MCP.
 
 | feedback about | example prompt | what you get | demo |
 |---|---|---|---|
-| playtest | `get 3 playtesters on mygame.itch.io/demo. use pingfusi` | a playtest report from real players | [https://pingfusi.com/playtest](https://pingfusi.com/playtest) |
 | a confusing page | `Is my pricing page confusing anywhere? use pingfusi` | comments pinned to what's off | |
 | a website clone | `Clone www.example.com pixel-perfect. use pingfusi` | a perfectly cloned website | [copy-anything.com](https://copy-anything.com/) |
 | design taste | `Make my website not look like AI slop. use pingfusi` | design feedback | [video](https://youtu.be/AicGxc2aOSg) |
@@ -54,6 +53,12 @@ Here are some example prompts you can try with the pingfusi MCP.
 Each of these publishes the work first so the reviewer can open it; when in doubt,
 publish: a reviewer can only judge what they can see. Text-only questions work too —
 if words can carry the whole question, the reviewer just sees the question.
+
+## Credits
+
+Two lifetime reviews are free. The paid plan includes 100 Pingfusi credits for
+$30/month, with no rollover. Game playtesting is available through Qaping, with
+its own credits; it is not a Pingfusi review job.
 
 ## How it works
 
@@ -81,7 +86,7 @@ The full command lives in [docs/COMMANDS.md](docs/COMMANDS.md).
 pingfusi setup                          install + onboarding
 pingfusi doctor                         check the install; prints a fix per problem
 pingfusi ask "<question>"               ask a human reviewer, from any directory
-pingfusi studio [ping_id]               local viewer for playtest & review results —
+pingfusi studio [ping_id]               local viewer for review results —
                                         sessions, recordings, transcripts, key moments,
                                         agent findings (contract: docs/STUDIO.md)
 ```

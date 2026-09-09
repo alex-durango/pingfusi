@@ -135,10 +135,10 @@ function writeZip(name, bytes) {
     const webZip = makeStoredZip("web.zip", [["index.html", "<html>"], ["assets/app.js", "x"]]);
     ok(JSON.stringify(listZipEntryNames(webZip)) === JSON.stringify(["index.html", "assets/app.js"]),
       "the central-directory lister returns exact entry names");
-    refuses(() => refuseWebBuildZip(webZip), /pingfusi publish/,
+    refuses(() => refuseWebBuildZip(webZip), /qaping publish/,
       "a web build zip is refused, pointing at the hosted-draft path");
     const wrappedWebZip = makeStoredZip("web-wrapped.zip", [["dist/index.html", "<html>"]]);
-    refuses(() => refuseWebBuildZip(wrappedWebZip), /pingfusi publish/,
+    refuses(() => refuseWebBuildZip(wrappedWebZip), /qaping publish/,
       "a folder-wrapped web build zip is refused too");
     const nativeZip = makeStoredZip("native.zip", [["Game.app/Contents/Info.plist", "<plist/>"], ["index.html", "readme"]]);
     refuseWebBuildZip(nativeZip);
@@ -228,7 +228,7 @@ function writeZip(name, bytes) {
         });
         return;
       }
-      if (req.method === "POST" && /^\/api\/build\/slug12345678\/upload-url$/.test(req.url)) {
+      if (req.method === "POST" && /^\/api\/qaping\/build\/slug12345678\/upload-url$/.test(req.url)) {
         reminted++;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ path: "slug12345678/game.zip", url: `http://127.0.0.1:${server.address().port}/upload/live` }));
@@ -261,7 +261,7 @@ function writeZip(name, bytes) {
     // ── the full wire sequence via injected push (publish.js pattern) ───────
     let pushedWith = null;
     const record = await publishBuild(
-      { sourcePath: good, platform: "windows", name: "beta", recordPath: path.join(root, "receipt.json"), json: true },
+      { product: "qaping", sourcePath: good, platform: "windows", name: "beta", recordPath: path.join(root, "receipt.json"), json: true },
       {
         push: async (file, opts) => {
           pushedWith = { file, ...opts };

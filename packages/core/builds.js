@@ -12,7 +12,7 @@
 //      under a 4h hard ceiling.
 //   3. Signed upload tokens live a fixed 2 hours — shorter than a slow
 //      upload — so a 400/403 mid-ladder re-mints a fresh URL via
-//      POST /api/build/<slug>/upload-url instead of retrying a dead token.
+//      POST /api/qaping/build/<slug>/upload-url instead of retrying a dead token.
 //
 // Hosted builds are PERMANENT by default (service migration 061): a finished
 // build is kept until the developer deletes it (`pingfusi builds rm`). The
@@ -119,7 +119,7 @@ function refuseWebBuildZip(file) {
   const looksNative = names.some((n) => /\.app\//.test(n) || /\.exe$/i.test(n));
   if (hasRootIndex && !looksNative) {
     throw new Error(
-      `${file} looks like a WEB build (index.html inside, no .app or .exe) — hosted-build playtests are for native executables. A web game has a better path that any reviewer on any OS can play in a browser: 'pingfusi publish <built-dir>' to host it, then file the playtest with that url and est_minutes (no platform).`
+      `${file} looks like a WEB build (index.html inside, no .app or .exe) — hosted-build playtests are for native executables. A web game has a better path that any reviewer on any OS can play in a browser: 'qaping publish <built-dir>' to host it, then file the playtest with that url and est_minutes (no platform).`
     );
   }
 }
@@ -335,7 +335,7 @@ async function putOnce(file, bytes, url, onProgress) {
  * agent round the retry loop that filled its build cap.
  */
 function finalizeBuild(slug) {
-  return api(`/api/build/${slug}/finalize`, { method: "POST" });
+  return api(`/api/qaping/build/${slug}/finalize`, { method: "POST" });
 }
 
 async function landedAlready(slug) {
@@ -382,7 +382,7 @@ async function putBuildWithRetry(file, bytes, slug, firstUrl, onProgress) {
         remints++;
         let fresh;
         try {
-          fresh = await api(`/api/build/${slug}/upload-url`, { method: "POST" });
+          fresh = await api(`/api/qaping/build/${slug}/upload-url`, { method: "POST" });
         } catch (e) {
           // 409 = "build already finalized". Reachable without any concurrency:
           // a landedAlready probe can finalize the build server-side and lose
@@ -394,7 +394,7 @@ async function putBuildWithRetry(file, bytes, slug, firstUrl, onProgress) {
           if (e.status === 409) {
             const confirmed = await landedAlready(slug);
             if (confirmed) return confirmed;
-            try { return await buildStatus(slug); } catch { return {}; }
+            try { return await buildStatus(slug, { product: "qaping" }); } catch { return {}; }
           }
           throw e;
         }
@@ -466,7 +466,7 @@ async function releaseReservation(slug, { ours, brandRoot }) {
   if (!ours) return leave("it was an existing build, not one this upload created");
   let status;
   try {
-    status = await buildStatus(slug);
+    status = await buildStatus(slug, { product: "qaping" });
   } catch {
     return leave("the service did not answer when asked whether it landed");
   }
@@ -478,7 +478,7 @@ async function releaseReservation(slug, { ours, brandRoot }) {
     return leave("the service did not clearly say whether it landed");
   }
   try {
-    await buildDelete(slug);
+    await buildDelete(slug, { product: "qaping" });
     return "";
   } catch {
     return leave("it could not be deleted");
@@ -492,7 +492,8 @@ async function releaseReservation(slug, { ours, brandRoot }) {
 // opts.ttlHours (optional positive integer) asks the service to reap the
 // finished build that many hours after it lands; absent, it is kept until
 // deleted.
-async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfusi", ttlHours = null } = {}) {
+async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfusi", product, ttlHours = null } = {}) {
+  requireQaping(product);
   if (platform !== "windows" && platform !== "macos") {
     throw new Error("platform is required: 'windows' or 'macos' — the reviewer pool the build is for");
   }
@@ -506,7 +507,7 @@ async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfu
 
   let created;
   try {
-    created = await api("/api/build", {
+    created = await api("/api/qaping/build", {
       method: "POST",
       // reuse:true is the opt-in that lets the service hand back an identical
       // build it already holds instead of minting a second one. Older services
@@ -575,7 +576,7 @@ async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfu
   // Serve urls are built from OUR base, not the server's echo (BASE override
   // consistency — the draftPush precedent).
   return {
-    url: `${BASE}/b/${created.slug}`,
+    url: `${process.env.QAPING_APP_URL || "https://qaping.dev"}/b/${created.slug}`,
     slug: created.slug,
     filename,
     bytes,
@@ -590,8 +591,13 @@ async function buildPush(file, { name, platform, onProgress, brandRoot = "pingfu
 // ── build.list — every live build this account holds ───────────────────────
 // The half that was missing when the cap bit: nothing reachable from a CLI or
 // an agent could even name the builds occupying the five slots.
-async function buildList() {
-  const r = await api("/api/build");
+function requireQaping(product) {
+  if (product !== "qaping") throw new Error("Game builds belong to Qaping. Run npx @qaping/cli setup, then qaping publish-build or qaping builds. No build was changed.");
+}
+
+async function buildList({ product } = {}) {
+  requireQaping(product);
+  const r = await api("/api/qaping/build");
   return {
     builds: Array.isArray(r.builds) ? r.builds : [],
     live: typeof r.live === "number" ? r.live : (r.builds || []).length,
@@ -600,13 +606,15 @@ async function buildList() {
 }
 
 // ── build.status — owner-side metadata for a hosted build ──────────────────
-async function buildStatus(slug) {
-  return api(`/api/build/${slug}`);
+async function buildStatus(slug, { product } = {}) {
+  requireQaping(product);
+  return api(`/api/qaping/build/${slug}`);
 }
 
 // ── build.delete — remove a hosted build now (frees the live-builds slot) ──
-async function buildDelete(slug) {
-  return api(`/api/build/${slug}`, { method: "DELETE" });
+async function buildDelete(slug, { product } = {}) {
+  requireQaping(product);
+  return api(`/api/qaping/build/${slug}`, { method: "DELETE" });
 }
 
 module.exports = {

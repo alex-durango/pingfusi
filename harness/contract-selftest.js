@@ -13,7 +13,7 @@
 //     coherent with the code that reads it.
 //
 // Five things are checked:
-//   1. the generated wire names are exactly the six canonical service tool names
+//   1. the generated wire names are exactly the seven canonical service tool names
 //   2. the caps + timing in the generated file are the ones wire.js actually exports
 //      (i.e. wire.js really derives them, and did not quietly go back to literals)
 //   3. PROFILES: the generated brand-profile mounts (renamed subsets of the same tools at
@@ -54,7 +54,7 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 console.log("contract-selftest — the generated wire contract, and the docs that name it");
 
-// ── 1. the generated file is generated, and names the six canonical tools ────
+// ── 1. the generated file is generated, and names the canonical tools ───────
 const genSource = fs.readFileSync(path.join(KIT, GEN_REL), "utf8");
 ok(
   /GENERATED FILE\. DO NOT EDIT\./.test(genSource) &&
@@ -64,6 +64,7 @@ ok(
 
 const CANONICAL = [
   "cpyany_check_source",
+  "cpyany_issues",
   "cpyany_poll",
   "cpyany_poll_results",
   "cpyany_test",
@@ -78,7 +79,7 @@ ok(
 );
 ok(
   eq([...new Set(Object.values(gen.TOOLS).map((t) => t.wireName))].sort(), CANONICAL),
-  "…and TOOLS carries the same six, one entry per tool, no duplicates"
+  `…and TOOLS carries the same ${CANONICAL.length}, one entry per tool, no duplicates`
 );
 ok(
   gen.ALIAS_TOOL_NAMES.length > 0 && gen.ALIAS_TOOL_NAMES.every((n) => /^pingfusi_[a-z_]+$/.test(n)),

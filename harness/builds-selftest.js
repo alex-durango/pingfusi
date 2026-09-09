@@ -68,7 +68,7 @@ const liveBuild = (slug, over = {}) => ({
   let port = 0;
 
   const server = http.createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/api/build") {
+    if (req.method === "POST" && req.url === "/api/qaping/build") {
       let bodyText = "";
       req.setEncoding("utf8");
       req.on("data", (c) => { bodyText += c; });
@@ -105,7 +105,7 @@ const liveBuild = (slug, over = {}) => ({
       req.on("end", () => json(404, { error: "no such object" })); // terminal, no retry ladder
       return;
     }
-    if (req.method === "POST" && req.url === "/api/build") {
+    if (req.method === "POST" && req.url === "/api/qaping/build") {
       if (mode === "cap") {
         return json(429, {
           error: "you already have 5 live builds (cap 5).",
@@ -146,25 +146,25 @@ const liveBuild = (slug, over = {}) => ({
         url: `http://127.0.0.1:${port}/b/${SLUG}`,
         expires_at: RESERVATION_AT,
         upload: { path: `${SLUG}/game.zip`, url: `http://127.0.0.1:${port}/upload/${mode}` },
-        finalize: `http://127.0.0.1:${port}/api/build/${SLUG}/finalize`,
+        finalize: `http://127.0.0.1:${port}/api/qaping/build/${SLUG}/finalize`,
       });
     }
-    if (req.method === "POST" && req.url === `/api/build/${SLUG}/finalize`) {
+    if (req.method === "POST" && req.url === `/api/qaping/build/${SLUG}/finalize`) {
       if (finalizeOk === "500") return json(500, { error: "could not inspect uploaded file" });
       return finalizeOk
         ? json(200, { ok: true, expires_at: FULL_TTL_AT })
         : json(409, { error: "uploaded build does not match what was declared", missing: ["game.zip"] });
     }
-    if (req.method === "POST" && req.url === `/api/build/${SLUG}/upload-url`) {
+    if (req.method === "POST" && req.url === `/api/qaping/build/${SLUG}/upload-url`) {
       return json(409, { error: "build already finalized — upload a new build instead" });
     }
-    if (req.method === "GET" && req.url === `/api/build/${SLUG}`) {
+    if (req.method === "GET" && req.url === `/api/qaping/build/${SLUG}`) {
       if (statusDown) return json(500, { error: "could not read build" });
       if (statusShape) return json(200, statusShape);
       return json(200, { slug: SLUG, finalized: statusFinalized, expires_at: FULL_TTL_AT });
     }
-    if (req.method === "DELETE" && req.url === `/api/build/${SLUG}`) return json(200, { ok: true });
-    if (req.method === "GET" && req.url === "/api/build") {
+    if (req.method === "DELETE" && req.url === `/api/qaping/build/${SLUG}`) return json(200, { ok: true });
+    if (req.method === "GET" && req.url === "/api/qaping/build") {
       return json(200, { builds: [liveBuild("aaaaaaaaaaaa")], live: 1, cap: 5 });
     }
     json(404, {});
@@ -186,13 +186,13 @@ const liveBuild = (slug, over = {}) => ({
     finalizeOk = true;
     seen = [];
     statusFinalized = false;
-    const landed = await core.buildPush(zip, { platform: "windows" });
+    const landed = await core.buildPush(zip, { product: "qaping", platform: "windows" });
     ok(landed.slug === SLUG, "a PUT whose response is lost still returns the hosted build");
     ok(landed.expires_at === FULL_TTL_AT,
       "the reported expiry is finalize's PROMOTED one, never create's short reservation clock");
     ok(seen.filter((s) => s.startsWith("PUT")).length === 1,
       "the lost response is probed, not re-uploaded (one PUT, not four)");
-    ok(seen.includes(`POST /api/build/${SLUG}/finalize`),
+    ok(seen.includes(`POST /api/qaping/build/${SLUG}/finalize`),
       "finalize is the oracle for whether the bytes landed");
     ok(!seen.some((s) => s.startsWith("DELETE")),
       "a build that actually landed is never rolled back");
@@ -205,10 +205,10 @@ const liveBuild = (slug, over = {}) => ({
     statusFinalized = false;
     seen = [];
     let threw = null;
-    try { await core.buildPush(zip, { platform: "windows" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows" }); }
     catch (e) { threw = e; }
     ok(threw && /HTTP 404/.test(threw.message), "a terminal upload refusal is reported by name");
-    ok(seen.includes(`DELETE /api/build/${SLUG}`),
+    ok(seen.includes(`DELETE /api/qaping/build/${SLUG}`),
       "the failed upload's reservation is deleted, freeing its cap slot");
 
     // ── 2b. an ordinary success reports the PROMOTED expiry ────────────────
@@ -216,7 +216,7 @@ const liveBuild = (slug, over = {}) => ({
     finalizeOk = true;
     statusFinalized = false;
     seen = [];
-    const clean = await core.buildPush(zip, { platform: "windows" });
+    const clean = await core.buildPush(zip, { product: "qaping", platform: "windows" });
     ok(clean.expires_at === FULL_TTL_AT && clean.reused === false,
       "a plain successful publish reports finalize's 72h expiry, not create's 6h reservation");
     ok(seen.filter((s) => s.startsWith("PUT")).length === 1
@@ -232,7 +232,7 @@ const liveBuild = (slug, over = {}) => ({
     finalizeOk = true;
     statusFinalized = true;
     seen = [];
-    const rescued = await core.buildPush(zip, { platform: "windows" });
+    const rescued = await core.buildPush(zip, { product: "qaping", platform: "windows" });
     ok(rescued.slug === SLUG && rescued.expires_at === FULL_TTL_AT,
       "a 409 from the upload-URL re-mint is read as 'already finalized', not as failure");
     ok(!seen.some((s) => s.startsWith("DELETE")),
@@ -247,7 +247,7 @@ const liveBuild = (slug, over = {}) => ({
     statusDown = true;
     seen = [];
     let downErr = null;
-    try { await core.buildPush(zip, { platform: "windows", brandRoot: "qaping" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows", brandRoot: "qaping" }); }
     catch (e) { downErr = e; }
     statusDown = false;
     ok(downErr && !seen.some((s) => s.startsWith("DELETE")),
@@ -263,7 +263,7 @@ const liveBuild = (slug, over = {}) => ({
     statusFinalized = false;
     seen = [];
     let softErr = null;
-    try { await core.buildPush(zip, { platform: "windows" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows" }); }
     catch (e) { softErr = e; }
     ok(softErr && !seen.some((s) => s.startsWith("DELETE")),
       "a 500 from finalize leaves the landed build alone — only a definite refusal is garbage");
@@ -273,9 +273,9 @@ const liveBuild = (slug, over = {}) => ({
     finalizeOk = false;
     seen = [];
     let hardErr = null;
-    try { await core.buildPush(zip, { platform: "windows" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows" }); }
     catch (e) { hardErr = e; }
-    ok(hardErr && seen.includes(`DELETE /api/build/${SLUG}`),
+    ok(hardErr && seen.includes(`DELETE /api/qaping/build/${SLUG}`),
       "a 409 from finalize does release the reservation — those bytes are unusable");
 
     // ── 2f. a build we did not create is never ours to delete ──────────────
@@ -285,7 +285,7 @@ const liveBuild = (slug, over = {}) => ({
     finalizeOk = false;
     seen = [];
     let notOurs = null;
-    try { await core.buildPush(zip, { platform: "windows", brandRoot: "qaping" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows", brandRoot: "qaping" }); }
     catch (e) { notOurs = e; }
     ok(notOurs && !seen.some((s) => s.startsWith("DELETE")),
       "a reused build is never deleted by our rollback — another upload may be streaming into it");
@@ -300,7 +300,7 @@ const liveBuild = (slug, over = {}) => ({
     statusShape = { slug: SLUG }; // 200, but no `finalized` field
     seen = [];
     let vague = null;
-    try { await core.buildPush(zip, { platform: "windows" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows" }); }
     catch (e) { vague = e; }
     statusShape = null;
     ok(vague && !seen.some((s) => s.startsWith("DELETE")),
@@ -309,7 +309,7 @@ const liveBuild = (slug, over = {}) => ({
     // ── 3. the same zip twice is the same build ────────────────────────────
     mode = "reuse";
     seen = [];
-    const again = await core.buildPush(zip, { platform: "windows" });
+    const again = await core.buildPush(zip, { product: "qaping", platform: "windows" });
     ok(again.reused === true && again.slug === SLUG, "re-publishing identical bytes reuses the build");
     ok(lastCreateBody && lastCreateBody.reuse === true,
       "the client asks for reuse explicitly — without the flag an older CLI keeps the old contract");
@@ -320,7 +320,7 @@ const liveBuild = (slug, over = {}) => ({
     mode = "cap";
     seen = [];
     let capErr = null;
-    try { await core.buildPush(zip, { platform: "windows", brandRoot: "qaping" }); }
+    try { await core.buildPush(zip, { product: "qaping", platform: "windows", brandRoot: "qaping" }); }
     catch (e) { capErr = e; }
     ok(capErr && /cap 5/.test(capErr.message), "the cap refusal keeps the service's own wording");
     ok(capErr && capErr.message.includes("bbbbbbbbbbbb"),
@@ -411,11 +411,11 @@ const liveBuild = (slug, over = {}) => ({
       "a full account is told which build to free first — a reclaimable one");
 
     seen = [];
-    const listing = await core.buildList();
+    const listing = await core.buildList({ product: "qaping" });
     ok(listing.live === 1 && listing.cap === 5 && listing.builds[0].slug === "aaaaaaaaaaaa",
       "build.list reads the account's live builds");
-    await core.buildDelete(SLUG);
-    ok(seen.includes(`DELETE /api/build/${SLUG}`), "build.delete frees one by slug");
+    await core.buildDelete(SLUG, { product: "qaping" });
+    ok(seen.includes(`DELETE /api/qaping/build/${SLUG}`), "build.delete frees one by slug");
   } finally {
     server.close();
     fs.rmSync(root, { recursive: true, force: true });

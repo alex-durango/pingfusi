@@ -81,6 +81,7 @@ async function publishBuild(options, deps = {}) {
   const push = deps.push || core.build.push;
   const result = await push(path.resolve(options.sourcePath), {
     name: options.name,
+    product: options.product,
     platform: options.platform,
     ttlHours: options.ttlHours ?? null,
     // Names the command in any remedy the client prints (the live-builds cap
@@ -105,6 +106,11 @@ async function publishBuild(options, deps = {}) {
 // opts is the wrapper-brand seam: {brandCommand, nextStepToolName} — absent,
 // the stock pingfusi defaults print.
 async function main(argv = process.argv.slice(2), opts = {}) {
+  if (opts.product !== "qaping") {
+    console.error("Game playtesting and builds are available through Qaping. Run npx @qaping/cli setup, then qaping publish-build <game.zip> --platform windows|macos.");
+    process.exitCode = 2;
+    return;
+  }
   const brandCommand = opts.brandCommand || BRAND_COMMAND;
   const nextStepToolName = opts.nextStepToolName || NEXT_STEP_TOOL;
   const usage = usageFor(brandCommand);
@@ -113,6 +119,7 @@ async function main(argv = process.argv.slice(2), opts = {}) {
   catch (error) { console.error(`✗ ${error.message}`); process.exitCode = 2; return; }
   if (options.help) { console.log(usage); return; }
   options.brandRoot = brandCommand.split(" ")[0];
+  options.product = opts.product;
   try {
     const result = await publishBuild(options);
     if (options.json) {

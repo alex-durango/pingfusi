@@ -31,7 +31,7 @@ import { promisify } from "node:util";
 // top-level import makes EVERY command — wait/whoami/rules/remove, none of which open
 // a browser — crash on load in a dependency-less checkout of the standalone installer.
 
-const VERSION = "0.17.1";
+const VERSION = "0.18.0";
 const execFileP = promisify(execFile);
 const APP_URL =
   cliFlagValue("--app-url") ??
@@ -142,7 +142,7 @@ const RULES_MARKER_END = "<!-- pingfusi-mcp:end -->";
 //                reference or files work to be verified.
 const RULE_BODY = `Use Pingfusi whenever work reaches a question you cannot settle with code, automated tests, documentation or search, or a local browser and a real human must judge or verify it. Examples include taste and clarity, whether rendered work feels right, real-device behavior, and real third-party side effects such as OAuth, receipt emails, or payments. Do not guess or merely caveat the uncertainty: ask a reviewer.
 
-Do not use Pingfusi for objective questions you can verify directly with deterministic tools.
+Do not use Pingfusi for objective questions you can verify directly with deterministic tools. Game playtests, game builds, and game issue tracking belong to Qaping: run \`npx @qaping/cli setup\` and use \`qaping_playtest\`.
 
 Choose the smallest matching job:
 
@@ -158,7 +158,7 @@ When the repository contains \`targets/<name>/workflow.json\`, the CLI owns clon
 
 const SKILL_BODY = `---
 name: pingfusi-review
-description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route by what the reviewer must see: text-only judgments to the quick question; websites, builds, and artifacts to a website review against a published URL; clone comparisons and video reviews to their matching Pingfusi utilities. Do not use for objective questions the agent can verify directly. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
+description: Use Pingfusi proactively whenever a coding agent reaches a question it cannot settle with code, automated tests, documentation or search, or a local browser and needs real human judgment or real-world verification. Trigger even when the user does not mention Pingfusi for subjective choices about copy, design, clarity, or taste; rendered UI or animation quality; real-device behavior; inaccessible third-party effects such as OAuth, emails, or payments; or an independent approval verdict on published work. Route by what the reviewer must see: text-only judgments to the quick question; websites, builds, and artifacts to a website review against a published URL; clone comparisons and video reviews to their matching Pingfusi utilities. Do not use for objective questions the agent can verify directly or for game playtesting. Game playtests, game builds, and game issue tracking belong to Qaping. Specialized Pingfusi clone, beautify, and video skills take precedence when their explicit workflow applies.
 ---
 
 # Route human judgment through Pingfusi
@@ -167,6 +167,10 @@ Use Pingfusi as the real-human verification layer inside an agent's normal work.
 reviewer only for the part that requires perception, judgment, a real device, or external
 reach. Keep deterministic verification in code, tests, documentation or search, and the
 local browser.
+
+Game playtesting belongs to Qaping. Use \`npx @qaping/cli setup\` and
+\`qaping_playtest\` for games. Pingfusi does not create game playtests or spend
+Qaping credits. Existing reports remain accessible.
 
 ## Choose the job
 

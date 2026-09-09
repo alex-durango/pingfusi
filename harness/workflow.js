@@ -1294,26 +1294,13 @@ THE EVERYDAY JOBS
   pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]
                                                      upload a self-contained website or video to Pingfusi
                                                      hosting; MP4 output includes a seekable video_url
-  pingfusi publish-build <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]
-                                                     upload a GAME BUILD (one zip, ≤1 GiB) for a native
-                                                     playtest with no store page: returns the /b/<slug>
-                                                     URL to file request_review with (same platform:).
-                                                     Hosted builds are temporary — 72h once finished,
-                                                     unless a filed round extends them (an upload that
-                                                     never finished is dropped within hours); reviewers
-                                                     see an unreviewed-dev-build disclosure and may stop
-                                                     at an OS warning
-  pingfusi builds  [--json]  |  pingfusi builds rm <slug> [--json]
-                                                     the hosted builds this account holds and their slots:
-                                                     list them (oldest first, with the ones whose upload
-                                                     never finished marked safe to delete), or free one now
   pingfusi wait    <ping_id>                         continue a pending ping through client-safe wait legs
   pingfusi studio  [ping_id ...] [--port N] [--open] [--fetch-only] [--no-media] [--json]
                                                      LOCAL RESULTS VIEWER: fetch a round's results and
                                                      media into <cwd>/.pingfusi/studio/, then browse
                                                      sessions, transcripts, questionnaire answers, and
                                                      agent findings at http://localhost:7788 — read-only;
-                                                     playtests are the headline use (docs/COMMANDS.md)
+                                                     historical recordings remain readable (docs/COMMANDS.md)
   (REVIEW ANYTHING is the same loop against your own state file — core.review.file /
    verify over any published artifact; contracts in docs/CORE.md. The jobs below
    package that loop with their own reviewer surfaces.)
@@ -1481,7 +1468,7 @@ function main() {
     // ~/.pingfusi/asks/. Proof that the core's service verbs need zero cloning code.
     case "ask": { if (!name) { console.error('usage: pingfusi ask "<question>" [--options "A,B,C"] [--context "…"]   |   pingfusi ask result <ping_id>'); process.exit(2); } return delegate("harness/ask.js", [name, ...rest]); }
     case "publish": { if (!name) { console.error("usage: pingfusi publish <built-dir|video.mp4> [--name <label>] [--target <name>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish.js", [name, ...rest]); }
-    case "publish-build": { if (!name) { console.error("usage: pingfusi publish-build <game.zip> --platform windows|macos [--name <label>] [--record <file>] [--json]"); process.exit(2); } return delegate("harness/publish-build.js", [name, ...rest]); }
+    case "publish-build": return delegate("harness/publish-build.js", [name, ...rest].filter((a) => a != null));
     // No argument is the LIST — the surface an agent reaches for the moment a
     // publish is refused for the cap, so it must never be a usage error.
     case "builds": return delegate("harness/builds.js", [name, ...rest].filter((a) => a != null));

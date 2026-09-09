@@ -73,6 +73,14 @@ const TOOLS = {
     "aliases": [
       "pingfusi_check_source"
     ]
+  },
+  "track_issues": {
+    "wireName": "cpyany_issues",
+    "frozen": true,
+    "kitRemap": false,
+    "aliases": [
+      "pingfusi_issues"
+    ]
   }
 };
 
@@ -95,7 +103,8 @@ const WIRE_TOOL_NAMES = [
   "cpyany_wait",
   "cpyany_poll",
   "cpyany_poll_results",
-  "cpyany_check_source"
+  "cpyany_check_source",
+  "cpyany_issues"
 ];
 
 /** Every job-named alias registration, grouped by the tool it aliases. */
@@ -107,7 +116,8 @@ const ALIAS_TOOL_NAMES = [
   "pingfusi_wait",
   "pingfusi_quick_question",
   "pingfusi_quick_question_results",
-  "pingfusi_check_source"
+  "pingfusi_check_source",
+  "pingfusi_issues"
 ];
 
 // Brand-profile mounts of the same service: a profile registers a RENAMED subset of the
@@ -123,7 +133,8 @@ const PROFILES = {
     "tools": {
       "request_review": "qaping_playtest",
       "get_test_results": "qaping_results",
-      "wait_for_results": "qaping_wait"
+      "wait_for_results": "qaping_wait",
+      "track_issues": "qaping_issues"
     }
   }
 };
